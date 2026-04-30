@@ -38,4 +38,3 @@ max-complexity = 10
 
 [tool.mypy]
 ignore_missing_imports = true
-

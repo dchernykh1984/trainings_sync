@@ -1,0 +1,13 @@
+[tool.poetry]
+name = "trainings-sync"
+version = "0.1.0"
+description = "Sync training activities between Garmin and Strava"
+authors = ["Denis Chernykh <education03@mail.ru>"]
+
+[tool.poetry.dependencies]
+python = "^3.14"
+garminconnect = "^0.2.39"
+stravalib = "^2.4"
+
+[tool.poetry.group.dev.dependencies]
+

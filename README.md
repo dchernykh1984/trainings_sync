@@ -26,3 +26,17 @@ pipx install poetry
 poetry config virtualenvs.in-project true
 poetry install --no-root
 ```
+
+### 3. Set up pre-commit hooks
+
+```bash
+poetry run pre-commit install
+```
+
+After that pre commit hooks will run automatically on every commit.
+
+To run all checks manually across all files:
+
+```bash
+poetry run pre-commit run --all-files
+```

@@ -6,7 +6,7 @@ authors = ["Denis Chernykh <education03@mail.ru>"]
 
 [tool.poetry.dependencies]
 python = "^3.14"
-garminconnect = "^0.2.39"
+garminconnect = ">=0.2.39,<0.4.0"
 stravalib = "^2.4"
 
 [tool.poetry.group.dev.dependencies]

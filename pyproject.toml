@@ -16,6 +16,7 @@ mypy = "^1.20.2"
 commitizen = "^4.13.10"
 pytest = "^9.0.3"
 pytest-xdist = "^3.8.0"
+pytest-cov = "^7.1.0"
 
 [tool.ruff]
 line-length = 88
@@ -41,7 +42,10 @@ max-complexity = 10
 [tool.mypy]
 ignore_missing_imports = true
 
+[tool.coverage.run]
+parallel = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-n auto"
+addopts = "-n auto --cov=app --cov-fail-under=90 --cov-report=term-missing"
 markers = ["debug: mark test for local debugging and run it in isolation"]

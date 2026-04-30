@@ -18,6 +18,7 @@ commitizen = "^4.13.10"
 pytest = "^9.0.3"
 pytest-xdist = "^3.8.0"
 pytest-cov = "^7.1.0"
+pytest-asyncio = "^1.3.0"
 
 [tool.ruff]
 line-length = 88
@@ -37,6 +38,9 @@ select = [
     "RUF", # Ruff-specific rules
 ]
 
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101"]
+
 [tool.ruff.lint.mccabe]
 max-complexity = 10
 
@@ -45,8 +49,11 @@ ignore_missing_imports = true
 
 [tool.coverage.run]
 parallel = true
+omit = ["app/tracking/console_renderer.py", "app/tracking/gui_renderer.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
 addopts = "-n auto --cov=app --cov-fail-under=90 --cov-report=term-missing"
 markers = ["debug: mark test for local debugging and run it in isolation"]

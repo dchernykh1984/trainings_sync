@@ -10,4 +10,31 @@ garminconnect = "^0.2.39"
 stravalib = "^2.4"
 
 [tool.poetry.group.dev.dependencies]
+ruff = "^0.15.12"
+pre-commit = "^4.6.0"
+mypy = "^1.20.2"
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "N",   # pep8-naming
+    "C90", # McCabe cyclomatic complexity
+    "UP",  # pyupgrade — modernise syntax for target Python version
+    "B",   # flake8-bugbear — common bugs and design issues
+    "S",   # flake8-bandit — security
+    "PTH", # flake8-use-pathlib — prefer pathlib over os.path
+    "RUF", # Ruff-specific rules
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.mypy]
+ignore_missing_imports = true
 

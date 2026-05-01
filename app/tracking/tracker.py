@@ -44,6 +44,8 @@ class TaskTracker:
 
     async def add_task(self, name: str, total: int) -> None:
         async with self._lock:
+            if name in self._tasks:
+                raise ValueError(f"Task {name!r} already exists")
             task = Task(name=name, total=total)
             self._tasks[name] = task
         self._renderer.on_task_added(task)

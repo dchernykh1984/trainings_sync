@@ -53,6 +53,12 @@ class TestAddTask:
         assert len(renderer.added) == 1
         assert renderer.added[0].name == "sync"
 
+    async def test_raises_on_duplicate_name(self, tracker: TaskTracker) -> None:
+        await tracker.add_task("sync", total=10)
+
+        with pytest.raises(ValueError, match="sync"):
+            await tracker.add_task("sync", total=5)
+
 
 class TestAdvance:
     async def test_transitions_to_running(self, tracker: TaskTracker) -> None:

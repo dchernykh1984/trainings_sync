@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum, auto
 
 
@@ -84,4 +84,4 @@ class TaskTracker:
 
     @property
     def tasks(self) -> dict[str, Task]:
-        return dict(self._tasks)
+        return {name: replace(task) for name, task in self._tasks.items()}

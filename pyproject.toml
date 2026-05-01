@@ -49,7 +49,7 @@ ignore_missing_imports = true
 
 [tool.coverage.run]
 parallel = true
-omit = ["app/tracking/console_renderer.py", "app/tracking/gui_renderer.py"]
+omit = ["app/tracking/gui_renderer.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -186,3 +186,10 @@ class TestTasksProperty:
         snapshot.clear()
 
         assert "sync" in tracker.tasks
+
+    async def test_task_is_a_copy(self, tracker: TaskTracker) -> None:
+        await tracker.add_task("sync", total=10)
+        snapshot = tracker.tasks["sync"]
+        snapshot.progress = 99
+
+        assert tracker.tasks["sync"].progress == 0

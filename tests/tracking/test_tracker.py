@@ -59,6 +59,13 @@ class TestAddTask:
         with pytest.raises(ValueError, match="sync"):
             await tracker.add_task("sync", total=5)
 
+    async def test_raises_on_non_positive_total(self, tracker: TaskTracker) -> None:
+        with pytest.raises(ValueError, match="total"):
+            await tracker.add_task("sync", total=0)
+
+        with pytest.raises(ValueError, match="total"):
+            await tracker.add_task("sync", total=-1)
+
 
 class TestAdvance:
     async def test_transitions_to_running(self, tracker: TaskTracker) -> None:
@@ -87,6 +94,15 @@ class TestAdvance:
 
         assert len(renderer.progressed) == 1
         assert renderer.progressed[0].progress == 2
+
+    async def test_raises_on_non_positive_amount(self, tracker: TaskTracker) -> None:
+        await tracker.add_task("sync", total=10)
+
+        with pytest.raises(ValueError, match="amount"):
+            await tracker.advance("sync", amount=0)
+
+        with pytest.raises(ValueError, match="amount"):
+            await tracker.advance("sync", amount=-1)
 
     async def test_accumulates_across_calls(self, tracker: TaskTracker) -> None:
         await tracker.add_task("sync", total=10)

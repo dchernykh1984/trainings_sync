@@ -43,6 +43,8 @@ class TaskTracker:
         self._lock = asyncio.Lock()
 
     async def add_task(self, name: str, total: int) -> None:
+        if total <= 0:
+            raise ValueError(f"total must be positive, got {total}")
         async with self._lock:
             if name in self._tasks:
                 raise ValueError(f"Task {name!r} already exists")
@@ -51,6 +53,8 @@ class TaskTracker:
         self._renderer.on_task_added(task)
 
     async def advance(self, name: str, amount: int = 1) -> None:
+        if amount <= 0:
+            raise ValueError(f"amount must be positive, got {amount}")
         async with self._lock:
             task = self._tasks[name]
             if task.status in (TaskStatus.DONE, TaskStatus.FAILED):

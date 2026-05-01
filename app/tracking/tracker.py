@@ -61,6 +61,8 @@ class TaskTracker:
     async def finish(self, name: str) -> None:
         async with self._lock:
             task = self._tasks[name]
+            if task.status in (TaskStatus.DONE, TaskStatus.FAILED):
+                return
             task.status = TaskStatus.DONE
             task.progress = task.total
         self._renderer.on_task_done(task)
@@ -68,6 +70,8 @@ class TaskTracker:
     async def fail(self, name: str, error: str) -> None:
         async with self._lock:
             task = self._tasks[name]
+            if task.status in (TaskStatus.DONE, TaskStatus.FAILED):
+                return
             task.status = TaskStatus.FAILED
             task.error = error
         self._renderer.on_task_failed(task)

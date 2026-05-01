@@ -91,3 +91,15 @@ class TestOnTaskFailed:
             3, description="[bold red]sync FAILED: timeout"
         )
         mock_progress.stop_task.assert_called_once_with(3)
+
+
+class TestOnTaskWarning:
+    def test_prints_warning_message(
+        self, renderer: ConsoleRenderer, mock_progress: MagicMock
+    ) -> None:
+        task = Task(name="sync", total=10)
+        renderer.on_task_warning(task, "duplicate entry found")
+
+        mock_progress.print.assert_called_once_with(
+            "[bold yellow]WARNING [sync]: duplicate entry found"
+        )

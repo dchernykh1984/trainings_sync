@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import Enum, auto
 
 
@@ -20,6 +20,7 @@ class Task:
     status: TaskStatus = TaskStatus.PENDING
     progress: int = 0
     error: str | None = None
+    warnings: list[str] = field(default_factory=list)
 
 
 class ProgressRenderer(ABC):
@@ -34,6 +35,9 @@ class ProgressRenderer(ABC):
 
     @abstractmethod
     def on_task_failed(self, task: Task) -> None: ...
+
+    @abstractmethod
+    def on_task_warning(self, task: Task, message: str) -> None: ...
 
 
 class TaskTracker:
@@ -82,6 +86,17 @@ class TaskTracker:
             task.error = error
         self._renderer.on_task_failed(task)
 
+    async def warn(self, name: str, message: str) -> None:
+        async with self._lock:
+            task = self._tasks[name]
+            if task.status in (TaskStatus.DONE, TaskStatus.FAILED):
+                return
+            task.warnings.append(message)
+        self._renderer.on_task_warning(task, message)
+
     @property
     def tasks(self) -> dict[str, Task]:
-        return {name: replace(task) for name, task in self._tasks.items()}
+        return {
+            name: replace(task, warnings=list(task.warnings))
+            for name, task in self._tasks.items()
+        }

@@ -44,6 +44,9 @@ class ConsoleRenderer(ProgressRenderer):
         )
         self._progress.stop_task(task_id)
 
+    def on_task_warning(self, task: Task, message: str) -> None:
+        self._progress.print(f"[bold yellow]WARNING [{task.name}]: {message}")
+
     def stop(self) -> None:
         self._progress.stop()
 

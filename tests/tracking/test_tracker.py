@@ -9,6 +9,7 @@ class _FakeRenderer(ProgressRenderer):
         self.progressed: list[Task] = []
         self.done: list[Task] = []
         self.failed: list[Task] = []
+        self.warnings: list[tuple[Task, str]] = []
 
     def on_task_added(self, task: Task) -> None:
         self.added.append(task)
@@ -21,6 +22,9 @@ class _FakeRenderer(ProgressRenderer):
 
     def on_task_failed(self, task: Task) -> None:
         self.failed.append(task)
+
+    def on_task_warning(self, task: Task, message: str) -> None:
+        self.warnings.append((task, message))
 
 
 @pytest.fixture
@@ -193,3 +197,45 @@ class TestTasksProperty:
         snapshot.progress = 99
 
         assert tracker.tasks["sync"].progress == 0
+
+    async def test_warnings_list_is_a_copy(self, tracker: TaskTracker) -> None:
+        await tracker.add_task("sync", total=10)
+        await tracker.warn("sync", "original")
+        snapshot = tracker.tasks["sync"]
+        snapshot.warnings.append("external mutation")
+
+        assert tracker.tasks["sync"].warnings == ["original"]
+
+
+class TestWarn:
+    async def test_appends_warning_message(self, tracker: TaskTracker) -> None:
+        await tracker.add_task("sync", total=10)
+        await tracker.warn("sync", "duplicate entry found")
+
+        assert "duplicate entry found" in tracker.tasks["sync"].warnings
+
+    async def test_notifies_renderer(
+        self, tracker: TaskTracker, renderer: _FakeRenderer
+    ) -> None:
+        await tracker.add_task("sync", total=10)
+        await tracker.warn("sync", "duplicate entry found")
+
+        assert len(renderer.warnings) == 1
+        assert renderer.warnings[0][1] == "duplicate entry found"
+
+    async def test_does_not_change_status(self, tracker: TaskTracker) -> None:
+        await tracker.add_task("sync", total=10)
+        await tracker.advance("sync")
+        await tracker.warn("sync", "something suspicious")
+
+        assert tracker.tasks["sync"].status == TaskStatus.RUNNING
+
+    async def test_ignored_after_terminal_status(
+        self, tracker: TaskTracker, renderer: _FakeRenderer
+    ) -> None:
+        await tracker.add_task("sync", total=10)
+        await tracker.finish("sync")
+        await tracker.warn("sync", "too late")
+
+        assert tracker.tasks["sync"].warnings == []
+        assert len(renderer.warnings) == 0

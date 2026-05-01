@@ -15,3 +15,6 @@ class GuiRenderer(ProgressRenderer):
 
     def on_task_failed(self, task: Task) -> None:
         pass
+
+    def on_task_warning(self, task: Task, message: str) -> None:
+        pass

@@ -118,6 +118,16 @@ class TestFinish:
 
         assert len(renderer.done) == 1
 
+    async def test_ignored_after_fail(
+        self, tracker: TaskTracker, renderer: _FakeRenderer
+    ) -> None:
+        await tracker.add_task("sync", total=10)
+        await tracker.fail("sync", error="timeout")
+        await tracker.finish("sync")
+
+        assert tracker.tasks["sync"].status == TaskStatus.FAILED
+        assert len(renderer.done) == 0
+
 
 class TestFail:
     async def test_sets_failed_status(self, tracker: TaskTracker) -> None:
@@ -135,6 +145,16 @@ class TestFail:
         await tracker.fail("sync", error="timeout")
 
         assert len(renderer.failed) == 1
+
+    async def test_ignored_after_finish(
+        self, tracker: TaskTracker, renderer: _FakeRenderer
+    ) -> None:
+        await tracker.add_task("sync", total=10)
+        await tracker.finish("sync")
+        await tracker.fail("sync", error="timeout")
+
+        assert tracker.tasks["sync"].status == TaskStatus.DONE
+        assert len(renderer.failed) == 0
 
 
 class TestTasksProperty:

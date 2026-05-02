@@ -200,6 +200,7 @@ class TestGpxParserUnit:
           <gpxtpx:TrackPointExtension>
             <gpxtpx:hr>bad</gpxtpx:hr>
             <gpxtpx:cad>bad</gpxtpx:cad>
+            <gpxtpx:atemp>bad</gpxtpx:atemp>
           </gpxtpx:TrackPointExtension>
         </extensions>
       </trkpt>
@@ -211,6 +212,7 @@ class TestGpxParserUnit:
         pt = result.track[0]
         assert pt.heart_rate is None
         assert pt.cadence is None
+        assert pt.temperature is None
 
     def test_trackpoint_without_time_skipped(self, parser: GpxParser) -> None:
         gpx = """\

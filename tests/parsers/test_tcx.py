@@ -234,6 +234,28 @@ class TestTcxParserUnit:
         assert pt.heart_rate is None
         assert pt.cadence is None
 
+    def test_bad_float_field_yields_none(self, parser: TcxParser) -> None:
+        tcx = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<TrainingCenterDatabase xmlns="http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2">
+  <Activities>
+    <Activity Sport="Biking">
+      <Id>2026-01-01T08:00:00.000Z</Id>
+      <Lap>
+        <Track>
+          <Trackpoint>
+            <Time>2026-01-01T08:00:00.000Z</Time>
+            <AltitudeMeters>bad</AltitudeMeters>
+          </Trackpoint>
+        </Track>
+      </Lap>
+    </Activity>
+  </Activities>
+</TrainingCenterDatabase>"""
+        result = parser.parse(tcx.encode())
+
+        assert result.track[0].altitude is None
+
     def test_trackpoint_with_invalid_time_skipped(self, parser: TcxParser) -> None:
         tcx = """\
 <?xml version="1.0" encoding="UTF-8"?>

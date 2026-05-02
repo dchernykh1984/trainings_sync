@@ -58,6 +58,7 @@ class GarminConnector(ServiceConnector):
                 start_time=datetime.fromisoformat(
                     a["startTimeGMT"].replace(" ", "T")
                 ).replace(tzinfo=timezone.utc),
+                elapsed_s=int(a["duration"]) if a.get("duration") is not None else None,
             )
             for a in raw
         ]
@@ -79,6 +80,7 @@ class GarminConnector(ServiceConnector):
             start_time=meta.start_time,
             content=fit_bytes,
             format="fit",
+            elapsed_s=meta.elapsed_s,
         )
 
     async def upload_activity(self, activity: Activity) -> None:

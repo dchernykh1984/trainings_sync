@@ -24,6 +24,7 @@ _RAW_ACTIVITY = {
     "activityName": "Morning Run",
     "startTimeGMT": "2026-01-01 08:00:00",
     "activityType": {"typeKey": "running"},
+    "duration": 3600.0,
 }
 
 
@@ -164,6 +165,7 @@ class TestListActivities:
         assert result[0].name == "Morning Run"
         assert result[0].sport_type == "running"
         assert result[0].start_time == _DT
+        assert result[0].elapsed_s == 3600
 
     async def test_passes_date_range_to_client(
         self, logged_in: GarminConnector, mock_client: MagicMock
@@ -180,6 +182,21 @@ class TestListActivities:
         mock_client.get_activities_by_date.assert_called_once_with(
             "2026-01-01", "2026-01-31"
         )
+
+    async def test_elapsed_s_none_when_duration_missing(
+        self, logged_in: GarminConnector, mock_client: MagicMock
+    ) -> None:
+        raw = {k: v for k, v in _RAW_ACTIVITY.items() if k != "duration"}
+        mock_client.get_activities_by_date.return_value = [raw]
+
+        with patch(
+            "app.connectors.garmin.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            result = await logged_in.list_activities(_START, _END)
+
+        assert result[0].elapsed_s is None
 
     async def test_raises_when_not_logged_in(self, connector: GarminConnector) -> None:
         with pytest.raises(RuntimeError, match="login"):

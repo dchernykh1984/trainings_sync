@@ -705,6 +705,18 @@ testing = ["coverage", "pytest", "pytest-vcr (>=1.0.2)", "vcrpy (>=7.0.0)"]
 workout = ["pydantic (>=2.0.0)"]
 
 [[package]]
+name = "gpxpy"
+version = "1.6.2"
+description = "GPX file parser and GPS track manipulation library"
+optional = false
+python-versions = ">=3.6"
+groups = ["main"]
+files = [
+    {file = "gpxpy-1.6.2-py3-none-any.whl", hash = "sha256:289bc2d80f116c988d0a1e763fda22838f83005573ece2bbc6521817b26fb40a"},
+    {file = "gpxpy-1.6.2.tar.gz", hash = "sha256:a72c484b97ec42b80834353b029cc8ee1b79f0ffca1179b2210bb3baf26c01ae"},
+]
+
+[[package]]
 name = "identify"
 version = "2.6.19"
 description = "File identification library for Python"
@@ -1759,6 +1771,21 @@ docs = ["furo (>=2025.12.19)", "sphinx (>=9.1)", "sphinx-autodoc-typehints (>=3.
 testing = ["covdefaults (>=2.3)", "coverage (>=7.5.4)", "pytest (>=8.3.5)", "pytest-mock (>=3.14)", "setuptools (>=75.1)"]
 
 [[package]]
+name = "python-fitparse"
+version = "2.1.6"
+description = "Python library to parse ANT/Garmin .FIT files"
+optional = false
+python-versions = ">=3.8"
+groups = ["main"]
+files = [
+    {file = "python_fitparse-2.1.6-py3-none-any.whl", hash = "sha256:2bfe290f677b4381e61d5f3e3dcc3f6f0efef371a5ad27d31827af3dfe08b123"},
+    {file = "python_fitparse-2.1.6.tar.gz", hash = "sha256:538695cb0928ffe33dd802c40d2993d1ef4484fa05a9061eefcdfd47d8fad5b4"},
+]
+
+[package.extras]
+generate = ["openpyxl (==3.1.5)", "requests"]
+
+[[package]]
 name = "pytz"
 version = "2026.1.post1"
 description = "World timezone definitions, modern and historical"
@@ -2206,4 +2233,4 @@ dev = ["pytest", "setuptools"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.14"
-content-hash = "8c84ea90ffe222bf68887b330169b21441ad9a591406769bc836abbb6537a0f2"
+content-hash = "e0a521abda53fbb2f2fd88937ad2b5b0ece093a3c2dc11f1061730a0a49e7a42"

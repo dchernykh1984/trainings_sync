@@ -10,6 +10,8 @@ garminconnect = ">=0.2.39,<0.4.0"
 stravalib = "^2.4"
 rich = "^15.0.0"
 pykeepass = "^4.1.1.post1"
+python-fitparse = "^2.1"
+gpxpy = "^1.6"
 
 [tool.poetry.group.dev.dependencies]
 ruff = "^0.15.12"

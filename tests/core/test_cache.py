@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from app.connectors.base import ActivityMeta
 from app.core.cache import ActivityCache, CacheEntry
 
 _DT = datetime(2026, 1, 1, 8, 0, tzinfo=timezone.utc)
@@ -505,6 +506,15 @@ class TestMarkUploaded:
 
         assert isinstance(updated.uploaded_to, tuple)
 
+    def test_returns_entry_unchanged_when_not_in_cache(
+        self, cache: ActivityCache
+    ) -> None:
+        entry = _make_entry()  # not put into cache
+
+        result = cache.mark_uploaded(entry, "strava-main")
+
+        assert result is entry
+
     def test_reads_current_in_memory_state_not_stale_entry(
         self, cache: ActivityCache
     ) -> None:
@@ -516,3 +526,137 @@ class TestMarkUploaded:
         current = cache.get_entry("123", "garmin-main")
         assert current is not None
         assert current.needs_refresh is True  # must not have been overwritten
+
+
+# ---------------------------------------------------------------------------
+# Helpers for FindOverlapping tests
+# ---------------------------------------------------------------------------
+
+_BASE = datetime(2026, 6, 1, 8, 0, tzinfo=timezone.utc)
+
+
+def _meta(start_offset_s: int = 0, elapsed_s: int | None = 3600) -> ActivityMeta:
+    return ActivityMeta(
+        external_id="meta",
+        name="Test",
+        sport_type="running",
+        start_time=_BASE + timedelta(seconds=start_offset_s),
+        elapsed_s=elapsed_s,
+    )
+
+
+def _entry_at(
+    offset_s: int,
+    elapsed_s: int | None = 3600,
+    eid: str = "e1",
+) -> CacheEntry:
+    return CacheEntry(
+        external_id=eid,
+        source_id="garmin-main",
+        format="fit",
+        start_time=_BASE + timedelta(seconds=offset_s),
+        elapsed_s=elapsed_s,
+    )
+
+
+class TestFindOverlapping:
+    # meta = [08:00, 09:00], 3600s
+
+    def test_returns_empty_when_no_entries(self, cache: ActivityCache) -> None:
+        assert cache.find_overlapping(_meta()) == []
+
+    def test_returns_entry_that_fully_overlaps(self, cache: ActivityCache) -> None:
+        cache.put(_entry_at(0), b"x")  # [08:00, 09:00]
+
+        assert len(cache.find_overlapping(_meta())) == 1
+
+    def test_returns_entry_that_partially_overlaps_from_before(
+        self, cache: ActivityCache
+    ) -> None:
+        cache.put(_entry_at(-1800), b"x")  # [07:30, 08:30] — overlap 1800s
+
+        assert len(cache.find_overlapping(_meta())) == 1
+
+    def test_returns_entry_that_partially_overlaps_from_after(
+        self, cache: ActivityCache
+    ) -> None:
+        cache.put(_entry_at(1800), b"x")  # [08:30, 09:30] — overlap 1800s
+
+        assert len(cache.find_overlapping(_meta())) == 1
+
+    def test_returns_empty_when_entry_ends_before_meta_starts(
+        self, cache: ActivityCache
+    ) -> None:
+        cache.put(_entry_at(-3600), b"x")  # [07:00, 08:00] — touching, not overlapping
+
+        assert cache.find_overlapping(_meta()) == []
+
+    def test_returns_empty_when_entry_starts_after_meta_ends(
+        self, cache: ActivityCache
+    ) -> None:
+        cache.put(_entry_at(3600), b"x")  # [09:00, 10:00] — touching, not overlapping
+
+        assert cache.find_overlapping(_meta()) == []
+
+    def test_returns_multiple_overlapping_entries(self, cache: ActivityCache) -> None:
+        # two short Garmin entries covered by one long meta (Garmin/Strava split)
+        cache.put(_entry_at(0, elapsed_s=1800, eid="g1"), b"x")  # [08:00, 08:30]
+        cache.put(_entry_at(1800, elapsed_s=1800, eid="g2"), b"x")  # [08:30, 09:00]
+
+        # meta covers [08:00, 09:00]
+        result = cache.find_overlapping(_meta())
+
+        assert len(result) == 2
+
+    def test_min_overlap_s_filters_tiny_overlap(self, cache: ActivityCache) -> None:
+        # entry starts at 08:59:30 → overlap with meta [08:00, 09:00] is 30s
+        cache.put(_entry_at(3570), b"x")  # [08:59:30, 09:59:30]
+
+        # default min_overlap_s=60 → excluded
+        assert cache.find_overlapping(_meta()) == []
+
+    def test_min_overlap_s_custom_allows_small_overlap(
+        self, cache: ActivityCache
+    ) -> None:
+        cache.put(_entry_at(3570), b"x")  # 30s overlap
+
+        assert len(cache.find_overlapping(_meta(), min_overlap_s=30)) == 1
+
+    def test_fallback_when_both_elapsed_none_within_tolerance(
+        self, cache: ActivityCache
+    ) -> None:
+        # meta elapsed_s=None → treated as fallback (3600s)
+        # entry starts 30 min after meta → overlap = 30 min ≥ 60s
+        cache.put(_entry_at(1800, elapsed_s=None), b"x")
+
+        assert len(cache.find_overlapping(_meta(elapsed_s=None))) == 1
+
+    def test_fallback_when_both_elapsed_none_beyond_tolerance(
+        self, cache: ActivityCache
+    ) -> None:
+        # entry starts 1h after meta → overlap = 0 (touches at boundary)
+        cache.put(_entry_at(3600, elapsed_s=None), b"x")
+
+        assert cache.find_overlapping(_meta(elapsed_s=None)) == []
+
+    def test_meta_elapsed_none_entry_has_elapsed(self, cache: ActivityCache) -> None:
+        # meta: [08:00, 08:00+fallback], entry: [08:15, 09:15] → clearly overlapping
+        cache.put(_entry_at(900, elapsed_s=3600), b"x")  # [08:15, 09:15]
+
+        assert len(cache.find_overlapping(_meta(elapsed_s=None))) == 1
+
+    def test_includes_needs_refresh_entries(self, cache: ActivityCache) -> None:
+        cache.put(_entry_at(0), b"x")
+        cache.mark_refresh("garmin-main")
+
+        result = cache.find_overlapping(_meta())
+        assert len(result) == 1
+        assert result[0].needs_refresh is True
+
+    def test_excludes_entry_when_file_missing(
+        self, cache: ActivityCache, tmp_path: Path
+    ) -> None:
+        entry = cache.put(_entry_at(0), b"x")
+        (tmp_path / entry.filename).unlink()
+
+        assert cache.find_overlapping(_meta()) == []

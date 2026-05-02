@@ -115,6 +115,32 @@ class TestActivityMeta:
                 start_time=datetime(2026, 1, 1, 8, 0, tzinfo=tz_plus3),
             )
 
+    def test_raises_on_negative_elapsed(self) -> None:
+        with pytest.raises(ValueError, match="elapsed_s"):
+            ActivityMeta(
+                external_id="1",
+                name="",
+                sport_type="",
+                start_time=_DT,
+                elapsed_s=-1,
+            )
+
+    def test_elapsed_s_defaults_to_none(self) -> None:
+        assert _make_meta().elapsed_s is None
+
+    def test_end_time_none_when_no_elapsed(self) -> None:
+        assert _make_meta().end_time is None
+
+    def test_end_time_computed_from_elapsed(self) -> None:
+        meta = ActivityMeta(
+            external_id="1",
+            name="Run",
+            sport_type="running",
+            start_time=_DT,
+            elapsed_s=3600,
+        )
+        assert meta.end_time == _DT + timedelta(seconds=3600)
+
 
 class TestDownloadAll:
     async def test_returns_empty_without_creating_task(

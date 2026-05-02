@@ -4,8 +4,8 @@ import asyncio
 import itertools
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
-from dataclasses import dataclass
-from datetime import date, datetime
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
 
 from app.tracking.tracker import TaskTracker
 
@@ -16,6 +16,7 @@ class ActivityMeta:
     name: str
     sport_type: str
     start_time: datetime  # must be UTC (utcoffset == 0)
+    elapsed_s: int | None = field(default=None, kw_only=True)  # wall-clock duration
 
     def __post_init__(self) -> None:
         offset = self.start_time.utcoffset()
@@ -23,6 +24,14 @@ class ActivityMeta:
             raise ValueError(
                 f"ActivityMeta.start_time must be UTC, got: {self.start_time}"
             )
+        if self.elapsed_s is not None and self.elapsed_s < 0:
+            raise ValueError(f"elapsed_s must be >= 0, got: {self.elapsed_s}")
+
+    @property
+    def end_time(self) -> datetime | None:
+        if self.elapsed_s is None:
+            return None
+        return self.start_time + timedelta(seconds=self.elapsed_s)
 
 
 @dataclass(frozen=True)

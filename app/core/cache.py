@@ -5,8 +5,10 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+
+from app.connectors.base import ActivityMeta
 
 
 @dataclass(frozen=True)
@@ -81,6 +83,27 @@ def _entry_from_dict(d: dict) -> CacheEntry:
         needs_refresh=d.get("needs_refresh", False),
         uploaded_to=tuple(d.get("uploaded_to", [])),
     )
+
+
+def _intervals_overlap(
+    a_start: datetime,
+    a_elapsed: int | None,
+    b_start: datetime,
+    b_elapsed: int | None,
+    min_overlap_s: int,
+    fallback_s: int,
+) -> bool:
+    a_end = a_start + timedelta(
+        seconds=a_elapsed if a_elapsed is not None else fallback_s
+    )
+    b_end = b_start + timedelta(
+        seconds=b_elapsed if b_elapsed is not None else fallback_s
+    )
+    overlap_start = max(a_start, b_start)
+    overlap_end = min(a_end, b_end)
+    if overlap_end <= overlap_start:
+        return False
+    return (overlap_end - overlap_start).total_seconds() >= min_overlap_s
 
 
 class ActivityCache:
@@ -191,6 +214,26 @@ class ActivityCache:
             if (start is None or e_date >= start) and (end is None or e_date <= end):
                 self._entries[i] = dataclasses.replace(e, needs_refresh=True)
         self.save()
+
+    def find_overlapping(
+        self,
+        meta: ActivityMeta,
+        min_overlap_s: int = 60,
+        fallback_tolerance_s: int = 3600,
+    ) -> list[CacheEntry]:
+        return [
+            e
+            for e in self._entries
+            if self._safe_path(e.filename).is_file()
+            and _intervals_overlap(
+                meta.start_time,
+                meta.elapsed_s,
+                e.start_time,
+                e.elapsed_s,
+                min_overlap_s,
+                fallback_tolerance_s,
+            )
+        ]
 
     def mark_uploaded(self, entry: CacheEntry, destination_id: str) -> CacheEntry:
         for i, e in enumerate(self._entries):

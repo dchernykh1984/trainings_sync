@@ -18,6 +18,13 @@ class Credentials:
     password: str
 
 
+@dataclass(frozen=True)
+class StravaCredentials:
+    client_id: int
+    client_secret: str
+    refresh_token: str
+
+
 class CredentialsNotFoundError(Exception):
     def __init__(self, request: CredentialRequest) -> None:
         super().__init__(

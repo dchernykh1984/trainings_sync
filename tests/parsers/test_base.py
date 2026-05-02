@@ -100,6 +100,21 @@ class TestActivityData:
         assert len(data.track) == 1
         assert data.track[0].heart_rate == 140
 
+    def test_elapsed_s_none_with_empty_track(self) -> None:
+        assert ActivityData(start_time=_DT).elapsed_s is None
+
+    def test_elapsed_s_none_with_single_point(self) -> None:
+        assert ActivityData(start_time=_DT, track=[_PT]).elapsed_s is None
+
+    def test_elapsed_s_computed_from_track_endpoints(self) -> None:
+        t1 = datetime(2026, 1, 1, 8, 0, tzinfo=timezone.utc)
+        t2 = datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc)
+        data = ActivityData(
+            start_time=t1,
+            track=[TrackPoint(timestamp=t1), TrackPoint(timestamp=t2)],
+        )
+        assert data.elapsed_s == 3600
+
 
 class TestActivityParser:
     def test_cannot_instantiate_abc_directly(self) -> None:

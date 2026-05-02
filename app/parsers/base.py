@@ -40,6 +40,12 @@ class ActivityData:
     track: list[TrackPoint] = field(default_factory=list)
     gear_events: list[GearEvent] = field(default_factory=list)
 
+    @property
+    def elapsed_s(self) -> int | None:
+        if len(self.track) < 2:
+            return None
+        return int((self.track[-1].timestamp - self.track[0].timestamp).total_seconds())
+
 
 class ActivityParser(ABC):
     @abstractmethod

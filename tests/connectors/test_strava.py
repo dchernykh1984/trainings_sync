@@ -93,12 +93,14 @@ def _make_strava_activity(
     name: str = "Morning Run",
     sport_type_root: str = "Run",
     start_date: datetime = _DT,
+    elapsed_time: int | None = 3600,
 ) -> MagicMock:
     a = MagicMock()
     a.id = activity_id
     a.name = name
     a.sport_type.root = sport_type_root
     a.start_date = start_date
+    a.elapsed_time = elapsed_time
     return a
 
 
@@ -249,6 +251,7 @@ class TestListActivities:
         assert result[0].name == "Morning Run"
         assert result[0].sport_type == "Run"
         assert result[0].start_time == _DT
+        assert result[0].elapsed_s == 3600
 
     async def test_passes_date_range_to_client(
         self, logged_in: StravaConnector, mock_client: MagicMock
@@ -266,6 +269,22 @@ class TestListActivities:
             after=datetime(2026, 1, 1),
             before=datetime(2026, 2, 1),
         )
+
+    async def test_elapsed_s_none_when_elapsed_time_missing(
+        self, logged_in: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.get_activities.return_value = [
+            _make_strava_activity(elapsed_time=None)
+        ]
+
+        with patch(
+            "app.connectors.strava.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            result = await logged_in.list_activities(_START, _END)
+
+        assert result[0].elapsed_s is None
 
     async def test_raises_when_not_logged_in(self, connector: StravaConnector) -> None:
         with pytest.raises(RuntimeError, match="login"):

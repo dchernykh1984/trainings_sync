@@ -69,6 +69,7 @@ class StravaConnector(ServiceConnector):
                 name=a.name or "",
                 sport_type=a.sport_type.root if a.sport_type else "",
                 start_time=a.start_date or datetime.min.replace(tzinfo=timezone.utc),
+                elapsed_s=int(a.elapsed_time) if a.elapsed_time is not None else None,
             )
             for a in raw
         ]

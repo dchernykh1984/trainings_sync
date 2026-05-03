@@ -145,7 +145,7 @@ class SyncExecutor:
                 source_id, items, source_map[source_id], tracking
             )
 
-    async def _upload(self, start: date, end: date) -> None:
+    def _collect_uploads(self, start: date, end: date) -> dict[str, list[CacheEntry]]:
         source_priority = {spec.source_id: spec.priority for spec, _ in self._sources}
         source_order = {spec.source_id: i for i, (spec, _) in enumerate(self._sources)}
         min_overlap_s = self._planner.min_overlap_s
@@ -159,6 +159,7 @@ class SyncExecutor:
             and self._cache.has(e.external_id, e.source_id)
         ]
 
+        by_dest: dict[str, list[CacheEntry]] = {}
         for entry in candidates:
             if _shadowed_by_higher_priority(
                 entry,
@@ -169,11 +170,23 @@ class SyncExecutor:
                 fallback_s,
             ):
                 continue
-            for dest_id, connector in self._destinations:
+            for dest_id, _ in self._destinations:
                 if dest_id == entry.source_id:
                     continue
                 if dest_id in entry.uploaded_to:
                     continue
+                by_dest.setdefault(dest_id, []).append(entry)
+        return by_dest
+
+    async def _upload_to_dest(
+        self,
+        dest_id: str,
+        entries: list[CacheEntry],
+        connector: ServiceConnector,
+        tracking: tuple[TaskTracker, str] | None,
+    ) -> None:
+        try:
+            for entry in entries:
                 content = self._cache.read_content(entry)
                 activity = Activity(
                     external_id=entry.external_id,
@@ -185,4 +198,28 @@ class SyncExecutor:
                     format=entry.format,
                 )
                 await connector.upload_activity(activity)
-                entry = self._cache.mark_uploaded(entry, dest_id)
+                self._cache.mark_uploaded(entry, dest_id)
+                if tracking is not None:
+                    await tracking[0].advance(tracking[1])
+        except Exception as exc:
+            if tracking is not None:
+                await tracking[0].fail(tracking[1], error=str(exc))
+            raise
+        if tracking is not None:
+            await tracking[0].finish(tracking[1])
+
+    async def _upload(self, start: date, end: date) -> None:
+        by_dest = self._collect_uploads(start, end)
+        if not by_dest:
+            return
+
+        tracker = self._tracker
+        if tracker is not None:
+            for dest_id, entries in by_dest.items():
+                await tracker.add_task(f"Upload to {dest_id}", total=len(entries))
+
+        dest_map = {dest_id: conn for dest_id, conn in self._destinations}
+        for dest_id, entries in by_dest.items():
+            task_name = f"Upload to {dest_id}"
+            tracking = (tracker, task_name) if tracker is not None else None
+            await self._upload_to_dest(dest_id, entries, dest_map[dest_id], tracking)

@@ -448,6 +448,68 @@ class TestSyncExecutorTracking:
         )
         tracker.finish.assert_not_called()
 
+    async def test_upload_task_created_per_destination(
+        self, cache: ActivityCache
+    ) -> None:
+        cache.put(_entry(source_id="garmin"), b"content")
+        tracker = _make_tracker()
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), _source_conn())],
+            destinations=[("strava", _dest_conn())],
+            cache=cache,
+            tracker=tracker,
+        )
+        await executor.run(_START, _END)
+        task_names = [call.args[0] for call in tracker.add_task.call_args_list]
+        assert "Upload to strava" in task_names
+
+    async def test_upload_task_advance_called_per_activity(
+        self, cache: ActivityCache
+    ) -> None:
+        cache.put(_entry(external_id="a1", source_id="garmin"), b"content-a1")
+        cache.put(_entry(external_id="a2", source_id="garmin"), b"content-a2")
+        tracker = _make_tracker()
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), _source_conn())],
+            destinations=[("strava", _dest_conn())],
+            cache=cache,
+            tracker=tracker,
+        )
+        await executor.run(_START, _END)
+        upload_advances = [
+            c for c in tracker.advance.call_args_list if c.args[0] == "Upload to strava"
+        ]
+        assert len(upload_advances) == 2
+
+    async def test_no_upload_task_when_nothing_to_upload(
+        self, cache: ActivityCache
+    ) -> None:
+        tracker = _make_tracker()
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), _source_conn())],
+            destinations=[("strava", _dest_conn())],
+            cache=cache,
+            tracker=tracker,
+        )
+        await executor.run(_START, _END)
+        task_names = [call.args[0] for call in tracker.add_task.call_args_list]
+        assert not any(n.startswith("Upload to") for n in task_names)
+
+    async def test_upload_task_failed_on_error(self, cache: ActivityCache) -> None:
+        cache.put(_entry(source_id="garmin"), b"content")
+        dest = MagicMock()
+        dest.upload_activity = AsyncMock(side_effect=OSError("upload failed"))
+        tracker = _make_tracker()
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), _source_conn())],
+            destinations=[("strava", dest)],
+            cache=cache,
+            tracker=tracker,
+        )
+        with pytest.raises(OSError):
+            await executor.run(_START, _END)
+        tracker.fail.assert_called_once_with("Upload to strava", error="upload failed")
+
 
 class TestSyncExecutorUploadPriority:
     async def test_higher_priority_source_wins_upload(

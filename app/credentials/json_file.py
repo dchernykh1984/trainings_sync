@@ -124,4 +124,8 @@ class JsonFileProvider(CredentialProvider):
             ):
                 entry["password"] = new_token
                 break
-        self._path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        else:
+            raise CredentialsNotFoundError(request)
+        tmp = self._path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        tmp.replace(self._path)

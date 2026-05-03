@@ -249,3 +249,50 @@ class TestGetMany:
 
         with pytest.raises(CredentialsNotFoundError):
             await provider.get_many(requests)
+
+
+class TestUpdateRefreshToken:
+    def test_updates_password_in_matching_entry(self, tmp_path: Path) -> None:
+        provider, _ = _make_provider(tmp_path)
+        request = CredentialRequest("garmin", "https://garmin.com", login="alice")
+
+        provider.update_refresh_token(request, "new-token")
+
+        data = json.loads((tmp_path / "creds.json").read_text(encoding="utf-8"))
+        alice = next(e for e in data if e["login"] == "alice")
+        assert alice["password"] == "new-token"
+
+    def test_other_entries_are_unchanged(self, tmp_path: Path) -> None:
+        provider, _ = _make_provider(tmp_path)
+        request = CredentialRequest("garmin", "https://garmin.com", login="alice")
+
+        provider.update_refresh_token(request, "new-token")
+
+        data = json.loads((tmp_path / "creds.json").read_text(encoding="utf-8"))
+        bob = next(e for e in data if e["login"] == "bob")
+        assert bob["password"] == "pass2"
+
+    def test_raises_when_entry_not_found(self, tmp_path: Path) -> None:
+        provider, _ = _make_provider(tmp_path)
+        request = CredentialRequest("garmin", "https://unknown.com")
+
+        with pytest.raises(CredentialsNotFoundError):
+            provider.update_refresh_token(request, "new-token")
+
+    def test_file_not_written_when_entry_not_found(self, tmp_path: Path) -> None:
+        provider, _ = _make_provider(tmp_path)
+        request = CredentialRequest("garmin", "https://unknown.com")
+        original = (tmp_path / "creds.json").read_bytes()
+
+        with pytest.raises(CredentialsNotFoundError):
+            provider.update_refresh_token(request, "new-token")
+
+        assert (tmp_path / "creds.json").read_bytes() == original
+
+    def test_no_tmp_file_remains_after_successful_update(self, tmp_path: Path) -> None:
+        provider, _ = _make_provider(tmp_path)
+        request = CredentialRequest("garmin", "https://garmin.com", login="alice")
+
+        provider.update_refresh_token(request, "new-token")
+
+        assert not (tmp_path / "creds.tmp").exists()

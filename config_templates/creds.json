@@ -1,0 +1,8 @@
+[
+  {
+    "service": "Garmin Connect",
+    "url": "https://connect.garmin.com",
+    "login": "YOUR_GARMIN_EMAIL",
+    "password": "YOUR_GARMIN_PASSWORD"
+  }
+]

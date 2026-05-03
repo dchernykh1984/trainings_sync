@@ -5,7 +5,8 @@ from datetime import date, timedelta
 
 from app.connectors.base import Activity, ActivityMeta, ServiceConnector
 from app.core.cache import ActivityCache, CacheEntry
-from app.core.planner import SourceSpec, SyncPlanner
+from app.core.planner import DownloadItem, SourceSpec, SyncPlanner
+from app.tracking.tracker import TaskTracker
 
 _UNKNOWN_PRIORITY: int = sys.maxsize
 _UNKNOWN_ORDER: int = sys.maxsize
@@ -63,6 +64,7 @@ class SyncExecutor:
         destinations: list[tuple[str, ServiceConnector]],
         cache: ActivityCache,
         planner: SyncPlanner | None = None,
+        tracker: TaskTracker | None = None,
     ) -> None:
         source_ids = [spec.source_id for spec, _ in sources]
         if len(source_ids) != len(set(source_ids)):
@@ -75,6 +77,7 @@ class SyncExecutor:
         self._destinations = destinations
         self._cache = cache
         self._planner = planner if planner is not None else SyncPlanner()
+        self._tracker = tracker
 
     async def run(
         self,
@@ -86,6 +89,35 @@ class SyncExecutor:
         await self._download(start, end, force=force)
         await self._upload(start, end)
 
+    async def _download_source(
+        self,
+        source_id: str,
+        items: list[DownloadItem],
+        connector: ServiceConnector,
+        tracking: tuple[TaskTracker, str] | None,
+    ) -> None:
+        try:
+            for item in items:
+                activity = await connector.download_activity(item.meta)
+                entry = CacheEntry(
+                    external_id=activity.external_id,
+                    source_id=source_id,
+                    format=activity.format,
+                    start_time=activity.start_time,
+                    elapsed_s=activity.elapsed_s,
+                    name=activity.name,
+                    sport_type=activity.sport_type,
+                )
+                self._cache.put(entry, activity.content)
+                if tracking is not None:
+                    await tracking[0].advance(tracking[1])
+        except Exception as exc:
+            if tracking is not None:
+                await tracking[0].fail(tracking[1], error=str(exc))
+            raise
+        if tracking is not None:
+            await tracking[0].finish(tracking[1])
+
     async def _download(self, start: date, end: date, *, force: bool) -> None:
         source_metas: list[tuple[SourceSpec, list[ActivityMeta]]] = []
         for spec, connector in self._sources:
@@ -94,20 +126,24 @@ class SyncExecutor:
 
         plan = self._planner.plan(source_metas, self._cache, force=force)
 
-        source_map = {spec.source_id: conn for spec, conn in self._sources}
+        by_source: dict[str, list[DownloadItem]] = {}
         for item in plan.to_download:
-            connector = source_map[item.source_id]
-            activity = await connector.download_activity(item.meta)
-            entry = CacheEntry(
-                external_id=activity.external_id,
-                source_id=item.source_id,
-                format=activity.format,
-                start_time=activity.start_time,
-                elapsed_s=activity.elapsed_s,
-                name=activity.name,
-                sport_type=activity.sport_type,
+            by_source.setdefault(item.source_id, []).append(item)
+
+        tracker = self._tracker
+        if tracker is not None:
+            for source_id, items in by_source.items():
+                await tracker.add_task(
+                    f"Download {source_id} activities", total=len(items)
+                )
+
+        source_map = {spec.source_id: conn for spec, conn in self._sources}
+        for source_id, items in by_source.items():
+            task_name = f"Download {source_id} activities"
+            tracking = (tracker, task_name) if tracker is not None else None
+            await self._download_source(
+                source_id, items, source_map[source_id], tracking
             )
-            self._cache.put(entry, activity.content)
 
     async def _upload(self, start: date, end: date) -> None:
         source_priority = {spec.source_id: spec.priority for spec, _ in self._sources}

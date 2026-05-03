@@ -60,6 +60,14 @@ class SyncPlanner:
         self._min_overlap_s = min_overlap_s
         self._fallback_s = fallback_s
 
+    @property
+    def min_overlap_s(self) -> int:
+        return self._min_overlap_s
+
+    @property
+    def fallback_s(self) -> int:
+        return self._fallback_s
+
     def plan(
         self,
         sources: list[tuple[SourceSpec, list[ActivityMeta]]],

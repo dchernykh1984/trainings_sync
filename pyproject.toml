@@ -3,6 +3,10 @@ name = "trainings-sync"
 version = "0.1.0"
 description = "Sync training activities between Garmin and Strava"
 authors = ["Denis Chernykh <education03@mail.ru>"]
+packages = [{include = "app"}]
+
+[tool.poetry.scripts]
+trainings-sync = "app.cli:main"
 
 [tool.poetry.dependencies]
 python = "^3.14"

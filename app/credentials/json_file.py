@@ -113,3 +113,15 @@ class JsonFileProvider(CredentialProvider):
 
         entry = matches[0]
         return Credentials(login=entry["login"], password=entry["password"])
+
+    def update_refresh_token(self, request: CredentialRequest, new_token: str) -> None:
+        data = json.loads(self._path.read_text(encoding="utf-8"))
+        for entry in data:
+            if (
+                entry["service"] == request.service
+                and request.url in entry["url"]
+                and (request.login is None or entry["login"] == request.login)
+            ):
+                entry["password"] = new_token
+                break
+        self._path.write_text(json.dumps(data, indent=2), encoding="utf-8")

@@ -5,6 +5,7 @@ import asyncio
 import getpass
 import os
 import sys
+import traceback
 from datetime import date
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from app.credentials.base import (
     CredentialProvider,
     CredentialRequest,
     Credentials,
+    CredentialsNotFoundError,
     StravaCredentials,
 )
 from app.credentials.json_file import JsonFileProvider
@@ -204,6 +206,8 @@ async def _run(args: argparse.Namespace) -> None:
                 tracker,
                 on_strava_token_refresh=_on_token_refresh,
             )
+        except CredentialsNotFoundError:
+            sys.exit(1)  # already reported via tracker
         except ValueError as exc:
             print(f"error: {exc}", file=sys.stderr)
             sys.exit(1)
@@ -227,6 +231,7 @@ def main() -> None:
         asyncio.run(_run(args))
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
         sys.exit(1)
 
 

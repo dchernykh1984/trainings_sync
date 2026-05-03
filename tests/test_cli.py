@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.cli import _run, _validate
+from app.cli import _run, _validate, main
 from app.core.config import AppConfig, StravaDestinationConfig
 from app.credentials.base import CredentialRequest, StravaCredentials
 
@@ -126,3 +126,21 @@ class TestTokenRefreshCallback:
 
         data = json.loads(creds_file.read_text(encoding="utf-8"))
         assert data[0]["password"] == new_rt
+
+
+class TestMain:
+    def test_unexpected_exception_prints_traceback_and_exits_1(
+        self, capsys: pytest.CaptureFixture
+    ) -> None:
+        with (
+            patch("app.cli._build_arg_parser") as mock_parser,
+            patch("app.cli._run", new=AsyncMock(side_effect=RuntimeError("boom"))),
+            pytest.raises(SystemExit) as exc,
+        ):
+            mock_parser.return_value.parse_args.return_value = argparse.Namespace()
+            main()
+
+        assert exc.value.code == 1
+        err = capsys.readouterr().err
+        assert "boom" in err
+        assert "Traceback" in err

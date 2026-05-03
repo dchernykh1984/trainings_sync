@@ -18,6 +18,8 @@ class CacheEntry:
     format: str  # "fit", "gpx", "tcx"
     start_time: datetime  # UTC
     elapsed_s: int | None  # wall-clock duration; None if unknown
+    name: str = ""
+    sport_type: str = ""
     filename: str = ""  # relative path within cache_dir; set by ActivityCache.put
     needs_refresh: bool = False
     uploaded_to: tuple[str, ...] = field(default_factory=tuple)  # destination ids
@@ -59,6 +61,8 @@ def _entry_to_dict(e: CacheEntry) -> dict:
         "format": e.format,
         "start_time": e.start_time.isoformat(),
         "elapsed_s": e.elapsed_s,
+        "name": e.name,
+        "sport_type": e.sport_type,
         "filename": e.filename,
         "needs_refresh": e.needs_refresh,
         "uploaded_to": list(e.uploaded_to),
@@ -79,6 +83,8 @@ def _entry_from_dict(d: dict) -> CacheEntry:
         format=d["format"],
         start_time=_parse_utc(d["start_time"]),
         elapsed_s=d["elapsed_s"],
+        name=d.get("name", ""),
+        sport_type=d.get("sport_type", ""),
         filename=d["filename"],
         needs_refresh=d.get("needs_refresh", False),
         uploaded_to=tuple(d.get("uploaded_to", [])),

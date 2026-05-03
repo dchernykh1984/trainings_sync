@@ -74,10 +74,12 @@ def _first_task(tracker: TaskTracker) -> Task:
     return next(iter(tracker.tasks.values()))
 
 
-def _make_zip(fit_bytes: bytes = b"fit-content") -> bytes:
+def _make_zip(
+    content: bytes = b"fit-content", *, filename: str = "activity_12345.fit"
+) -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
-        zf.writestr("activity_12345.fit", fit_bytes)
+        zf.writestr(filename, content)
     return buf.getvalue()
 
 
@@ -266,6 +268,74 @@ class TestDownloadActivity:
             result = await logged_in.download_activity(_make_meta())
 
         assert result.content == fit_bytes
+
+    async def test_falls_back_to_gpx_when_no_fit(
+        self, logged_in: GarminConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.download_activity.return_value = _make_zip(
+            b"gpx-content", filename="activity_12345.gpx"
+        )
+
+        with patch(
+            "app.connectors.garmin.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            result = await logged_in.download_activity(_make_meta())
+
+        assert result.content == b"gpx-content"
+        assert result.format == "gpx"
+
+    async def test_falls_back_to_tcx_when_no_fit_or_gpx(
+        self, logged_in: GarminConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.download_activity.return_value = _make_zip(
+            b"tcx-content", filename="activity_12345.tcx"
+        )
+
+        with patch(
+            "app.connectors.garmin.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            result = await logged_in.download_activity(_make_meta())
+
+        assert result.content == b"tcx-content"
+        assert result.format == "tcx"
+
+    async def test_uppercase_extension_is_accepted(
+        self, logged_in: GarminConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.download_activity.return_value = _make_zip(
+            b"fit-content", filename="ACTIVITY_12345.FIT"
+        )
+
+        with patch(
+            "app.connectors.garmin.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            result = await logged_in.download_activity(_make_meta())
+
+        assert result.content == b"fit-content"
+        assert result.format == "fit"
+
+    async def test_raises_value_error_when_no_supported_file_in_zip(
+        self, logged_in: GarminConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.download_activity.return_value = _make_zip(
+            b"csv-content", filename="activity_12345.csv"
+        )
+
+        with (
+            patch(
+                "app.connectors.garmin.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=_call_sync,
+            ),
+            pytest.raises(ValueError, match="no supported file"),
+        ):
+            await logged_in.download_activity(_make_meta())
 
     async def test_raises_when_not_logged_in(self, connector: GarminConnector) -> None:
         with pytest.raises(RuntimeError, match="login"):

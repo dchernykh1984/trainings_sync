@@ -13,6 +13,8 @@ from app.connectors.base import Activity, ActivityMeta, ServiceConnector
 from app.credentials.base import Credentials
 from app.tracking.tracker import TaskTracker
 
+_PREFERRED_EXTENSIONS = (".fit", ".gpx", ".tcx")
+
 
 class GarminConnector(ServiceConnector):
     _max_concurrent = 3
@@ -79,15 +81,30 @@ class GarminConnector(ServiceConnector):
             dl_fmt=Garmin.ActivityDownloadFormat.ORIGINAL,
         )
         with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
-            fit_name = next(n for n in zf.namelist() if n.endswith(".fit"))
-            fit_bytes = zf.read(fit_name)
+            names = zf.namelist()
+            entry = next(
+                (
+                    n
+                    for ext in _PREFERRED_EXTENSIONS
+                    for n in names
+                    if n.lower().endswith(ext)
+                ),
+                None,
+            )
+            if entry is None:
+                raise ValueError(
+                    f"activity {meta.external_id}: no supported file in archive"
+                    f" (found: {names})"
+                )
+            fmt = Path(entry).suffix.lstrip(".").lower()
+            content = zf.read(entry)
         return Activity(
             external_id=meta.external_id,
             name=meta.name,
             sport_type=meta.sport_type,
             start_time=meta.start_time,
-            content=fit_bytes,
-            format="fit",
+            content=content,
+            format=fmt,
             elapsed_s=meta.elapsed_s,
         )
 

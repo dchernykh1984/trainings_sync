@@ -273,6 +273,7 @@ class TestSyncExecutorUpload:
     async def test_skips_already_uploaded_entry(self, cache: ActivityCache) -> None:
         cache.put(_entry(source_id="garmin", uploaded_to=("strava",)), b"content")
         dest = _dest_conn()
+        dest.has_activity.return_value = True
         executor = SyncExecutor(
             sources=[(_spec("garmin"), _source_conn())],
             destinations=[("strava", dest)],
@@ -280,6 +281,20 @@ class TestSyncExecutorUpload:
         )
         await executor.run(_START, _END)
         dest.upload_activity.assert_not_called()
+
+    async def test_reupload_when_destination_reports_activity_missing(
+        self, cache: ActivityCache
+    ) -> None:
+        cache.put(_entry(source_id="garmin", uploaded_to=("strava",)), b"content")
+        dest = _dest_conn()
+        dest.has_activity.return_value = False
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), _source_conn())],
+            destinations=[("strava", dest)],
+            cache=cache,
+        )
+        await executor.run(_START, _END)
+        dest.upload_activity.assert_called_once()
 
     async def test_skips_entry_whose_source_matches_destination(
         self, cache: ActivityCache

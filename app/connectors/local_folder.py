@@ -89,6 +89,14 @@ class LocalFolderConnector(ServiceConnector):
             format=path.suffix.lstrip(".").lower(),
         )
 
+    def has_activity(self, external_id: str, source_id: str) -> bool:
+        activity_stem = Path(external_id).stem
+        return any(
+            f.stem.endswith(f"_{activity_stem}")
+            for f in self._folder.iterdir()
+            if f.is_file() and f.suffix.lower() in self._parsers
+        )
+
     async def upload_activity(self, activity: Activity) -> None:
         stem = Path(activity.external_id).stem
         filename = (

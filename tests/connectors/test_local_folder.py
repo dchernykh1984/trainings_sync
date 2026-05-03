@@ -300,6 +300,46 @@ class TestDownloadActivity:
         assert result.external_id == str(path)
 
 
+class TestHasActivity:
+    def test_returns_true_when_file_exists(
+        self, connector: LocalFolderConnector, folder: Path
+    ) -> None:
+        (folder / "20260501T082855_12345.fit").write_bytes(b"content")
+        assert connector.has_activity("12345", "garmin") is True
+
+    def test_returns_false_when_file_missing(
+        self, connector: LocalFolderConnector
+    ) -> None:
+        assert connector.has_activity("12345", "garmin") is False
+
+    def test_matches_any_format_extension(
+        self, connector: LocalFolderConnector, folder: Path
+    ) -> None:
+        (folder / "20260501T082855_12345.gpx").write_bytes(b"content")
+        assert connector.has_activity("12345", "garmin") is True
+
+    def test_does_not_match_partial_id(
+        self, connector: LocalFolderConnector, folder: Path
+    ) -> None:
+        (folder / "20260501T082855_123456.fit").write_bytes(b"content")
+        assert connector.has_activity("12345", "garmin") is False
+
+    def test_returns_true_when_external_id_stem_contains_underscore(
+        self, connector: LocalFolderConnector, folder: Path
+    ) -> None:
+        (folder / "20260501T082855_20260501T082855_12345.fit").write_bytes(b"content")
+        assert (
+            connector.has_activity("/some/folder/20260501T082855_12345.fit", "garmin")
+            is True
+        )
+
+    def test_ignores_non_activity_extensions(
+        self, connector: LocalFolderConnector, folder: Path
+    ) -> None:
+        (folder / "notes_12345.txt").write_bytes(b"content")
+        assert connector.has_activity("12345", "garmin") is False
+
+
 class TestUploadActivity:
     async def test_writes_bytes_to_folder(
         self, connector: LocalFolderConnector, folder: Path

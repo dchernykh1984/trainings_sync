@@ -62,6 +62,15 @@ class ServiceConnector(ABC):
     @abstractmethod
     async def upload_activity(self, activity: Activity) -> None: ...
 
+    def has_activity(self, external_id: str, source_id: str) -> bool:
+        """Return True if the activity is known to exist at this destination.
+
+        The default conservatively returns True (trust the uploaded_to cache).
+        Override in connectors that can cheaply verify local state, e.g. by
+        checking whether the file is present on disk.
+        """
+        return True
+
     async def download_all(self, start: date, end: date) -> list[Activity]:
         metas = await self.list_activities(start, end)
         if not metas:

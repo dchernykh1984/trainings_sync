@@ -170,10 +170,12 @@ class SyncExecutor:
                 fallback_s,
             ):
                 continue
-            for dest_id, _ in self._destinations:
+            for dest_id, connector in self._destinations:
                 if dest_id == entry.source_id:
                     continue
-                if dest_id in entry.uploaded_to:
+                if dest_id in entry.uploaded_to and connector.has_activity(
+                    entry.external_id, entry.source_id
+                ):
                     continue
                 by_dest.setdefault(dest_id, []).append(entry)
         return by_dest

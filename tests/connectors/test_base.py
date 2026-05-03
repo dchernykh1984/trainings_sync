@@ -142,6 +142,11 @@ class TestActivityMeta:
         assert meta.end_time == _DT + timedelta(seconds=3600)
 
 
+class TestHasActivity:
+    def test_default_returns_true(self, connector: _FakeConnector) -> None:
+        assert connector.has_activity("12345", "garmin") is True
+
+
 class TestDownloadAll:
     async def test_returns_empty_without_creating_task(
         self, connector: _FakeConnector, tracker: TaskTracker

@@ -198,6 +198,38 @@ class TestListActivities:
 
         assert result[0].elapsed_s is None
 
+    async def test_tracker_task_done_after_listing(
+        self, logged_in: GarminConnector, mock_client: MagicMock, tracker: TaskTracker
+    ) -> None:
+        mock_client.get_activities_by_date.return_value = [_RAW_ACTIVITY]
+
+        with patch(
+            "app.connectors.garmin.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            await logged_in.list_activities(_START, _END)
+
+        tasks = list(tracker.tasks.values())
+        assert len(tasks) == 1
+        assert tasks[0].status == TaskStatus.DONE
+
+    async def test_tracker_task_fails_on_api_error(
+        self, logged_in: GarminConnector, tracker: TaskTracker
+    ) -> None:
+        with (
+            patch(
+                "app.connectors.garmin.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=OSError("api error"),
+            ),
+            pytest.raises(OSError),
+        ):
+            await logged_in.list_activities(_START, _END)
+
+        tasks = list(tracker.tasks.values())
+        assert tasks[0].status == TaskStatus.FAILED
+
     async def test_raises_when_not_logged_in(self, connector: GarminConnector) -> None:
         with pytest.raises(RuntimeError, match="login"):
             await connector.list_activities(_START, _END)

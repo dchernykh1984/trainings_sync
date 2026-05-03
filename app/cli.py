@@ -220,7 +220,9 @@ async def _run(args: argparse.Namespace) -> None:
         cache = ActivityCache(config.cache_dir)
         cache.load()
 
-        executor = SyncExecutor(sources=sources, destinations=destinations, cache=cache)
+        executor = SyncExecutor(
+            sources=sources, destinations=destinations, cache=cache, tracker=tracker
+        )
         await executor.run(start, end, force=args.force)
 
 

@@ -45,11 +45,19 @@ class GarminConnector(ServiceConnector):
 
     async def list_activities(self, start: date, end: date) -> list[ActivityMeta]:
         client = self._require_client()
-        raw: list[dict] = await asyncio.to_thread(
-            client.get_activities_by_date,
-            start.isoformat(),
-            end.isoformat(),
-        )
+        task_name = self._task_name("Garmin: fetch activity list")
+        await self._tracker.add_task(task_name, total=1)
+        try:
+            raw: list[dict] = await asyncio.to_thread(
+                client.get_activities_by_date,
+                start.isoformat(),
+                end.isoformat(),
+            )
+        except Exception as exc:
+            await self._tracker.fail(task_name, error=str(exc))
+            raise
+        await self._tracker.advance(task_name)
+        await self._tracker.finish(task_name)
         return [
             ActivityMeta(
                 external_id=str(a["activityId"]),

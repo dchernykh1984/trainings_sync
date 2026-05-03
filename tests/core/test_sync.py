@@ -11,6 +11,16 @@ from app.core.cache import ActivityCache, CacheEntry
 from app.core.planner import SourceSpec
 from app.core.sync import SyncExecutor
 
+
+def _make_tracker() -> MagicMock:
+    tracker = MagicMock()
+    tracker.add_task = AsyncMock()
+    tracker.advance = AsyncMock()
+    tracker.finish = AsyncMock()
+    tracker.fail = AsyncMock()
+    return tracker
+
+
 _UTC = timezone.utc
 _T0 = datetime(2026, 1, 1, 8, 0, tzinfo=_UTC)
 _START = date(2026, 1, 1)
@@ -345,6 +355,98 @@ class TestSyncExecutorUpload:
         await executor.run(_START, _END)
         dest_a.upload_activity.assert_called_once()
         dest_b.upload_activity.assert_called_once()
+
+
+class TestSyncExecutorTracking:
+    async def test_download_task_created_with_activity_count(
+        self, cache: ActivityCache
+    ) -> None:
+        conn = _source_conn(metas=[_meta()], activity=_activity())
+        tracker = _make_tracker()
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), conn)],
+            destinations=[],
+            cache=cache,
+            tracker=tracker,
+        )
+        await executor.run(_START, _END)
+        tracker.add_task.assert_called_once_with("Download garmin activities", total=1)
+        tracker.advance.assert_called_once()
+        tracker.finish.assert_called_once_with("Download garmin activities")
+
+    async def test_no_download_task_when_nothing_to_download(
+        self, cache: ActivityCache
+    ) -> None:
+        conn = _source_conn(metas=[])
+        tracker = _make_tracker()
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), conn)],
+            destinations=[],
+            cache=cache,
+            tracker=tracker,
+        )
+        await executor.run(_START, _END)
+        tracker.add_task.assert_not_called()
+
+    async def test_advance_called_once_per_downloaded_activity(
+        self, cache: ActivityCache
+    ) -> None:
+        metas = [_meta("a1"), _meta("a2")]
+        activities = [_activity("a1"), _activity("a2")]
+        conn = MagicMock()
+        conn.list_activities = AsyncMock(return_value=metas)
+        conn.download_activity = AsyncMock(side_effect=activities)
+        tracker = _make_tracker()
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), conn)],
+            destinations=[],
+            cache=cache,
+            tracker=tracker,
+        )
+        await executor.run(_START, _END)
+        assert tracker.advance.call_count == 2
+
+    async def test_separate_task_per_source(self, cache: ActivityCache) -> None:
+        t_strava = datetime(
+            2026, 1, 1, 10, 0, tzinfo=_UTC
+        )  # 2h after garmin, no overlap
+        garmin_conn = _source_conn(metas=[_meta("g1")], activity=_activity("g1"))
+        strava_conn = _source_conn(
+            metas=[_meta("s1", start_time=t_strava)],
+            activity=_activity("s1", start_time=t_strava),
+        )
+        tracker = _make_tracker()
+        executor = SyncExecutor(
+            sources=[
+                (_spec("garmin", 1), garmin_conn),
+                (_spec("strava", 2), strava_conn),
+            ],
+            destinations=[],
+            cache=cache,
+            tracker=tracker,
+        )
+        await executor.run(_START, _END)
+        task_names = [call.args[0] for call in tracker.add_task.call_args_list]
+        assert "Download garmin activities" in task_names
+        assert "Download strava activities" in task_names
+
+    async def test_download_task_failed_on_error(self, cache: ActivityCache) -> None:
+        conn = MagicMock()
+        conn.list_activities = AsyncMock(return_value=[_meta()])
+        conn.download_activity = AsyncMock(side_effect=OSError("network error"))
+        tracker = _make_tracker()
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), conn)],
+            destinations=[],
+            cache=cache,
+            tracker=tracker,
+        )
+        with pytest.raises(OSError):
+            await executor.run(_START, _END)
+        tracker.fail.assert_called_once_with(
+            "Download garmin activities", error="network error"
+        )
+        tracker.finish.assert_not_called()
 
 
 class TestSyncExecutorUploadPriority:

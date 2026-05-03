@@ -86,6 +86,9 @@ htmlcov/
 # Logs
 *.log
 
+# Activity cache
+.cache/
+
 # ===== OS =====
 
 # macOS

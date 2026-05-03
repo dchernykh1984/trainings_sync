@@ -1,4 +1,6 @@
-# trainings_sync
+# trainings-sync
+
+CLI tool for syncing training activities between Garmin Connect and a local folder (FIT/GPX/TCX). Strava upload support is also available.
 
 ## Setup
 
@@ -41,6 +43,24 @@ To run all checks manually across all files:
 ```bash
 poetry run pre-commit run --all-files
 ```
+
+## Usage
+
+Example config and credentials files are in [config_templates/](config_templates/).
+
+```bash
+poetry install
+trainings-sync --config config_templates/config.json --creds-json config_templates/creds.json
+```
+
+| Option | Description |
+|---|---|
+| `--config PATH` | Path to the JSON config file. Required. |
+| `--creds-json PATH` | JSON credentials file. Required for Garmin and Strava connectors. |
+| `--creds-keepass PATH` | KeePass database (.kdbx) instead of a JSON file. Master password is read from `KEEPASS_PASSWORD` env var, or prompted from stdin. Not supported with Strava destinations. |
+| `--start DATE` | Start date (YYYY-MM-DD). Overrides the value in config. Defaults to `2000-01-01` if not set anywhere. |
+| `--end DATE` | End date (YYYY-MM-DD). Overrides the value in config. Defaults to today. |
+| `--force` | Re-download activities even if already cached. |
 
 ## Contributing
 

@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.connectors.base import Activity, ActivityMeta
+from app.connectors.base import Activity, ActivityMeta, ActivityUnavailableError
 from app.connectors.strava import StravaConnector
 from app.credentials.base import StravaCredentials
 from app.tracking.tracker import ProgressRenderer, Task, TaskStatus, TaskTracker
@@ -468,7 +468,9 @@ class TestDownloadActivity:
             new_callable=AsyncMock,
             side_effect=_call_sync,
         ):
-            with pytest.raises(ValueError, match="time stream is absent or empty"):
+            with pytest.raises(
+                ActivityUnavailableError, match="time stream is absent or empty"
+            ):
                 await logged_in.download_activity(_make_meta())
 
     async def test_raises_when_time_stream_empty(
@@ -480,7 +482,9 @@ class TestDownloadActivity:
             new_callable=AsyncMock,
             side_effect=_call_sync,
         ):
-            with pytest.raises(ValueError, match="time stream is absent or empty"):
+            with pytest.raises(
+                ActivityUnavailableError, match="time stream is absent or empty"
+            ):
                 await logged_in.download_activity(_make_meta())
 
     async def test_gpx_tolerates_shorter_optional_streams(

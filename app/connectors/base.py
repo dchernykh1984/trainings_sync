@@ -10,6 +10,15 @@ from datetime import date, datetime, timedelta
 from app.tracking.tracker import TaskTracker
 
 
+class ActivityUnavailableError(Exception):
+    """Raised when an activity exists in the list but cannot be downloaded.
+
+    Connectors raise this for activities that are permanently unavailable
+    (e.g. manual Strava entries without sensor streams). The sync engine
+    skips them silently rather than failing the entire run.
+    """
+
+
 @dataclass(frozen=True)
 class ActivityMeta:
     external_id: str

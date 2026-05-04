@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.connectors.base import Activity, ActivityMeta
+from app.connectors.base import Activity, ActivityMeta, ActivityUnavailableError
 from app.core.cache import ActivityCache, CacheEntry
 from app.core.planner import SourceSpec
 from app.core.sync import SyncExecutor
@@ -534,6 +534,33 @@ class TestSyncExecutorTracking:
         )
         finish_names = [c.args[0] for c in tracker.finish.call_args_list]
         assert "Download garmin activities" not in finish_names
+
+    async def test_unavailable_activity_is_skipped_silently(
+        self, cache: ActivityCache
+    ) -> None:
+        metas = [_meta("a1"), _meta("a2")]
+        conn = MagicMock()
+        conn.list_activities = AsyncMock(return_value=metas)
+        conn.download_activity = AsyncMock(
+            side_effect=[ActivityUnavailableError("no streams"), _activity("a2")]
+        )
+        tracker = _make_tracker()
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), conn)],
+            destinations=[],
+            cache=cache,
+            tracker=tracker,
+        )
+        await executor.run(_START, _END)
+        assert cache.has("a2", "garmin")
+        assert not cache.has("a1", "garmin")
+        tracker.fail.assert_not_called()
+        advances = [
+            c
+            for c in tracker.advance.call_args_list
+            if c.args[0] == "Download garmin activities"
+        ]
+        assert len(advances) == 2
 
     async def test_upload_task_created_per_destination(
         self, cache: ActivityCache

@@ -13,7 +13,12 @@ from typing import Any
 from stravalib import Client
 from stravalib.exc import ObjectNotFound
 
-from app.connectors.base import Activity, ActivityMeta, ServiceConnector
+from app.connectors.base import (
+    Activity,
+    ActivityMeta,
+    ActivityUnavailableError,
+    ServiceConnector,
+)
 from app.credentials.base import StravaCredentials
 from app.tracking.tracker import TaskTracker
 
@@ -213,12 +218,12 @@ class StravaConnector(ServiceConnector):
                 types=_STREAM_TYPES,
             )
         except ObjectNotFound as exc:
-            raise ValueError(
+            raise ActivityUnavailableError(
                 f"Strava activity {meta.external_id!r} ({meta.name!r}):"
                 " streams not found — likely a manual activity without sensor data"
             ) from exc
         if not _stream_data(streams, "time"):
-            raise ValueError(
+            raise ActivityUnavailableError(
                 f"Strava activity {meta.external_id!r} ({meta.name!r}):"
                 " time stream is absent or empty"
             )

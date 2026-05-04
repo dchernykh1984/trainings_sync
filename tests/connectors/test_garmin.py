@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.connectors.base import Activity, ActivityMeta
-from app.connectors.garmin import GarminConnector
+from app.connectors.garmin import _PAGE_SIZE, GarminConnector
 from app.credentials.base import Credentials
 from app.tracking.tracker import ProgressRenderer, Task, TaskStatus, TaskTracker
 
@@ -262,7 +262,7 @@ class TestListActivities:
         assert len(tasks) == 1
         assert tasks[0].status == TaskStatus.DONE
 
-    async def test_tracker_advances_once_per_page(
+    async def test_tracker_advances_by_activity_count(
         self, logged_in: GarminConnector, mock_client: MagicMock, tracker: TaskTracker
     ) -> None:
         mock_client.connectapi.side_effect = [_make_full_page(), [_RAW_ACTIVITY] * 5]
@@ -275,7 +275,7 @@ class TestListActivities:
             await logged_in.list_activities(_START, _END)
 
         task = next(t for t in tracker.tasks.values() if "fetch" in t.name)
-        assert task.progress == 2
+        assert task.progress == _PAGE_SIZE + 5
         assert task.status == TaskStatus.DONE
 
     async def test_tracker_task_has_indeterminate_total(

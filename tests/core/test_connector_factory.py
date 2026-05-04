@@ -47,6 +47,9 @@ class _FakeRenderer(ProgressRenderer):
     def on_task_warning(self, task: Task, message: str) -> None:
         pass
 
+    def on_total_updated(self, task: Task) -> None:
+        pass
+
 
 class _FakeProvider(CredentialProvider):
     def __init__(self, creds: list[Credentials]) -> None:

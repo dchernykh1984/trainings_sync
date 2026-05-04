@@ -40,6 +40,14 @@ class TestOnTaskAdded:
 
         mock_progress.add_task.assert_called_once_with("sync", total=10)
 
+    def test_registers_indeterminate_task(
+        self, renderer: ConsoleRenderer, mock_progress: MagicMock
+    ) -> None:
+        task = Task(name="sync", total=None)
+        renderer.on_task_added(task)
+
+        mock_progress.add_task.assert_called_once_with("sync", total=None)
+
     def test_stores_task_id(
         self, renderer: ConsoleRenderer, mock_progress: MagicMock
     ) -> None:
@@ -76,6 +84,18 @@ class TestOnTaskDone:
         mock_progress.update.assert_called_with(5, completed=10)
         mock_progress.stop_task.assert_called_once_with(5)
 
+    def test_stops_without_update_when_total_is_none(
+        self, renderer: ConsoleRenderer, mock_progress: MagicMock
+    ) -> None:
+        mock_progress.add_task.return_value = 5
+        renderer.on_task_added(Task(name="sync", total=None))
+
+        task = Task(name="sync", total=None, status=TaskStatus.DONE, progress=3)
+        renderer.on_task_done(task)
+
+        mock_progress.update.assert_not_called()
+        mock_progress.stop_task.assert_called_once_with(5)
+
 
 class TestOnTaskFailed:
     def test_updates_description_and_stops(
@@ -91,6 +111,19 @@ class TestOnTaskFailed:
             3, description="[bold red]sync FAILED: timeout"
         )
         mock_progress.stop_task.assert_called_once_with(3)
+
+
+class TestOnTotalUpdated:
+    def test_updates_total_in_progress(
+        self, renderer: ConsoleRenderer, mock_progress: MagicMock
+    ) -> None:
+        mock_progress.add_task.return_value = 4
+        renderer.on_task_added(Task(name="sync", total=1))
+
+        task = Task(name="sync", total=5)
+        renderer.on_total_updated(task)
+
+        mock_progress.update.assert_called_with(4, total=5)
 
 
 class TestOnTaskWarning:

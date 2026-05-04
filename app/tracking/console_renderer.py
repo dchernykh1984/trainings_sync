@@ -35,6 +35,9 @@ class ConsoleRenderer(ProgressRenderer):
         task_id = self._task_ids[task.name]
         if task.total is not None:
             self._progress.update(task_id, completed=task.total)
+        else:
+            final = max(1, task.progress)
+            self._progress.update(task_id, total=final, completed=final)
         self._progress.stop_task(task_id)
 
     def on_task_failed(self, task: Task) -> None:

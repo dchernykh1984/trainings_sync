@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import xml.etree.ElementTree as ET
 from datetime import date, datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -78,6 +79,31 @@ def _make_meta(external_id: str = "99999") -> ActivityMeta:
         sport_type="Run",
         start_time=_DT,
     )
+
+
+def _make_stream(data: list) -> MagicMock:
+    m = MagicMock()
+    m.data = data
+    return m
+
+
+def _make_gps_streams() -> dict:
+    return {
+        "time": _make_stream([0, 60]),
+        "latlng": _make_stream([[51.5, -0.1], [51.51, -0.11]]),
+        "altitude": _make_stream([100.0, 101.0]),
+        "heartrate": _make_stream([150, 155]),
+        "cadence": _make_stream([80, 82]),
+    }
+
+
+def _make_indoor_streams() -> dict:
+    return {
+        "time": _make_stream([0, 60]),
+        "heartrate": _make_stream([150, 155]),
+        "cadence": _make_stream([80, 82]),
+        "watts": _make_stream([200, 210]),
+    }
 
 
 def _make_activity(external_id: str = "99999") -> Activity:
@@ -295,8 +321,211 @@ class TestListActivities:
 
 
 class TestDownloadActivity:
-    async def test_raises_not_implemented(self, connector: StravaConnector) -> None:
-        with pytest.raises(NotImplementedError):
+    async def test_returns_gpx_for_outdoor_activity(
+        self, logged_in: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.get_activity_streams.return_value = _make_gps_streams()
+        with patch(
+            "app.connectors.strava.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            result = await logged_in.download_activity(_make_meta())
+
+        assert result.format == "gpx"
+        assert result.external_id == "99999"
+        assert result.name == "Morning Run"
+
+    async def test_gpx_contains_correct_trackpoints(
+        self, logged_in: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.get_activity_streams.return_value = _make_gps_streams()
+        with patch(
+            "app.connectors.strava.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            result = await logged_in.download_activity(_make_meta())
+
+        root = ET.fromstring(result.content)  # noqa: S314
+        ns = {"g": "http://www.topografix.com/GPX/1/1"}
+        trkpts = root.findall(".//g:trkpt", ns)
+        assert len(trkpts) == 2
+        assert trkpts[0].attrib["lat"] == "51.5"
+        assert trkpts[0].attrib["lon"] == "-0.1"
+        time_el = trkpts[0].find("g:time", ns)
+        assert time_el is not None
+        assert time_el.text == "2026-01-01T08:00:00Z"
+        # second point: start_time + 60s
+        time_el2 = trkpts[1].find("g:time", ns)
+        assert time_el2 is not None
+        assert time_el2.text == "2026-01-01T08:01:00Z"
+
+    async def test_gpx_includes_heartrate_and_cadence_extensions(
+        self, logged_in: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.get_activity_streams.return_value = _make_gps_streams()
+        with patch(
+            "app.connectors.strava.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            result = await logged_in.download_activity(_make_meta())
+
+        root = ET.fromstring(result.content)  # noqa: S314
+        ns = {
+            "g": "http://www.topografix.com/GPX/1/1",
+            "tpx": "http://www.garmin.com/xmlschemas/TrackPointExtension/v1",
+        }
+        hr_els = root.findall(".//tpx:hr", ns)
+        assert len(hr_els) == 2
+        assert hr_els[0].text == "150"
+        cad_els = root.findall(".//tpx:cad", ns)
+        assert len(cad_els) == 2
+        assert cad_els[0].text == "80"
+
+    async def test_gpx_includes_elevation(
+        self, logged_in: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.get_activity_streams.return_value = _make_gps_streams()
+        with patch(
+            "app.connectors.strava.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            result = await logged_in.download_activity(_make_meta())
+
+        root = ET.fromstring(result.content)  # noqa: S314
+        ns = {"g": "http://www.topografix.com/GPX/1/1"}
+        ele_els = root.findall(".//g:ele", ns)
+        assert len(ele_els) == 2
+        assert ele_els[0].text == "100.0"
+
+    async def test_returns_tcx_for_indoor_activity(
+        self, logged_in: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.get_activity_streams.return_value = _make_indoor_streams()
+        with patch(
+            "app.connectors.strava.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            result = await logged_in.download_activity(_make_meta())
+
+        assert result.format == "tcx"
+        assert result.external_id == "99999"
+
+    async def test_tcx_contains_trackpoints_with_hr_cadence_and_watts(
+        self, logged_in: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.get_activity_streams.return_value = _make_indoor_streams()
+        with patch(
+            "app.connectors.strava.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            result = await logged_in.download_activity(_make_meta())
+
+        root = ET.fromstring(result.content)  # noqa: S314
+        ns = {
+            "tcd": "http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2",
+            "ae": "http://www.garmin.com/xmlschemas/ActivityExtension/v2",
+        }
+        trackpoints = root.findall(".//tcd:Trackpoint", ns)
+        assert len(trackpoints) == 2
+        hr_els = root.findall(".//tcd:HeartRateBpm/tcd:Value", ns)
+        assert hr_els[0].text == "150"
+        watts_els = root.findall(".//ae:Watts", ns)
+        assert len(watts_els) == 2
+        assert watts_els[0].text == "200"
+
+    async def test_streams_api_called_with_int_activity_id(
+        self, logged_in: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.get_activity_streams.return_value = _make_gps_streams()
+        with patch(
+            "app.connectors.strava.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            await logged_in.download_activity(_make_meta(external_id="99999"))
+
+        mock_client.get_activity_streams.assert_called_once_with(
+            99999, types=["time", "latlng", "altitude", "heartrate", "cadence", "watts"]
+        )
+
+    async def test_raises_when_time_stream_absent(
+        self, logged_in: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.get_activity_streams.return_value = {}
+        with patch(
+            "app.connectors.strava.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            with pytest.raises(ValueError, match="time stream is absent or empty"):
+                await logged_in.download_activity(_make_meta())
+
+    async def test_raises_when_time_stream_empty(
+        self, logged_in: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.get_activity_streams.return_value = {"time": _make_stream([])}
+        with patch(
+            "app.connectors.strava.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            with pytest.raises(ValueError, match="time stream is absent or empty"):
+                await logged_in.download_activity(_make_meta())
+
+    async def test_gpx_tolerates_shorter_optional_streams(
+        self, logged_in: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        streams = {
+            "time": _make_stream([0, 60]),
+            "latlng": _make_stream([[51.5, -0.1], [51.51, -0.11]]),
+            "heartrate": _make_stream([150]),  # only 1 sample instead of 2
+        }
+        mock_client.get_activity_streams.return_value = streams
+        with patch(
+            "app.connectors.strava.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            result = await logged_in.download_activity(_make_meta())
+
+        root = ET.fromstring(result.content)  # noqa: S314
+        ns = {
+            "g": "http://www.topografix.com/GPX/1/1",
+            "tpx": "http://www.garmin.com/xmlschemas/TrackPointExtension/v1",
+        }
+        trkpts = root.findall(".//g:trkpt", ns)
+        assert len(trkpts) == 2
+        hr_els = root.findall(".//tpx:hr", ns)
+        assert len(hr_els) == 1  # second trackpoint has no HR
+
+    async def test_tcx_tolerates_shorter_optional_streams(
+        self, logged_in: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        streams = {
+            "time": _make_stream([0, 60]),
+            "watts": _make_stream([200]),  # only 1 sample instead of 2
+        }
+        mock_client.get_activity_streams.return_value = streams
+        with patch(
+            "app.connectors.strava.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            result = await logged_in.download_activity(_make_meta())
+
+        root = ET.fromstring(result.content)  # noqa: S314
+        ns = {"ae": "http://www.garmin.com/xmlschemas/ActivityExtension/v2"}
+        watts_els = root.findall(".//ae:Watts", ns)
+        assert len(watts_els) == 1  # second trackpoint has no watts
+
+    async def test_raises_when_not_logged_in(self, connector: StravaConnector) -> None:
+        with pytest.raises(RuntimeError, match="login"):
             await connector.download_activity(_make_meta())
 
 

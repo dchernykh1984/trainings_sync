@@ -1,0 +1,14 @@
+[
+  {
+    "service": "Garmin Connect",
+    "url": "https://connect.garmin.com",
+    "login": "YOUR_GARMIN_EMAIL",
+    "password": "YOUR_GARMIN_PASSWORD"
+  },
+  {
+    "service": "Strava",
+    "url": "https://www.strava.com/api/v3",
+    "login": "YOUR_STRAVA_CLIENT_SECRET",
+    "password": "YOUR_STRAVA_REFRESH_TOKEN"
+  }
+]

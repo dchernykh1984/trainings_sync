@@ -1,20 +1,21 @@
 {
   "cache_dir": ".cache",
-  "start": "2026-04-25",
+  "start": "2000-01-01",
   "sources": [
     {
       "id": "garmin",
       "type": "garmin",
       "priority": 1,
       "credential_service": "Garmin Connect",
-      "credential_url": "https://connect.garmin.com"
+      "credential_url": "https://www.garmin.com/en-US/account/profile/",
+      "credential_login": "YOUR_GARMIN_EMAIL"
     }
   ],
   "destinations": [
     {
       "id": "local",
       "type": "local_folder",
-      "folder": "/Users/denischernykh/trainings_data"
+      "folder": "/path/to/trainings_data"
     }
   ]
 }

@@ -83,6 +83,9 @@ htmlcov/
 .env
 .env.*
 
+# Local config files
+config/
+
 # Logs
 *.log
 

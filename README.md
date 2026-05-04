@@ -48,19 +48,45 @@ poetry run pre-commit run --all-files
 
 Example config and credentials files are in [config_templates/](config_templates/).
 
+First copy the templates to the ignored `config/` directory:
+
 ```bash
-poetry install
-trainings-sync --config config_templates/config.json --creds-json config_templates/creds.json
+mkdir -p config
+cp config_templates/*.json config/
 ```
 
-| Option | Description |
-|---|---|
-| `--config PATH` | Path to the JSON config file. Required. |
-| `--creds-json PATH` | JSON credentials file. Required for Garmin and Strava connectors. |
+Then edit files in `config/` and replace placeholder values such as Garmin
+email, local folders, JSON credentials, and KeePass database path. Run the CLI
+with the local `config/` files, not the templates.
+
+Run with KeePass credentials:
+
+> Before running: in `config/config.keepass.json` set `credential_login` to your Garmin email and `folder` to your local trainings directory. Replace the `--creds-keepass` path with the path to your KeePass database.
+
+```bash
+poetry install
+poetry run trainings-sync \
+  --config config/config.keepass.json \
+  --creds-keepass /path/to/keepass.kdbx
+```
+
+Run with a local JSON credentials file:
+
+```bash
+poetry install
+poetry run trainings-sync \
+  --config config/config.local-json.json \
+  --creds-json config/creds.json
+```
+
+| Option                 | Description                                                                                                                                                               |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--config PATH`        | Path to the JSON config file. Required.                                                                                                                                   |
+| `--creds-json PATH`    | JSON credentials file. Required for Garmin and Strava connectors.                                                                                                         |
 | `--creds-keepass PATH` | KeePass database (.kdbx) instead of a JSON file. Master password is read from `KEEPASS_PASSWORD` env var, or prompted from stdin. Not supported with Strava destinations. |
-| `--start DATE` | Start date (YYYY-MM-DD). Overrides the value in config. Defaults to `2000-01-01` if not set anywhere. |
-| `--end DATE` | End date (YYYY-MM-DD). Overrides the value in config. Defaults to today. |
-| `--force` | Re-download activities even if already cached. |
+| `--start DATE`         | Start date (YYYY-MM-DD). Overrides the value in config. Defaults to `2000-01-01` if not set anywhere.                                                                     |
+| `--end DATE`           | End date (YYYY-MM-DD). Overrides the value in config. Defaults to today.                                                                                                  |
+| `--force`              | Re-download activities even if already cached.                                                                                                                            |
 
 ## Contributing
 

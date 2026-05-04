@@ -3,7 +3,12 @@ from __future__ import annotations
 import sys
 from datetime import date, timedelta
 
-from app.connectors.base import Activity, ActivityMeta, ServiceConnector
+from app.connectors.base import (
+    Activity,
+    ActivityMeta,
+    ActivityUnavailableError,
+    ServiceConnector,
+)
 from app.core.cache import ActivityCache, CacheEntry
 from app.core.planner import DownloadItem, SourceSpec, SyncPlanner
 from app.tracking.tracker import TaskTracker
@@ -118,7 +123,7 @@ class SyncExecutor:
             for item in items:
                 try:
                     activity = await connector.download_activity(item.meta)
-                except ValueError:
+                except ActivityUnavailableError:
                     if tracking is not None:
                         await tracking[0].advance(tracking[1])
                     continue

@@ -58,6 +58,22 @@ def _activity(
     )
 
 
+def _gpx_activity(
+    external_id: str = "strava-act-1",
+    start_time: datetime = _T0,
+    elapsed_s: int | None = 3600,
+) -> Activity:
+    return Activity(
+        external_id=external_id,
+        name="Morning Run",
+        sport_type="Run",
+        start_time=start_time,
+        elapsed_s=elapsed_s,
+        content=b"<gpx/>",
+        format="gpx",
+    )
+
+
 def _entry(
     external_id: str = "act-1",
     source_id: str = "garmin",
@@ -700,3 +716,100 @@ class TestSyncExecutorUploadPriority:
         assert dest.upload_activity.call_count == 1
         uploaded: Activity = dest.upload_activity.call_args[0][0]
         assert uploaded.external_id == "a-act"
+
+
+class TestSyncExecutorStravaSource:
+    async def test_strava_activity_downloaded_when_garmin_empty(
+        self, cache: ActivityCache
+    ) -> None:
+        strava_act = _gpx_activity("strava-1")
+        garmin_conn = _source_conn(metas=[])
+        strava_conn = _source_conn(metas=[_meta("strava-1")], activity=strava_act)
+        dest = _dest_conn()
+        executor = SyncExecutor(
+            sources=[
+                (_spec("garmin", priority=1), garmin_conn),
+                (_spec("strava", priority=2), strava_conn),
+            ],
+            destinations=[("local", dest)],
+            cache=cache,
+        )
+        await executor.run(_START, _END)
+
+        strava_conn.download_activity.assert_called_once()
+        garmin_conn.download_activity.assert_not_called()
+        dest.upload_activity.assert_called_once()
+        uploaded: Activity = dest.upload_activity.call_args[0][0]
+        assert uploaded.format == "gpx"
+        assert uploaded.external_id == "strava-1"
+
+    async def test_strava_skipped_when_garmin_has_overlapping_activity(
+        self, cache: ActivityCache
+    ) -> None:
+        # Garmin (priority=1) and Strava (priority=2) both have activity at 8:00-9:00.
+        # Planner processes Garmin first; Strava overlaps -> Strava is skipped.
+        garmin_conn = _source_conn(
+            metas=[_meta("garmin-1")], activity=_activity("garmin-1")
+        )
+        strava_conn = _source_conn(metas=[_meta("strava-1")])
+        dest = _dest_conn()
+        executor = SyncExecutor(
+            sources=[
+                (_spec("garmin", priority=1), garmin_conn),
+                (_spec("strava", priority=2), strava_conn),
+            ],
+            destinations=[("local", dest)],
+            cache=cache,
+        )
+        await executor.run(_START, _END)
+
+        garmin_conn.download_activity.assert_called_once()
+        strava_conn.download_activity.assert_not_called()
+        assert dest.upload_activity.call_count == 1
+        uploaded: Activity = dest.upload_activity.call_args[0][0]
+        assert uploaded.external_id == "garmin-1"
+
+    async def test_strava_downloaded_when_garmin_activity_nonoverlapping(
+        self, cache: ActivityCache
+    ) -> None:
+        # Garmin at 8:00-9:00, Strava at 10:00-11:00 -> no overlap -> both downloaded.
+        t_strava = datetime(2026, 1, 1, 10, 0, tzinfo=_UTC)
+        garmin_conn = _source_conn(
+            metas=[_meta("garmin-1")], activity=_activity("garmin-1")
+        )
+        strava_conn = _source_conn(
+            metas=[_meta("strava-1", start_time=t_strava)],
+            activity=_gpx_activity("strava-1", start_time=t_strava),
+        )
+        dest = _dest_conn()
+        executor = SyncExecutor(
+            sources=[
+                (_spec("garmin", priority=1), garmin_conn),
+                (_spec("strava", priority=2), strava_conn),
+            ],
+            destinations=[("local", dest)],
+            cache=cache,
+        )
+        await executor.run(_START, _END)
+
+        garmin_conn.download_activity.assert_called_once()
+        strava_conn.download_activity.assert_called_once()
+        assert dest.upload_activity.call_count == 2
+
+    async def test_strava_activity_cached_after_download(
+        self, cache: ActivityCache
+    ) -> None:
+        strava_act = _gpx_activity("strava-1")
+        strava_conn = _source_conn(metas=[_meta("strava-1")], activity=strava_act)
+        executor = SyncExecutor(
+            sources=[(_spec("strava", priority=1), strava_conn)],
+            destinations=[],
+            cache=cache,
+        )
+        await executor.run(_START, _END)
+
+        assert cache.has("strava-1", "strava")
+        entry = cache.get_entry("strava-1", "strava")
+        assert entry is not None
+        assert cache.read_content(entry) == b"<gpx/>"
+        assert entry.format == "gpx"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import timedelta
 
@@ -68,6 +69,24 @@ class SyncPlanner:
     def fallback_s(self) -> int:
         return self._fallback_s
 
+    def plan_items(
+        self,
+        sources: list[tuple[SourceSpec, list[ActivityMeta]]],
+        cache: ActivityCache,
+        *,
+        force: bool = False,
+    ) -> Iterator[DownloadItem | None]:
+        sorted_sources = sorted(sources, key=lambda x: x[0].priority)
+        already_planned: list[DownloadItem] = []
+        for spec, metas in sorted_sources:
+            for meta in metas:
+                if self._should_download(meta, spec, cache, force, already_planned):
+                    item = DownloadItem(source_id=spec.source_id, meta=meta)
+                    already_planned.append(item)
+                    yield item
+                else:
+                    yield None
+
     def plan(
         self,
         sources: list[tuple[SourceSpec, list[ActivityMeta]]],
@@ -75,17 +94,13 @@ class SyncPlanner:
         *,
         force: bool = False,
     ) -> SyncPlan:
-        to_download: list[DownloadItem] = []
-        sorted_sources = sorted(sources, key=lambda x: x[0].priority)
-
-        for spec, metas in sorted_sources:
-            for meta in metas:
-                if self._should_download(meta, spec, cache, force, to_download):
-                    to_download.append(
-                        DownloadItem(source_id=spec.source_id, meta=meta)
-                    )
-
-        return SyncPlan(to_download=tuple(to_download))
+        return SyncPlan(
+            to_download=tuple(
+                item
+                for item in self.plan_items(sources, cache, force=force)
+                if item is not None
+            )
+        )
 
     def _should_download(
         self,

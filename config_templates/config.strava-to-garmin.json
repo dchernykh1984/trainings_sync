@@ -1,0 +1,23 @@
+{
+  "cache_dir": ".cache",
+  "start": "2000-01-01",
+  "sources": [
+    {
+      "id": "strava",
+      "type": "strava",
+      "priority": 1,
+      "client_id": 0,
+      "credential_service": "Strava",
+      "credential_url": "https://www.strava.com/api/v3"
+    }
+  ],
+  "destinations": [
+    {
+      "id": "garmin",
+      "type": "garmin",
+      "credential_service": "Garmin Connect",
+      "credential_url": "https://connect.garmin.com",
+      "credential_login": "YOUR_GARMIN_EMAIL"
+    }
+  ]
+}

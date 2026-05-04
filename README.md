@@ -81,12 +81,50 @@ poetry run trainings-sync \
 
 Run with Strava as a fallback source (activities missing from Garmin are pulled from Strava):
 
-> Before running: in `config/config.strava-source.json` set `client_id` to your Strava application client ID. In `config/creds.strava-source.json` fill in Garmin and Strava credentials (`login` = client secret, `password` = refresh token for Strava).
+#### Getting Strava credentials
+
+1. Register your app at [strava.com/settings/api](https://www.strava.com/settings/api) (free, no approval needed). Note your **Client ID** and **Client Secret**.
+
+2. Open the following URL in a browser (replace `YOUR_CLIENT_ID`):
+   ```
+   https://www.strava.com/oauth/authorize?client_id=YOUR_CLIENT_ID&redirect_uri=http://localhost&response_type=code&scope=activity:read_all
+   ```
+   Click **Authorize**. The browser redirects to `http://localhost/?...&code=XXXX` — copy the `code` value from the URL.
+
+3. Exchange the code for a refresh token (replace placeholders):
+   ```bash
+   curl -X POST https://www.strava.com/oauth/token \
+     -d client_id=YOUR_CLIENT_ID \
+     -d client_secret=YOUR_CLIENT_SECRET \
+     -d code=YOUR_CODE \
+     -d grant_type=authorization_code
+   ```
+   Copy `refresh_token` from the response.
+
+4. In `config/config.strava-source.json` set `client_id` to your Client ID.
+   In `config/creds.strava-source.json` fill in:
+   - Garmin `password` — your Garmin password
+   - Strava `login` — your Client Secret
+   - Strava `password` — the refresh token from step 3
 
 ```bash
 poetry install
 poetry run trainings-sync \
   --config config/config.strava-source.json \
+  --creds-json config/creds.strava-source.json
+```
+
+Run with Strava as source and Garmin as destination (activities from Strava are uploaded to Garmin Connect):
+
+> Uses the same credentials file as the Strava fallback source scenario. See [Getting Strava credentials](#getting-strava-credentials) above.
+
+1. In `config/config.strava-to-garmin.json` set `client_id` to your Strava Client ID and `credential_login` to your Garmin email.
+   In `config/creds.strava-source.json` fill in Garmin and Strava credentials as described above.
+
+```bash
+poetry install
+poetry run trainings-sync \
+  --config config/config.strava-to-garmin.json \
   --creds-json config/creds.strava-source.json
 ```
 

@@ -388,7 +388,12 @@ class TestSyncExecutorTracking:
         add_calls = {c.args[0]: c for c in tracker.add_task.call_args_list}
         assert "Download garmin activities" in add_calls
         assert add_calls["Download garmin activities"].kwargs["total"] == 1
-        tracker.advance.assert_called_once()
+        download_advances = [
+            c
+            for c in tracker.advance.call_args_list
+            if c.args[0] == "Download garmin activities"
+        ]
+        assert len(download_advances) == 1
         finish_names = [c.args[0] for c in tracker.finish.call_args_list]
         assert "Download garmin activities" in finish_names
 
@@ -423,7 +428,12 @@ class TestSyncExecutorTracking:
             tracker=tracker,
         )
         await executor.run(_START, _END)
-        assert tracker.advance.call_count == 2
+        download_advances = [
+            c
+            for c in tracker.advance.call_args_list
+            if c.args[0] == "Download garmin activities"
+        ]
+        assert len(download_advances) == 2
 
     async def test_separate_task_per_source(self, cache: ActivityCache) -> None:
         t_strava = datetime(
@@ -544,7 +554,7 @@ class TestSyncExecutorTracking:
         await executor.run(_START, _END)
         add_calls = {c.args[0]: c for c in tracker.add_task.call_args_list}
         assert "Sync: plan" in add_calls
-        assert add_calls["Sync: plan"].kwargs["total"] is None
+        assert add_calls["Sync: plan"].kwargs["total"] == 1
         finish_names = [c.args[0] for c in tracker.finish.call_args_list]
         assert "Sync: plan" in finish_names
 
@@ -566,6 +576,7 @@ class TestSyncExecutorTracking:
     async def test_collect_uploads_task_created_with_tracker(
         self, cache: ActivityCache
     ) -> None:
+        cache.put(_entry(source_id="garmin"), b"content")
         tracker = _make_tracker()
         executor = SyncExecutor(
             sources=[(_spec("garmin"), _source_conn())],
@@ -576,13 +587,14 @@ class TestSyncExecutorTracking:
         await executor.run(_START, _END)
         add_calls = {c.args[0]: c for c in tracker.add_task.call_args_list}
         assert "Sync: collect uploads" in add_calls
-        assert add_calls["Sync: collect uploads"].kwargs["total"] is None
+        assert add_calls["Sync: collect uploads"].kwargs["total"] == 1
         finish_names = [c.args[0] for c in tracker.finish.call_args_list]
         assert "Sync: collect uploads" in finish_names
 
     async def test_collect_uploads_task_failed_on_error(
         self, cache: ActivityCache
     ) -> None:
+        cache.put(_entry(source_id="garmin"), b"content")
         tracker = _make_tracker()
         executor = SyncExecutor(
             sources=[(_spec("garmin"), _source_conn())],
@@ -607,18 +619,20 @@ class TestSyncExecutorTracking:
     ) -> None:
         conn = _source_conn(metas=[_meta()])
         tracker = _make_tracker()
-        broken_planner = MagicMock()
-        broken_planner.plan = MagicMock(side_effect=RuntimeError("plan boom"))
-        broken_planner.min_overlap_s = 60
-        broken_planner.fallback_s = 3600
         executor = SyncExecutor(
             sources=[(_spec("garmin"), conn)],
             destinations=[],
             cache=cache,
-            planner=broken_planner,
             tracker=tracker,
         )
-        with pytest.raises(RuntimeError, match="plan boom"):
+        with (
+            pytest.raises(RuntimeError, match="plan boom"),
+            patch.object(
+                executor._planner,
+                "plan_items",
+                side_effect=RuntimeError("plan boom"),
+            ),
+        ):
             await executor.run(_START, _END)
         fail_calls = {c.args[0]: c for c in tracker.fail.call_args_list}
         assert "Sync: plan" in fail_calls

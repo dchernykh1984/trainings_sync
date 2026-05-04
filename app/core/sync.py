@@ -63,7 +63,6 @@ class SyncExecutor:
         sources: list[tuple[SourceSpec, ServiceConnector]],
         destinations: list[tuple[str, ServiceConnector]],
         cache: ActivityCache,
-        planner: SyncPlanner | None = None,
         tracker: TaskTracker | None = None,
     ) -> None:
         source_ids = [spec.source_id for spec, _ in sources]
@@ -76,7 +75,7 @@ class SyncExecutor:
         self._sources = sources
         self._destinations = destinations
         self._cache = cache
-        self._planner = planner if planner is not None else SyncPlanner()
+        self._planner = SyncPlanner()
         self._tracker = tracker
 
     async def run(
@@ -118,29 +117,45 @@ class SyncExecutor:
         if tracking is not None:
             await tracking[0].finish(tracking[1])
 
-    async def _download(self, start: date, end: date, *, force: bool) -> None:
-        source_metas: list[tuple[SourceSpec, list[ActivityMeta]]] = []
-        for spec, connector in self._sources:
-            metas = await connector.list_activities(start, end)
-            source_metas.append((spec, metas))
-
+    async def _plan(
+        self,
+        source_metas: list[tuple[SourceSpec, list[ActivityMeta]]],
+        *,
+        force: bool,
+    ) -> list[DownloadItem]:
         tracker = self._tracker
         total_metas = sum(len(metas) for _, metas in source_metas)
         plan_task: str | None = None
         if tracker is not None and total_metas > 0:
             plan_task = "Sync: plan"
-            await tracker.add_task(plan_task, total=None)
+            await tracker.add_task(plan_task, total=total_metas)
+        to_download: list[DownloadItem] = []
         try:
-            plan = self._planner.plan(source_metas, self._cache, force=force)
+            for maybe_item in self._planner.plan_items(
+                source_metas, self._cache, force=force
+            ):
+                if maybe_item is not None:
+                    to_download.append(maybe_item)
+                if plan_task is not None and tracker is not None:
+                    await tracker.advance(plan_task)
         except Exception as exc:
             if plan_task is not None and tracker is not None:
                 await tracker.fail(plan_task, error=str(exc))
             raise
         if plan_task is not None and tracker is not None:
             await tracker.finish(plan_task)
+        return to_download
+
+    async def _download(self, start: date, end: date, *, force: bool) -> None:
+        source_metas: list[tuple[SourceSpec, list[ActivityMeta]]] = []
+        for spec, connector in self._sources:
+            metas = await connector.list_activities(start, end)
+            source_metas.append((spec, metas))
+
+        to_download = await self._plan(source_metas, force=force)
 
         by_source: dict[str, list[DownloadItem]] = {}
-        for item in plan.to_download:
+        for item in to_download:
             by_source.setdefault(item.source_id, []).append(item)
 
         tracker = self._tracker
@@ -158,13 +173,8 @@ class SyncExecutor:
                 source_id, items, source_map[source_id], tracking
             )
 
-    def _collect_uploads(self, start: date, end: date) -> dict[str, list[CacheEntry]]:
-        source_priority = {spec.source_id: spec.priority for spec, _ in self._sources}
-        source_order = {spec.source_id: i for i, (spec, _) in enumerate(self._sources)}
-        min_overlap_s = self._planner.min_overlap_s
-        fallback_s = self._planner.fallback_s
-
-        candidates = [
+    def _get_candidates(self, start: date, end: date) -> list[CacheEntry]:
+        return [
             e
             for e in self._cache.all_entries()
             if not e.needs_refresh
@@ -172,9 +182,18 @@ class SyncExecutor:
             and self._cache.has(e.external_id, e.source_id)
         ]
 
+    async def _collect_uploads(
+        self,
+        candidates: list[CacheEntry],
+        tracking: tuple[TaskTracker, str] | None = None,
+    ) -> dict[str, list[CacheEntry]]:
+        source_priority = {spec.source_id: spec.priority for spec, _ in self._sources}
+        source_order = {spec.source_id: i for i, (spec, _) in enumerate(self._sources)}
+        min_overlap_s = self._planner.min_overlap_s
+        fallback_s = self._planner.fallback_s
         by_dest: dict[str, list[CacheEntry]] = {}
         for entry in candidates:
-            if _shadowed_by_higher_priority(
+            if not _shadowed_by_higher_priority(
                 entry,
                 candidates,
                 source_priority,
@@ -182,15 +201,16 @@ class SyncExecutor:
                 min_overlap_s,
                 fallback_s,
             ):
-                continue
-            for dest_id, connector in self._destinations:
-                if dest_id == entry.source_id:
-                    continue
-                if dest_id in entry.uploaded_to and connector.has_activity(
-                    entry.external_id, entry.source_id
-                ):
-                    continue
-                by_dest.setdefault(dest_id, []).append(entry)
+                for dest_id, connector in self._destinations:
+                    if dest_id == entry.source_id:
+                        continue
+                    if dest_id in entry.uploaded_to and connector.has_activity(
+                        entry.external_id, entry.source_id
+                    ):
+                        continue
+                    by_dest.setdefault(dest_id, []).append(entry)
+            if tracking is not None:
+                await tracking[0].advance(tracking[1])
         return by_dest
 
     async def _upload_to_dest(
@@ -225,12 +245,15 @@ class SyncExecutor:
 
     async def _upload(self, start: date, end: date) -> None:
         tracker = self._tracker
+        candidates = self._get_candidates(start, end)
         collect_task: str | None = None
-        if tracker is not None:
+        collect_tracking: tuple[TaskTracker, str] | None = None
+        if tracker is not None and candidates:
             collect_task = "Sync: collect uploads"
-            await tracker.add_task(collect_task, total=None)
+            await tracker.add_task(collect_task, total=len(candidates))
+            collect_tracking = (tracker, collect_task)
         try:
-            by_dest = self._collect_uploads(start, end)
+            by_dest = await self._collect_uploads(candidates, tracking=collect_tracking)
         except Exception as exc:
             if collect_task is not None and tracker is not None:
                 await tracker.fail(collect_task, error=str(exc))

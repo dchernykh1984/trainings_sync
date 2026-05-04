@@ -38,16 +38,12 @@ async def build_sources(
     config: AppConfig,
     provider: CredentialProvider,
     tracker: TaskTracker,
+    on_strava_token_refresh: OnStravaTokenRefresh | None = None,
 ) -> list[tuple[SourceSpec, ServiceConnector]]:
-    for src in config.sources:
-        if isinstance(src, StravaSourceConfig):
-            raise ValueError(
-                f"source {src.id!r}: Strava cannot be used as a download source — "
-                "the Strava API does not support activity file downloads"
-            )
-
     cred_requests = [
-        src.credential for src in config.sources if isinstance(src, GarminSourceConfig)
+        src.credential
+        for src in config.sources
+        if isinstance(src, (GarminSourceConfig, StravaSourceConfig))
     ]
     creds = iter(await provider.get_many(cred_requests))
 
@@ -56,6 +52,18 @@ async def build_sources(
         connector: ServiceConnector
         if isinstance(src_cfg, GarminSourceConfig):
             connector = GarminConnector(credentials=next(creds), tracker=tracker)
+        elif isinstance(src_cfg, StravaSourceConfig):
+            raw = next(creds)
+            strava_creds = StravaCredentials(
+                client_id=src_cfg.client_id,
+                client_secret=raw.login,
+                refresh_token=raw.password,
+            )
+            connector = StravaConnector(
+                credentials=strava_creds,
+                tracker=tracker,
+                on_token_refresh=_strava_callback(src_cfg.id, on_strava_token_refresh),
+            )
         elif isinstance(src_cfg, LocalFolderSourceConfig):
             connector = LocalFolderConnector(folder=src_cfg.folder, tracker=tracker)
         else:

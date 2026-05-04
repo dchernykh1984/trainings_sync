@@ -1,0 +1,29 @@
+{
+  "cache_dir": ".cache",
+  "start": "2000-01-01",
+  "sources": [
+    {
+      "id": "garmin",
+      "type": "garmin",
+      "priority": 1,
+      "credential_service": "Garmin Connect",
+      "credential_url": "https://connect.garmin.com",
+      "credential_login": "YOUR_GARMIN_EMAIL"
+    },
+    {
+      "id": "strava",
+      "type": "strava",
+      "priority": 2,
+      "client_id": 0,
+      "credential_service": "Strava",
+      "credential_url": "https://www.strava.com/api/v3"
+    }
+  ],
+  "destinations": [
+    {
+      "id": "local",
+      "type": "local_folder",
+      "folder": "/path/to/trainings_data"
+    }
+  ]
+}

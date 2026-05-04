@@ -79,11 +79,22 @@ poetry run trainings-sync \
   --creds-json config/creds.json
 ```
 
+Run with Strava as a fallback source (activities missing from Garmin are pulled from Strava):
+
+> Before running: in `config/config.strava-source.json` set `client_id` to your Strava application client ID. In `config/creds.strava-source.json` fill in Garmin and Strava credentials (`login` = client secret, `password` = refresh token for Strava).
+
+```bash
+poetry install
+poetry run trainings-sync \
+  --config config/config.strava-source.json \
+  --creds-json config/creds.strava-source.json
+```
+
 | Option                 | Description                                                                                                                                                               |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--config PATH`        | Path to the JSON config file. Required.                                                                                                                                   |
 | `--creds-json PATH`    | JSON credentials file. Required for Garmin and Strava connectors.                                                                                                         |
-| `--creds-keepass PATH` | KeePass database (.kdbx) instead of a JSON file. Master password is read from `KEEPASS_PASSWORD` env var, or prompted from stdin. Not supported with Strava destinations. |
+| `--creds-keepass PATH` | KeePass database (.kdbx) instead of a JSON file. Master password is read from `KEEPASS_PASSWORD` env var, or prompted from stdin. Not supported with Strava sources or destinations. |
 | `--start DATE`         | Start date (YYYY-MM-DD). Overrides the value in config. Defaults to `2000-01-01` if not set anywhere.                                                                     |
 | `--end DATE`           | End date (YYYY-MM-DD). Overrides the value in config. Defaults to today.                                                                                                  |
 | `--force`              | Re-download activities even if already cached.                                                                                                                            |

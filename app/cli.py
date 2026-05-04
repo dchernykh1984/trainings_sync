@@ -16,6 +16,7 @@ from app.core.config import (
     GarminDestinationConfig,
     GarminSourceConfig,
     StravaDestinationConfig,
+    StravaSourceConfig,
     load_config,
 )
 from app.core.connector_factory import build_destinations, build_sources
@@ -43,7 +44,9 @@ class _NullProvider(CredentialProvider):
 
 
 def _credentials_needed(config: AppConfig) -> bool:
-    return any(isinstance(s, GarminSourceConfig) for s in config.sources) or any(
+    return any(
+        isinstance(s, (GarminSourceConfig, StravaSourceConfig)) for s in config.sources
+    ) or any(
         isinstance(d, (GarminDestinationConfig, StravaDestinationConfig))
         for d in config.destinations
     )
@@ -141,11 +144,27 @@ def _validate(
             file=sys.stderr,
         )
         sys.exit(1)
-    if args.creds_keepass and any(
-        isinstance(dest, StravaDestinationConfig) for dest in config.destinations
-    ):
+    strava_src_ids = {
+        src.id for src in config.sources if isinstance(src, StravaSourceConfig)
+    }
+    strava_dest_ids = {
+        dest.id
+        for dest in config.destinations
+        if isinstance(dest, StravaDestinationConfig)
+    }
+    conflicts = strava_src_ids & strava_dest_ids
+    if conflicts:
+        names = ", ".join(sorted(conflicts))
         print(
-            "error: --creds-keepass does not support Strava destinations — "
+            f"error: Strava source and destination share the same id(s): {names} — "
+            "ids must be unique across sources and destinations",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    has_strava = bool(strava_src_ids or strava_dest_ids)
+    if args.creds_keepass and has_strava:
+        print(
+            "error: --creds-keepass does not support Strava — "
             "KeePass refresh token persistence is not implemented; use --creds-json",
             file=sys.stderr,
         )
@@ -174,9 +193,16 @@ async def _run(args: argparse.Namespace) -> None:
         )
 
     strava_cred_map = {
-        dest.id: dest.credential
-        for dest in config.destinations
-        if isinstance(dest, StravaDestinationConfig)
+        **{
+            src.id: src.credential
+            for src in config.sources
+            if isinstance(src, StravaSourceConfig)
+        },
+        **{
+            dest.id: dest.credential
+            for dest in config.destinations
+            if isinstance(dest, StravaDestinationConfig)
+        },
     }
 
     with ConsoleRenderer() as renderer:
@@ -199,7 +225,9 @@ async def _run(args: argparse.Namespace) -> None:
                 )
 
         try:
-            sources = await build_sources(config, provider, tracker)
+            sources = await build_sources(
+                config, provider, tracker, on_strava_token_refresh=_on_token_refresh
+            )
             destinations = await build_destinations(
                 config,
                 provider,

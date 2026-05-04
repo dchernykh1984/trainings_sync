@@ -13,6 +13,13 @@ from app.connectors.garmin import GarminConnector
 from app.credentials.base import Credentials
 from app.tracking.tracker import ProgressRenderer, Task, TaskStatus, TaskTracker
 
+try:
+    from garminconnect.exceptions import (
+        GarminConnectConnectionError,  # type: ignore[import-untyped]
+    )
+except ImportError:
+    GarminConnectConnectionError = OSError  # type: ignore[assignment,misc]
+
 _START = date(2026, 1, 1)
 _END = date(2026, 1, 31)
 _DT = datetime(2026, 1, 1, 8, 0, tzinfo=timezone.utc)
@@ -445,3 +452,142 @@ class TestUploadActivity:
     async def test_raises_when_not_logged_in(self, connector: GarminConnector) -> None:
         with pytest.raises(RuntimeError, match="login"):
             await connector.upload_activity(_make_activity())
+
+    async def test_ignores_duplicate_activity_error(
+        self, logged_in: GarminConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.upload_activity.side_effect = GarminConnectConnectionError(
+            "Duplicate Activity"
+        )
+        mock_client.get_activities_by_date.return_value = []
+
+        with patch(
+            "app.connectors.garmin.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            await logged_in.upload_activity(_make_activity())
+
+    async def test_reraises_non_duplicate_connection_error(
+        self, logged_in: GarminConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.upload_activity.side_effect = GarminConnectConnectionError(
+            "Some other error"
+        )
+        mock_client.get_activities_by_date.return_value = []
+
+        with (
+            patch(
+                "app.connectors.garmin.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=_call_sync,
+            ),
+            pytest.raises(GarminConnectConnectionError),
+        ):
+            await logged_in.upload_activity(_make_activity())
+
+    async def test_set_activity_name_called_after_upload(
+        self, logged_in: GarminConnector, mock_client: MagicMock
+    ) -> None:
+        post = {"activityId": 99999, "startTimeGMT": "2026-01-01 08:00:00"}
+        mock_client.get_activities_by_date.side_effect = [[], [post]]
+
+        with (
+            patch("app.connectors.garmin._UPLOAD_SETTLE_S", 0),
+            patch(
+                "app.connectors.garmin.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=_call_sync,
+            ),
+        ):
+            await logged_in.upload_activity(_make_activity())
+
+        mock_client.set_activity_name.assert_called_once_with("99999", "Morning Run")
+
+    async def test_set_activity_type_called_for_known_strava_sport(
+        self, logged_in: GarminConnector, mock_client: MagicMock
+    ) -> None:
+        activity = Activity(
+            external_id="12345",
+            name="Morning Run",
+            sport_type="Run",
+            start_time=_DT,
+            content=b"fit-content",
+            format="fit",
+        )
+        post = {"activityId": 99999, "startTimeGMT": "2026-01-01 08:00:00"}
+        mock_client.get_activities_by_date.side_effect = [[], [post]]
+
+        with (
+            patch("app.connectors.garmin._UPLOAD_SETTLE_S", 0),
+            patch(
+                "app.connectors.garmin.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=_call_sync,
+            ),
+        ):
+            await logged_in.upload_activity(activity)
+
+        mock_client.set_activity_type.assert_called_once_with("99999", 0, "running", 0)
+
+    async def test_set_activity_type_not_called_for_unknown_sport(
+        self, logged_in: GarminConnector, mock_client: MagicMock
+    ) -> None:
+        activity = Activity(
+            external_id="12345",
+            name="Activity",
+            sport_type="UnknownSport",
+            start_time=_DT,
+            content=b"fit-content",
+            format="fit",
+        )
+        post = {"activityId": 99999, "startTimeGMT": "2026-01-01 08:00:00"}
+        mock_client.get_activities_by_date.side_effect = [[], [post]]
+
+        with (
+            patch("app.connectors.garmin._UPLOAD_SETTLE_S", 0),
+            patch(
+                "app.connectors.garmin.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=_call_sync,
+            ),
+        ):
+            await logged_in.upload_activity(activity)
+
+        mock_client.set_activity_type.assert_not_called()
+
+    async def test_metadata_not_set_when_activity_id_not_found(
+        self, logged_in: GarminConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.get_activities_by_date.return_value = []
+
+        with (
+            patch("app.connectors.garmin._UPLOAD_SETTLE_S", 0),
+            patch(
+                "app.connectors.garmin.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=_call_sync,
+            ),
+        ):
+            await logged_in.upload_activity(_make_activity())
+
+        mock_client.set_activity_name.assert_not_called()
+        mock_client.set_activity_type.assert_not_called()
+
+    async def test_pre_existing_activity_not_rematched_as_uploaded(
+        self, logged_in: GarminConnector, mock_client: MagicMock
+    ) -> None:
+        existing = {"activityId": 99999, "startTimeGMT": "2026-01-01 08:00:00"}
+        mock_client.get_activities_by_date.side_effect = [[existing], [existing]]
+
+        with (
+            patch("app.connectors.garmin._UPLOAD_SETTLE_S", 0),
+            patch(
+                "app.connectors.garmin.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=_call_sync,
+            ),
+        ):
+            await logged_in.upload_activity(_make_activity())
+
+        mock_client.set_activity_name.assert_not_called()

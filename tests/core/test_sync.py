@@ -109,9 +109,10 @@ def _source_conn(
     return conn
 
 
-def _dest_conn() -> MagicMock:
+def _dest_conn(existing: list | None = None) -> MagicMock:
     conn = MagicMock()
     conn.upload_activity = AsyncMock()
+    conn.list_activities = AsyncMock(return_value=existing or [])
     return conn
 
 
@@ -387,6 +388,46 @@ class TestSyncExecutorUpload:
         dest_a.upload_activity.assert_called_once()
         dest_b.upload_activity.assert_called_once()
 
+    async def test_skips_upload_when_destination_has_overlapping_activity(
+        self, cache: ActivityCache
+    ) -> None:
+        cache.put(_entry(source_id="garmin"), b"content")
+        dest = _dest_conn(existing=[_meta()])  # same time window -> overlaps
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), _source_conn())],
+            destinations=[("strava", dest)],
+            cache=cache,
+        )
+        await executor.run(_START, _END)
+        dest.upload_activity.assert_not_called()
+
+    async def test_overlap_skip_marks_entry_as_uploaded(
+        self, cache: ActivityCache
+    ) -> None:
+        cache.put(_entry(source_id="garmin"), b"content")
+        dest = _dest_conn(existing=[_meta()])
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), _source_conn())],
+            destinations=[("strava", dest)],
+            cache=cache,
+        )
+        await executor.run(_START, _END)
+        entry = cache.get_entry("act-1", "garmin")
+        assert entry is not None
+        assert "strava" in entry.uploaded_to
+
+    async def test_dest_list_activities_not_called_when_no_candidates(
+        self, cache: ActivityCache
+    ) -> None:
+        dest = _dest_conn()
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), _source_conn())],
+            destinations=[("strava", dest)],
+            cache=cache,
+        )
+        await executor.run(_START, _END)
+        dest.list_activities.assert_not_called()
+
 
 class TestSyncExecutorTracking:
     async def test_download_task_created_with_activity_count(
@@ -545,6 +586,7 @@ class TestSyncExecutorTracking:
         cache.put(_entry(source_id="garmin"), b"content")
         dest = MagicMock()
         dest.upload_activity = AsyncMock(side_effect=OSError("upload failed"))
+        dest.list_activities = AsyncMock(return_value=[])
         tracker = _make_tracker()
         executor = SyncExecutor(
             sources=[(_spec("garmin"), _source_conn())],

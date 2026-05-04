@@ -8,6 +8,9 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 from garminconnect import Garmin  # type: ignore[import-untyped]
+from garminconnect.exceptions import (
+    GarminConnectConnectionError,  # type: ignore[import-untyped]
+)
 
 from app.connectors.base import Activity, ActivityMeta, ServiceConnector
 from app.credentials.base import Credentials
@@ -15,6 +18,62 @@ from app.tracking.tracker import TaskTracker
 
 _PREFERRED_EXTENSIONS = (".fit", ".gpx", ".tcx")
 _PAGE_SIZE = 20
+# Garmin processes uploads asynchronously; wait before querying for the new activity ID.
+_UPLOAD_SETTLE_S: float = 2.0
+
+# Maps Strava sport_type strings to Garmin Connect typeKey values.
+_STRAVA_TO_GARMIN_TYPE: dict[str, str] = {
+    "AlpineSki": "resort_skiing_snowboarding_ws",
+    "BackcountrySki": "backcountry_skiing_snowboarding_ws",
+    "Hike": "hiking",
+    "Ride": "cycling",
+    "Run": "running",
+    "Swim": "open_water_swimming",
+    "TrailRun": "trail_running",
+    "VirtualRide": "indoor_cycling",
+    "Walk": "walking",
+    "WeightTraining": "strength_training",
+    "Workout": "fitness_equipment",
+    "Yoga": "yoga",
+    "Rowing": "rowing",
+    "StandUpPaddling": "stand_up_paddleboarding",
+}
+
+
+async def _ids_on_date(client: Garmin, date_str: str) -> set[int]:
+    raw: list[dict] = await asyncio.to_thread(
+        client.get_activities_by_date, date_str, date_str
+    )
+    return {int(a["activityId"]) for a in raw if "activityId" in a}
+
+
+async def _find_uploaded_id(
+    client: Garmin,
+    activity: Activity,
+    pre_existing_ids: set[int],
+) -> int | None:
+    """Return Garmin activity ID for a just-uploaded activity.
+
+    Garmin processes uploads asynchronously, so we wait briefly then search by
+    start_time among activities on the same date, excluding pre-existing ones.
+    """
+    await asyncio.sleep(_UPLOAD_SETTLE_S)
+    date_str = activity.start_time.strftime("%Y-%m-%d")
+    raw: list[dict] = await asyncio.to_thread(
+        client.get_activities_by_date, date_str, date_str
+    )
+    for a in raw:
+        if int(a.get("activityId", 0)) in pre_existing_ids:
+            continue
+        try:
+            a_start = datetime.fromisoformat(
+                a["startTimeGMT"].replace(" ", "T")
+            ).replace(tzinfo=timezone.utc)
+        except (KeyError, ValueError):
+            continue
+        if abs((a_start - activity.start_time).total_seconds()) < 60:
+            return int(a["activityId"])
+    return None
 
 
 class GarminConnector(ServiceConnector):
@@ -125,6 +184,9 @@ class GarminConnector(ServiceConnector):
 
     async def upload_activity(self, activity: Activity) -> None:
         client = self._require_client()
+        date_str = activity.start_time.strftime("%Y-%m-%d")
+        pre_existing_ids = await _ids_on_date(client, date_str)
+
         with tempfile.NamedTemporaryFile(
             suffix=f".{activity.format}", delete=False
         ) as f:
@@ -132,5 +194,22 @@ class GarminConnector(ServiceConnector):
             tmp_path = f.name
         try:
             await asyncio.to_thread(client.upload_activity, tmp_path)
+        except GarminConnectConnectionError as e:
+            if "Duplicate Activity" not in str(e):
+                raise
+            return
         finally:
             Path(tmp_path).unlink(missing_ok=True)
+
+        activity_id = await _find_uploaded_id(client, activity, pre_existing_ids)
+        if activity_id is None:
+            return
+        if activity.name:
+            await asyncio.to_thread(
+                client.set_activity_name, str(activity_id), activity.name
+            )
+        garmin_type = _STRAVA_TO_GARMIN_TYPE.get(activity.sport_type)
+        if garmin_type:
+            await asyncio.to_thread(
+                client.set_activity_type, str(activity_id), 0, garmin_type, 0
+            )

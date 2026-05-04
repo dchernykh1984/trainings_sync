@@ -31,6 +31,25 @@ def _entries_overlap(
     return (overlap_end - overlap_start).total_seconds() >= min_overlap_s
 
 
+def _entry_overlaps_meta(
+    entry: CacheEntry,
+    meta: ActivityMeta,
+    min_overlap_s: int,
+    fallback_s: int,
+) -> bool:
+    entry_end = entry.start_time + timedelta(
+        seconds=entry.elapsed_s if entry.elapsed_s is not None else fallback_s
+    )
+    meta_end = meta.start_time + timedelta(
+        seconds=meta.elapsed_s if meta.elapsed_s is not None else fallback_s
+    )
+    overlap_start = max(entry.start_time, meta.start_time)
+    overlap_end = min(entry_end, meta_end)
+    if overlap_end <= overlap_start:
+        return False
+    return (overlap_end - overlap_start).total_seconds() >= min_overlap_s
+
+
 def _shadowed_by_higher_priority(
     entry: CacheEntry,
     candidates: list[CacheEntry],
@@ -185,12 +204,21 @@ class SyncExecutor:
     async def _collect_uploads(
         self,
         candidates: list[CacheEntry],
+        start: date,
+        end: date,
         tracking: tuple[TaskTracker, str] | None = None,
     ) -> dict[str, list[CacheEntry]]:
+        if not candidates:
+            return {}
         source_priority = {spec.source_id: spec.priority for spec, _ in self._sources}
         source_order = {spec.source_id: i for i, (spec, _) in enumerate(self._sources)}
         min_overlap_s = self._planner.min_overlap_s
         fallback_s = self._planner.fallback_s
+
+        dest_existing: dict[str, list[ActivityMeta]] = {}
+        for dest_id, connector in self._destinations:
+            dest_existing[dest_id] = await connector.list_activities(start, end)
+
         by_dest: dict[str, list[CacheEntry]] = {}
         for entry in candidates:
             if not _shadowed_by_higher_priority(
@@ -207,6 +235,13 @@ class SyncExecutor:
                     if dest_id in entry.uploaded_to and connector.has_activity(
                         entry.external_id, entry.source_id
                     ):
+                        continue
+                    existing = dest_existing.get(dest_id, [])
+                    if any(
+                        _entry_overlaps_meta(entry, m, min_overlap_s, fallback_s)
+                        for m in existing
+                    ):
+                        self._cache.mark_uploaded(entry, dest_id)
                         continue
                     by_dest.setdefault(dest_id, []).append(entry)
             if tracking is not None:
@@ -253,7 +288,9 @@ class SyncExecutor:
             await tracker.add_task(collect_task, total=len(candidates))
             collect_tracking = (tracker, collect_task)
         try:
-            by_dest = await self._collect_uploads(candidates, tracking=collect_tracking)
+            by_dest = await self._collect_uploads(
+                candidates, start, end, tracking=collect_tracking
+            )
         except Exception as exc:
             if collect_task is not None and tracker is not None:
                 await tracker.fail(collect_task, error=str(exc))

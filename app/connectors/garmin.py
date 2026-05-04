@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import logging
 import tempfile
 import zipfile
 from datetime import date, datetime, timezone
@@ -15,6 +16,8 @@ from garminconnect.exceptions import (
 from app.connectors.base import Activity, ActivityMeta, ServiceConnector
 from app.credentials.base import Credentials
 from app.tracking.tracker import TaskTracker
+
+logging.getLogger("garminconnect").setLevel(logging.ERROR)
 
 _PREFERRED_EXTENSIONS = (".fit", ".gpx", ".tcx")
 _PAGE_SIZE = 20

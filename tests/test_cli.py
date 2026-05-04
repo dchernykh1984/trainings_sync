@@ -96,6 +96,21 @@ class TestValidate:
         assert exc.value.code == 1
         assert "strava-upload" in capsys.readouterr().err
 
+    def test_same_strava_credential_in_source_and_destination_is_rejected(
+        self, capsys: pytest.CaptureFixture
+    ) -> None:
+        src = StravaSourceConfig(
+            id="strava-src", priority=1, client_id=11111, credential=_STRAVA_CRED
+        )
+        dest = StravaDestinationConfig(
+            id="strava-dst", client_id=22222, credential=_STRAVA_CRED
+        )
+        args = _args(creds_json=Path("creds.json"))
+        with pytest.raises(SystemExit) as exc:
+            _validate(args, _cfg(sources=(src,), destinations=(dest,)), _START, _END)
+        assert exc.value.code == 1
+        assert "token rotation" in capsys.readouterr().err
+
     def test_valid_args_pass_without_exception(self) -> None:
         args = _args(creds_json=Path("creds.json"))
         _validate(args, _cfg(destinations=(_STRAVA_DEST,)), _START, _END)

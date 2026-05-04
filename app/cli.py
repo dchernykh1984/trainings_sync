@@ -161,6 +161,21 @@ def _validate(
             file=sys.stderr,
         )
         sys.exit(1)
+    strava_src_creds = {
+        src.credential for src in config.sources if isinstance(src, StravaSourceConfig)
+    }
+    strava_dest_creds = {
+        dest.credential
+        for dest in config.destinations
+        if isinstance(dest, StravaDestinationConfig)
+    }
+    if strava_src_creds & strava_dest_creds:
+        print(
+            "error: the same Strava credential appears in both sources and destinations"
+            " — this would cause a token rotation race on login",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     has_strava = bool(strava_src_ids or strava_dest_ids)
     if args.creds_keepass and has_strava:
         print(

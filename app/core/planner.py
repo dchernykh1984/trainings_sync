@@ -77,10 +77,13 @@ class SyncPlanner:
         force: bool = False,
     ) -> Iterator[DownloadItem | None]:
         sorted_sources = sorted(sources, key=lambda x: x[0].priority)
+        source_priority = {spec.source_id: spec.priority for spec, _ in sorted_sources}
         already_planned: list[DownloadItem] = []
         for spec, metas in sorted_sources:
             for meta in metas:
-                if self._should_download(meta, spec, cache, force, already_planned):
+                if self._should_download(
+                    meta, spec, cache, force, already_planned, source_priority
+                ):
                     item = DownloadItem(source_id=spec.source_id, meta=meta)
                     already_planned.append(item)
                     yield item
@@ -109,6 +112,7 @@ class SyncPlanner:
         cache: ActivityCache,
         force: bool,
         already_planned: list[DownloadItem],
+        source_priority: dict[str, int],
     ) -> bool:
         if not force and cache.has(meta.external_id, spec.source_id):
             return False
@@ -125,7 +129,10 @@ class SyncPlanner:
                 healthy_overlapping = [
                     e
                     for e in overlapping
-                    if not e.needs_refresh and e.source_id != spec.source_id
+                    if not e.needs_refresh
+                    and e.source_id != spec.source_id
+                    and source_priority.get(e.source_id, spec.priority + 1)
+                    <= spec.priority
                 ]
                 if healthy_overlapping:
                     return False

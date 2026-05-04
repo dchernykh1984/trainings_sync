@@ -349,6 +349,11 @@ class TestDownloadActivity:
 
         root = ET.fromstring(result.content)  # noqa: S314
         ns = {"g": "http://www.topografix.com/GPX/1/1"}
+        trk = root.find("g:trk", ns)
+        assert trk is not None
+        type_el = trk.find("g:type", ns)
+        assert type_el is not None
+        assert type_el.text == "Run"
         trkpts = root.findall(".//g:trkpt", ns)
         assert len(trkpts) == 2
         assert trkpts[0].attrib["lat"] == "51.5"

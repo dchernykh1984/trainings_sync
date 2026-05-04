@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import io
+import itertools
+import logging
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from datetime import date, datetime, timedelta, timezone
@@ -12,6 +14,8 @@ from stravalib import Client
 from app.connectors.base import Activity, ActivityMeta, ServiceConnector
 from app.credentials.base import StravaCredentials
 from app.tracking.tracker import TaskTracker
+
+logging.getLogger("stravalib").setLevel(logging.ERROR)
 
 _STREAM_TYPES = ["time", "latlng", "altitude", "heartrate", "cadence", "watts"]
 _GPX_NS = "http://www.topografix.com/GPX/1/1"
@@ -43,6 +47,8 @@ def _build_gpx(meta: ActivityMeta, streams: Any) -> bytes:
 
     trk = ET.SubElement(gpx, f"{{{g}}}trk")
     ET.SubElement(trk, f"{{{g}}}name").text = meta.name
+    if meta.sport_type:
+        ET.SubElement(trk, f"{{{g}}}type").text = meta.sport_type
     trkseg = ET.SubElement(trk, f"{{{g}}}trkseg")
 
     time_data = _stream_data(streams, "time") or []
@@ -163,9 +169,27 @@ class StravaConnector(ServiceConnector):
         client = self._require_client()
         after = datetime(start.year, start.month, start.day)
         before = datetime(end.year, end.month, end.day) + timedelta(days=1)
-        raw: list = await asyncio.to_thread(
-            lambda: list(client.get_activities(after=after, before=before))
-        )
+
+        task_name = self._task_name("Strava: fetch activity list")
+        await self._tracker.add_task(task_name, total=None)
+        raw: list = []
+        seen_ids: set[int] = set()
+        _page_size = 200
+        try:
+            it = iter(client.get_activities(after=after, before=before))
+            while True:
+                batch: list = await asyncio.to_thread(
+                    lambda: list(itertools.islice(it, _page_size))
+                )
+                if not batch or batch[0].id in seen_ids:
+                    break
+                seen_ids.update(a.id for a in batch)
+                raw.extend(batch)
+                await self._tracker.advance(task_name, amount=len(batch))
+        except Exception as exc:
+            await self._tracker.fail(task_name, error=str(exc))
+            raise
+        await self._tracker.finish(task_name)
         return [
             ActivityMeta(
                 external_id=str(a.id),

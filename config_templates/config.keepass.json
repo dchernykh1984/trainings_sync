@@ -7,7 +7,7 @@
       "type": "garmin",
       "priority": 1,
       "credential_service": "Garmin Connect",
-      "credential_url": "https://www.garmin.com/en-US/account/profile/",
+      "credential_url": "https://connect.garmin.com",
       "credential_login": "YOUR_GARMIN_EMAIL"
     }
   ],

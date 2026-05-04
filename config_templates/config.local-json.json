@@ -1,0 +1,20 @@
+{
+  "cache_dir": ".cache",
+  "start": "2000-01-01",
+  "sources": [
+    {
+      "id": "garmin",
+      "type": "garmin",
+      "priority": 1,
+      "credential_service": "Garmin Connect",
+      "credential_url": "https://connect.garmin.com"
+    }
+  ],
+  "destinations": [
+    {
+      "id": "local",
+      "type": "local_folder",
+      "folder": "/path/to/trainings_data"
+    }
+  ]
+}

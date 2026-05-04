@@ -31,6 +31,9 @@ class _FakeRenderer(ProgressRenderer):
     def on_task_warning(self, task: Task, message: str) -> None:
         pass
 
+    def on_total_updated(self, task: Task) -> None:
+        pass
+
 
 _ENTRIES = [
     {

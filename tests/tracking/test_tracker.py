@@ -10,6 +10,7 @@ class _FakeRenderer(ProgressRenderer):
         self.done: list[Task] = []
         self.failed: list[Task] = []
         self.warnings: list[tuple[Task, str]] = []
+        self.total_updated: list[Task] = []
 
     def on_task_added(self, task: Task) -> None:
         self.added.append(task)
@@ -25,6 +26,9 @@ class _FakeRenderer(ProgressRenderer):
 
     def on_task_warning(self, task: Task, message: str) -> None:
         self.warnings.append((task, message))
+
+    def on_total_updated(self, task: Task) -> None:
+        self.total_updated.append(task)
 
 
 @pytest.fixture
@@ -70,6 +74,11 @@ class TestAddTask:
         with pytest.raises(ValueError, match="total"):
             await tracker.add_task("sync", total=-1)
 
+    async def test_accepts_none_total(self, tracker: TaskTracker) -> None:
+        await tracker.add_task("sync", total=None)
+
+        assert tracker.tasks["sync"].total is None
+
 
 class TestAdvance:
     async def test_transitions_to_running(self, tracker: TaskTracker) -> None:
@@ -89,6 +98,12 @@ class TestAdvance:
         await tracker.advance("sync", amount=100)
 
         assert tracker.tasks["sync"].progress == 5
+
+    async def test_no_clamp_when_total_is_none(self, tracker: TaskTracker) -> None:
+        await tracker.add_task("sync", total=None)
+        await tracker.advance("sync", amount=100)
+
+        assert tracker.tasks["sync"].progress == 100
 
     async def test_notifies_renderer(
         self, tracker: TaskTracker, renderer: _FakeRenderer
@@ -135,6 +150,17 @@ class TestFinish:
         task = tracker.tasks["sync"]
         assert task.status == TaskStatus.DONE
         assert task.progress == task.total
+
+    async def test_does_not_set_progress_when_total_is_none(
+        self, tracker: TaskTracker
+    ) -> None:
+        await tracker.add_task("sync", total=None)
+        await tracker.advance("sync", amount=7)
+        await tracker.finish("sync")
+
+        task = tracker.tasks["sync"]
+        assert task.status == TaskStatus.DONE
+        assert task.progress == 7
 
     async def test_notifies_renderer(
         self, tracker: TaskTracker, renderer: _FakeRenderer
@@ -205,6 +231,76 @@ class TestTasksProperty:
         snapshot.warnings.append("external mutation")
 
         assert tracker.tasks["sync"].warnings == ["original"]
+
+
+class TestUpdateTotal:
+    async def test_increases_total(self, tracker: TaskTracker) -> None:
+        await tracker.add_task("sync", total=1)
+        await tracker.update_total("sync", 5)
+
+        assert tracker.tasks["sync"].total == 5
+
+    async def test_notifies_renderer(
+        self, tracker: TaskTracker, renderer: _FakeRenderer
+    ) -> None:
+        await tracker.add_task("sync", total=1)
+        await tracker.update_total("sync", 3)
+
+        assert len(renderer.total_updated) == 1
+        assert renderer.total_updated[0].total == 3
+
+    async def test_ignores_decrease(
+        self, tracker: TaskTracker, renderer: _FakeRenderer
+    ) -> None:
+        await tracker.add_task("sync", total=5)
+        await tracker.update_total("sync", 3)
+
+        assert tracker.tasks["sync"].total == 5
+        assert len(renderer.total_updated) == 0
+
+    async def test_ignores_equal_total(
+        self, tracker: TaskTracker, renderer: _FakeRenderer
+    ) -> None:
+        await tracker.add_task("sync", total=5)
+        await tracker.update_total("sync", 5)
+
+        assert len(renderer.total_updated) == 0
+
+    async def test_raises_on_non_positive(self, tracker: TaskTracker) -> None:
+        await tracker.add_task("sync", total=5)
+
+        with pytest.raises(ValueError, match="total"):
+            await tracker.update_total("sync", 0)
+
+    async def test_sets_total_when_previously_indeterminate(
+        self, tracker: TaskTracker, renderer: _FakeRenderer
+    ) -> None:
+        await tracker.add_task("sync", total=None)
+        await tracker.update_total("sync", 5)
+
+        assert tracker.tasks["sync"].total == 5
+        assert len(renderer.total_updated) == 1
+
+    async def test_clamps_progress_when_total_set_below_progress(
+        self, tracker: TaskTracker
+    ) -> None:
+        await tracker.add_task("sync", total=None)
+        await tracker.advance("sync", amount=10)
+        await tracker.update_total("sync", 5)
+
+        task = tracker.tasks["sync"]
+        assert task.total == 5
+        assert task.progress == 5
+
+    async def test_ignored_after_terminal_status(
+        self, tracker: TaskTracker, renderer: _FakeRenderer
+    ) -> None:
+        await tracker.add_task("sync", total=1)
+        await tracker.finish("sync")
+        await tracker.update_total("sync", 10)
+
+        assert tracker.tasks["sync"].total == 1
+        assert len(renderer.total_updated) == 0
 
 
 class TestWarn:

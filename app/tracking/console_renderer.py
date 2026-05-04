@@ -33,7 +33,8 @@ class ConsoleRenderer(ProgressRenderer):
 
     def on_task_done(self, task: Task) -> None:
         task_id = self._task_ids[task.name]
-        self._progress.update(task_id, completed=task.total)
+        if task.total is not None:
+            self._progress.update(task_id, completed=task.total)
         self._progress.stop_task(task_id)
 
     def on_task_failed(self, task: Task) -> None:
@@ -43,6 +44,10 @@ class ConsoleRenderer(ProgressRenderer):
             description=f"[bold red]{task.name} FAILED: {task.error}",
         )
         self._progress.stop_task(task_id)
+
+    def on_total_updated(self, task: Task) -> None:
+        task_id = self._task_ids[task.name]
+        self._progress.update(task_id, total=task.total)
 
     def on_task_warning(self, task: Task, message: str) -> None:
         self._progress.print(f"[bold yellow]WARNING [{task.name}]: {message}")

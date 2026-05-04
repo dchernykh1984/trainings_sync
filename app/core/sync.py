@@ -124,7 +124,20 @@ class SyncExecutor:
             metas = await connector.list_activities(start, end)
             source_metas.append((spec, metas))
 
-        plan = self._planner.plan(source_metas, self._cache, force=force)
+        tracker = self._tracker
+        total_metas = sum(len(metas) for _, metas in source_metas)
+        plan_task: str | None = None
+        if tracker is not None and total_metas > 0:
+            plan_task = "Sync: plan"
+            await tracker.add_task(plan_task, total=None)
+        try:
+            plan = self._planner.plan(source_metas, self._cache, force=force)
+        except Exception as exc:
+            if plan_task is not None and tracker is not None:
+                await tracker.fail(plan_task, error=str(exc))
+            raise
+        if plan_task is not None and tracker is not None:
+            await tracker.finish(plan_task)
 
         by_source: dict[str, list[DownloadItem]] = {}
         for item in plan.to_download:
@@ -211,7 +224,19 @@ class SyncExecutor:
             await tracking[0].finish(tracking[1])
 
     async def _upload(self, start: date, end: date) -> None:
-        by_dest = self._collect_uploads(start, end)
+        tracker = self._tracker
+        collect_task: str | None = None
+        if tracker is not None:
+            collect_task = "Sync: collect uploads"
+            await tracker.add_task(collect_task, total=None)
+        try:
+            by_dest = self._collect_uploads(start, end)
+        except Exception as exc:
+            if collect_task is not None and tracker is not None:
+                await tracker.fail(collect_task, error=str(exc))
+            raise
+        if collect_task is not None and tracker is not None:
+            await tracker.finish(collect_task)
         if not by_dest:
             return
 

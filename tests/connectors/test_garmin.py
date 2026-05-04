@@ -44,6 +44,9 @@ class _FakeRenderer(ProgressRenderer):
     def on_task_warning(self, task: Task, message: str) -> None:
         pass
 
+    def on_total_updated(self, task: Task) -> None:
+        pass
+
 
 async def _call_sync(fn, *args, **kwargs):
     return fn(*args, **kwargs)
@@ -149,11 +152,15 @@ class TestLogin:
         assert _first_task(tracker).status == TaskStatus.FAILED
 
 
+def _make_full_page() -> list[dict]:
+    return [_RAW_ACTIVITY] * 20
+
+
 class TestListActivities:
     async def test_returns_activity_metas(
         self, logged_in: GarminConnector, mock_client: MagicMock
     ) -> None:
-        mock_client.get_activities_by_date.return_value = [_RAW_ACTIVITY]
+        mock_client.connectapi.return_value = [_RAW_ACTIVITY]
 
         with patch(
             "app.connectors.garmin.asyncio.to_thread",
@@ -172,7 +179,7 @@ class TestListActivities:
     async def test_passes_date_range_to_client(
         self, logged_in: GarminConnector, mock_client: MagicMock
     ) -> None:
-        mock_client.get_activities_by_date.return_value = []
+        mock_client.connectapi.return_value = []
 
         with patch(
             "app.connectors.garmin.asyncio.to_thread",
@@ -181,15 +188,17 @@ class TestListActivities:
         ):
             await logged_in.list_activities(_START, _END)
 
-        mock_client.get_activities_by_date.assert_called_once_with(
-            "2026-01-01", "2026-01-31"
-        )
+        params = mock_client.connectapi.call_args[1]["params"]
+        assert params["startDate"] == "2026-01-01"
+        assert params["endDate"] == "2026-01-31"
+        assert params["start"] == "0"
+        assert params["limit"] == "20"
 
     async def test_elapsed_s_none_when_duration_missing(
         self, logged_in: GarminConnector, mock_client: MagicMock
     ) -> None:
         raw = {k: v for k, v in _RAW_ACTIVITY.items() if k != "duration"}
-        mock_client.get_activities_by_date.return_value = [raw]
+        mock_client.connectapi.return_value = [raw]
 
         with patch(
             "app.connectors.garmin.asyncio.to_thread",
@@ -200,10 +209,40 @@ class TestListActivities:
 
         assert result[0].elapsed_s is None
 
+    async def test_fetches_multiple_pages(
+        self, logged_in: GarminConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.connectapi.side_effect = [_make_full_page(), [_RAW_ACTIVITY] * 3]
+
+        with patch(
+            "app.connectors.garmin.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            result = await logged_in.list_activities(_START, _END)
+
+        assert len(result) == 23
+        assert mock_client.connectapi.call_count == 2
+
+    async def test_second_page_uses_correct_start_offset(
+        self, logged_in: GarminConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.connectapi.side_effect = [_make_full_page(), [_RAW_ACTIVITY]]
+
+        with patch(
+            "app.connectors.garmin.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            await logged_in.list_activities(_START, _END)
+
+        second_call_params = mock_client.connectapi.call_args_list[1][1]["params"]
+        assert second_call_params["start"] == "20"
+
     async def test_tracker_task_done_after_listing(
         self, logged_in: GarminConnector, mock_client: MagicMock, tracker: TaskTracker
     ) -> None:
-        mock_client.get_activities_by_date.return_value = [_RAW_ACTIVITY]
+        mock_client.connectapi.return_value = [_RAW_ACTIVITY]
 
         with patch(
             "app.connectors.garmin.asyncio.to_thread",
@@ -215,6 +254,37 @@ class TestListActivities:
         tasks = list(tracker.tasks.values())
         assert len(tasks) == 1
         assert tasks[0].status == TaskStatus.DONE
+
+    async def test_tracker_advances_once_per_page(
+        self, logged_in: GarminConnector, mock_client: MagicMock, tracker: TaskTracker
+    ) -> None:
+        mock_client.connectapi.side_effect = [_make_full_page(), [_RAW_ACTIVITY] * 5]
+
+        with patch(
+            "app.connectors.garmin.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            await logged_in.list_activities(_START, _END)
+
+        task = next(t for t in tracker.tasks.values() if "fetch" in t.name)
+        assert task.progress == 2
+        assert task.status == TaskStatus.DONE
+
+    async def test_tracker_task_has_indeterminate_total(
+        self, logged_in: GarminConnector, mock_client: MagicMock, tracker: TaskTracker
+    ) -> None:
+        mock_client.connectapi.side_effect = [_make_full_page(), [_RAW_ACTIVITY] * 3]
+
+        with patch(
+            "app.connectors.garmin.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            await logged_in.list_activities(_START, _END)
+
+        task = next(t for t in tracker.tasks.values() if "fetch" in t.name)
+        assert task.total is None
 
     async def test_tracker_task_fails_on_api_error(
         self, logged_in: GarminConnector, tracker: TaskTracker

@@ -14,6 +14,7 @@ from app.credentials.base import Credentials
 from app.tracking.tracker import TaskTracker
 
 _PREFERRED_EXTENSIONS = (".fit", ".gpx", ".tcx")
+_PAGE_SIZE = 20
 
 
 class GarminConnector(ServiceConnector):
@@ -48,17 +49,31 @@ class GarminConnector(ServiceConnector):
     async def list_activities(self, start: date, end: date) -> list[ActivityMeta]:
         client = self._require_client()
         task_name = self._task_name("Garmin: fetch activity list")
-        await self._tracker.add_task(task_name, total=1)
+        await self._tracker.add_task(task_name, total=None)
+        raw: list[dict] = []
+        page_start = 0
+        url = client.garmin_connect_activities
         try:
-            raw: list[dict] = await asyncio.to_thread(
-                client.get_activities_by_date,
-                start.isoformat(),
-                end.isoformat(),
-            )
+            while True:
+                params = {
+                    "startDate": start.isoformat(),
+                    "endDate": end.isoformat(),
+                    "start": str(page_start),
+                    "limit": str(_PAGE_SIZE),
+                }
+                page: list[dict] = (
+                    await asyncio.to_thread(client.connectapi, url, params=params) or []
+                )
+                if not page:
+                    break
+                raw.extend(page)
+                page_start += _PAGE_SIZE
+                await self._tracker.advance(task_name)
+                if len(page) < _PAGE_SIZE:
+                    break
         except Exception as exc:
             await self._tracker.fail(task_name, error=str(exc))
             raise
-        await self._tracker.advance(task_name)
         await self._tracker.finish(task_name)
         return [
             ActivityMeta(

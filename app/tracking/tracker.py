@@ -16,7 +16,7 @@ class TaskStatus(Enum):
 @dataclass
 class Task:
     name: str
-    total: int
+    total: int | None
     status: TaskStatus = TaskStatus.PENDING
     progress: int = 0
     error: str | None = None
@@ -39,6 +39,9 @@ class ProgressRenderer(ABC):
     @abstractmethod
     def on_task_warning(self, task: Task, message: str) -> None: ...
 
+    @abstractmethod
+    def on_total_updated(self, task: Task) -> None: ...
+
 
 class TaskTracker:
     def __init__(self, renderer: ProgressRenderer) -> None:
@@ -46,8 +49,8 @@ class TaskTracker:
         self._tasks: dict[str, Task] = {}
         self._lock = asyncio.Lock()
 
-    async def add_task(self, name: str, total: int) -> None:
-        if total <= 0:
+    async def add_task(self, name: str, total: int | None) -> None:
+        if total is not None and total <= 0:
             raise ValueError(f"total must be positive, got {total}")
         async with self._lock:
             if name in self._tasks:
@@ -63,7 +66,10 @@ class TaskTracker:
             task = self._tasks[name]
             if task.status in (TaskStatus.DONE, TaskStatus.FAILED):
                 return
-            task.progress = min(task.progress + amount, task.total)
+            if task.total is None:
+                task.progress += amount
+            else:
+                task.progress = min(task.progress + amount, task.total)
             if task.status == TaskStatus.PENDING:
                 task.status = TaskStatus.RUNNING
         self._renderer.on_progress(task)
@@ -74,7 +80,8 @@ class TaskTracker:
             if task.status in (TaskStatus.DONE, TaskStatus.FAILED):
                 return
             task.status = TaskStatus.DONE
-            task.progress = task.total
+            if task.total is not None:
+                task.progress = task.total
         self._renderer.on_task_done(task)
 
     async def fail(self, name: str, error: str) -> None:
@@ -85,6 +92,20 @@ class TaskTracker:
             task.status = TaskStatus.FAILED
             task.error = error
         self._renderer.on_task_failed(task)
+
+    async def update_total(self, name: str, total: int) -> None:
+        if total <= 0:
+            raise ValueError(f"total must be positive, got {total}")
+        async with self._lock:
+            task = self._tasks[name]
+            if task.status in (TaskStatus.DONE, TaskStatus.FAILED):
+                return
+            if task.total is not None and total <= task.total:
+                return
+            task.total = total
+            if task.progress > total:
+                task.progress = total
+        self._renderer.on_total_updated(task)
 
     async def warn(self, name: str, message: str) -> None:
         async with self._lock:

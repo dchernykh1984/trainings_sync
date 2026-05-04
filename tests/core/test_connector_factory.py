@@ -144,9 +144,50 @@ async def test_mixed_sources_built_in_order(
     assert isinstance(sources[1][1], LocalFolderConnector)
 
 
-async def test_strava_source_raises(tracker: TaskTracker) -> None:
-    with pytest.raises(ValueError, match="Strava cannot be used as a download source"):
-        await build_sources(_cfg(sources=(_STRAVA_SRC,)), _FakeProvider([]), tracker)
+async def test_strava_source_builds_strava_connector(tracker: TaskTracker) -> None:
+    provider = _FakeProvider([_STRAVA_CREDS])
+    sources = await build_sources(_cfg(sources=(_STRAVA_SRC,)), provider, tracker)
+    assert len(sources) == 1
+    spec, connector = sources[0]
+    assert isinstance(connector, StravaConnector)
+    assert spec.source_id == "strava-main"
+    assert spec.priority == 2
+    assert connector._credentials.client_id == 99999
+    assert connector._credentials.client_secret == "client-secret-val"
+    assert connector._credentials.refresh_token == "refresh-token-val"
+
+
+async def test_strava_source_token_refresh_callback_wired(tracker: TaskTracker) -> None:
+    refreshed: list[tuple[str, StravaCredentials]] = []
+
+    def on_refresh(src_id: str, new_creds: StravaCredentials) -> None:
+        refreshed.append((src_id, new_creds))
+
+    provider = _FakeProvider([_STRAVA_CREDS])
+    sources = await build_sources(
+        _cfg(sources=(_STRAVA_SRC,)),
+        provider,
+        tracker,
+        on_strava_token_refresh=on_refresh,
+    )
+    _, connector = sources[0]
+    assert isinstance(connector, StravaConnector)
+
+    new_creds = StravaCredentials(
+        client_id=99999, client_secret="s", refresh_token="new-rt"
+    )
+    assert connector._on_token_refresh is not None
+    connector._on_token_refresh(new_creds)
+
+    assert refreshed == [("strava-main", new_creds)]
+
+
+async def test_strava_source_no_callback_sets_to_none(tracker: TaskTracker) -> None:
+    provider = _FakeProvider([_STRAVA_CREDS])
+    sources = await build_sources(_cfg(sources=(_STRAVA_SRC,)), provider, tracker)
+    _, connector = sources[0]
+    assert isinstance(connector, StravaConnector)
+    assert connector._on_token_refresh is None
 
 
 # ---------------------------------------------------------------------------
@@ -165,6 +206,18 @@ async def test_sources_credentials_fetched_in_one_batch(
     local = LocalFolderSourceConfig(id="local", priority=3, folder=tmp_path)
     provider = _FakeProvider([_GARMIN_CREDS, Credentials("u2", "p2")])
     await build_sources(_cfg(sources=(_GARMIN_SRC, garmin2, local)), provider, tracker)
+    assert provider.get_many_calls == 1
+    assert provider.get_credentials_calls == 0
+
+
+async def test_strava_source_included_in_credential_batch(
+    tracker: TaskTracker, tmp_path: Path
+) -> None:
+    local = LocalFolderSourceConfig(id="local", priority=3, folder=tmp_path)
+    provider = _FakeProvider([_GARMIN_CREDS, _STRAVA_CREDS])
+    await build_sources(
+        _cfg(sources=(_GARMIN_SRC, _STRAVA_SRC, local)), provider, tracker
+    )
     assert provider.get_many_calls == 1
     assert provider.get_credentials_calls == 0
 

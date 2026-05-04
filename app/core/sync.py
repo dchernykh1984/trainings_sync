@@ -116,7 +116,12 @@ class SyncExecutor:
     ) -> None:
         try:
             for item in items:
-                activity = await connector.download_activity(item.meta)
+                try:
+                    activity = await connector.download_activity(item.meta)
+                except ValueError:
+                    if tracking is not None:
+                        await tracking[0].advance(tracking[1])
+                    continue
                 entry = CacheEntry(
                     external_id=activity.external_id,
                     source_id=source_id,

@@ -4,17 +4,20 @@ import asyncio
 import io
 import itertools
 import logging
+import os
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from stravalib import Client
+from stravalib.exc import ObjectNotFound
 
 from app.connectors.base import Activity, ActivityMeta, ServiceConnector
 from app.credentials.base import StravaCredentials
 from app.tracking.tracker import TaskTracker
 
+os.environ.setdefault("SILENCE_TOKEN_WARNINGS", "true")
 logging.getLogger("stravalib").setLevel(logging.ERROR)
 
 _STREAM_TYPES = ["time", "latlng", "altitude", "heartrate", "cadence", "watts"]
@@ -203,14 +206,21 @@ class StravaConnector(ServiceConnector):
 
     async def download_activity(self, meta: ActivityMeta) -> Activity:
         client = self._require_client()
-        streams = await asyncio.to_thread(
-            client.get_activity_streams,
-            int(meta.external_id),
-            types=_STREAM_TYPES,
-        )
+        try:
+            streams = await asyncio.to_thread(
+                client.get_activity_streams,
+                int(meta.external_id),
+                types=_STREAM_TYPES,
+            )
+        except ObjectNotFound as exc:
+            raise ValueError(
+                f"Strava activity {meta.external_id!r} ({meta.name!r}):"
+                " streams not found — likely a manual activity without sensor data"
+            ) from exc
         if not _stream_data(streams, "time"):
             raise ValueError(
-                f"Strava activity {meta.external_id!r}: time stream is absent or empty"
+                f"Strava activity {meta.external_id!r} ({meta.name!r}):"
+                " time stream is absent or empty"
             )
         if bool(_stream_data(streams, "latlng")):
             content = _build_gpx(meta, streams)

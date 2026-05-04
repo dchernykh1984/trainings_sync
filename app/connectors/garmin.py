@@ -130,7 +130,7 @@ class GarminConnector(ServiceConnector):
                     break
                 raw.extend(page)
                 page_start += _PAGE_SIZE
-                await self._tracker.advance(task_name)
+                await self._tracker.advance(task_name, amount=len(page))
                 if len(page) < _PAGE_SIZE:
                     break
         except Exception as exc:

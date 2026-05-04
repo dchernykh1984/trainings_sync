@@ -119,12 +119,32 @@ class TestPlanNeedsRefresh:
         plan = SyncPlanner().plan([(_spec("garmin"), [_meta()])], cache)
         assert len(plan.to_download) == 1
 
-    def test_skips_when_overlapping_healthy_entry_in_cache(
+    def test_skips_lower_priority_source_when_higher_priority_cached(
+        self, cache: ActivityCache
+    ) -> None:
+        cache.put(_entry(source_id="garmin"), b"content")
+        plan = SyncPlanner().plan(
+            [
+                (_spec("garmin", priority=1), []),
+                (_spec("strava", priority=2), [_meta()]),
+            ],
+            cache,
+        )
+        assert plan.to_download == ()
+
+    def test_downloads_higher_priority_source_despite_lower_priority_cache(
         self, cache: ActivityCache
     ) -> None:
         cache.put(_entry(source_id="strava"), b"content")
-        plan = SyncPlanner().plan([(_spec("garmin"), [_meta()])], cache)
-        assert plan.to_download == ()
+        plan = SyncPlanner().plan(
+            [
+                (_spec("garmin", priority=1), [_meta()]),
+                (_spec("strava", priority=2), []),
+            ],
+            cache,
+        )
+        assert len(plan.to_download) == 1
+        assert plan.to_download[0].source_id == "garmin"
 
     def test_needs_refresh_not_blocked_by_healthy_overlap_from_other_source(
         self, cache: ActivityCache
@@ -377,21 +397,27 @@ class TestPlanOverlapBoundary:
         plan = SyncPlanner(min_overlap_s=61).plan([(_spec("garmin"), [meta])], cache)
         assert len(plan.to_download) == 1
 
-    def test_overlap_at_min_threshold_is_blocked(self, cache: ActivityCache) -> None:
-        # strava: 8:00-9:00, garmin: 8:59-9:59 -> exactly 60s overlap = min_overlap_s
-        cache.put(_entry(source_id="strava", elapsed_s=3600), b"content")
+    def test_overlap_at_min_threshold_blocks_lower_priority_source(
+        self, cache: ActivityCache
+    ) -> None:
+        # garmin: 8:00-9:00 in cache; strava: 8:59-9:59 -> 60s overlap = min_overlap_s
+        cache.put(_entry(source_id="garmin", elapsed_s=3600), b"content")
         meta = _meta(start_offset_s=3540, elapsed_s=3600)
-        plan = SyncPlanner(min_overlap_s=60).plan([(_spec("garmin"), [meta])], cache)
+        plan = SyncPlanner(min_overlap_s=60).plan(
+            [(_spec("garmin", priority=1), []), (_spec("strava", priority=2), [meta])],
+            cache,
+        )
         assert plan.to_download == ()
 
     def test_fallback_duration_used_when_elapsed_none(
         self, cache: ActivityCache
     ) -> None:
-        # strava: 8:00, elapsed=None -> fallback 3600s -> ends 9:00
-        # garmin: 8:30, elapsed=None -> fallback 3600s -> ends 9:30 -> 30min overlap
-        cache.put(_entry(source_id="strava", elapsed_s=None), b"content")
+        # garmin p=1: 8:00, elapsed=None -> fallback 3600s -> ends 9:00; in cache
+        # strava p=2: 8:30, elapsed=None -> fallback 3600s -> 30min overlap -> skip
+        cache.put(_entry(source_id="garmin", elapsed_s=None), b"content")
         meta = _meta(start_offset_s=1800, elapsed_s=None)
         plan = SyncPlanner(fallback_s=3600, min_overlap_s=60).plan(
-            [(_spec("garmin"), [meta])], cache
+            [(_spec("garmin", priority=1), []), (_spec("strava", priority=2), [meta])],
+            cache,
         )
         assert plan.to_download == ()

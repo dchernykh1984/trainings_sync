@@ -84,16 +84,28 @@ class TestOnTaskDone:
         mock_progress.update.assert_called_with(5, completed=10)
         mock_progress.stop_task.assert_called_once_with(5)
 
-    def test_stops_without_update_when_total_is_none(
+    def test_sets_final_count_and_stops_when_total_is_none(
         self, renderer: ConsoleRenderer, mock_progress: MagicMock
     ) -> None:
         mock_progress.add_task.return_value = 5
         renderer.on_task_added(Task(name="sync", total=None))
 
-        task = Task(name="sync", total=None, status=TaskStatus.DONE, progress=3)
+        task = Task(name="sync", total=None, status=TaskStatus.DONE, progress=7)
         renderer.on_task_done(task)
 
-        mock_progress.update.assert_not_called()
+        mock_progress.update.assert_called_with(5, total=7, completed=7)
+        mock_progress.stop_task.assert_called_once_with(5)
+
+    def test_indeterminate_zero_progress_uses_one_as_final(
+        self, renderer: ConsoleRenderer, mock_progress: MagicMock
+    ) -> None:
+        mock_progress.add_task.return_value = 5
+        renderer.on_task_added(Task(name="sync", total=None))
+
+        task = Task(name="sync", total=None, status=TaskStatus.DONE, progress=0)
+        renderer.on_task_done(task)
+
+        mock_progress.update.assert_called_with(5, total=1, completed=1)
         mock_progress.stop_task.assert_called_once_with(5)
 
 

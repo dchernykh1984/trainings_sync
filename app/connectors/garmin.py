@@ -7,6 +7,7 @@ import tempfile
 import zipfile
 from datetime import date, datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from garminconnect import Garmin  # type: ignore[import-untyped]
 from garminconnect.exceptions import (
@@ -41,6 +42,18 @@ _STRAVA_TO_GARMIN_TYPE: dict[str, str] = {
     "Rowing": "rowing",
     "StandUpPaddling": "stand_up_paddleboarding",
 }
+
+
+def _set_activity_description(
+    client: Garmin, activity_id: int, description: str
+) -> None:
+    url = f"{client.garmin_connect_activity}/{activity_id}"
+    client.client.put(
+        "connectapi",
+        url,
+        json={"activityId": activity_id, "description": description},
+        api=True,
+    )
 
 
 async def _ids_on_date(client: Garmin, date_str: str) -> set[int]:
@@ -169,11 +182,39 @@ class GarminConnector(ServiceConnector):
 
     async def download_activity(self, meta: ActivityMeta) -> Activity:
         client = self._require_client()
-        zip_bytes: bytes = await asyncio.to_thread(
-            client.download_activity,
-            int(meta.external_id),
-            dl_fmt=Garmin.ActivityDownloadFormat.ORIGINAL,
+        log = self._tracker.sync_logger
+        account = self._credentials.login
+        zip_task: asyncio.Task[bytes] = asyncio.create_task(
+            asyncio.to_thread(
+                client.download_activity,
+                int(meta.external_id),
+                dl_fmt=Garmin.ActivityDownloadFormat.ORIGINAL,
+            )
         )
+        detail_task: asyncio.Task[Any] = asyncio.create_task(
+            asyncio.to_thread(client.get_activity_details, int(meta.external_id))
+        )
+        try:
+            zip_bytes = await zip_task
+        except Exception:
+            detail_task.cancel()
+            await asyncio.gather(detail_task, return_exceptions=True)
+            raise
+        description: str | None = None
+        try:
+            details = await detail_task
+            if isinstance(details, dict):
+                description = (
+                    details.get("description")
+                    or details.get("activityDescription")
+                    or None
+                )
+        except Exception as exc:
+            if log:
+                log.warning(
+                    f"[garmin] Download ({account}): {meta.external_id!r}"
+                    f" - description unavailable: {exc}"
+                )
         with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
             names = zf.namelist()
             entry = next(
@@ -200,6 +241,7 @@ class GarminConnector(ServiceConnector):
             content=content,
             format=fmt,
             elapsed_s=meta.elapsed_s,
+            description=description,
         )
 
     async def upload_activity(self, activity: Activity) -> str | None:
@@ -244,6 +286,10 @@ class GarminConnector(ServiceConnector):
         if garmin_type:
             await asyncio.to_thread(
                 client.set_activity_type, str(activity_id), 0, garmin_type, 0
+            )
+        if activity.description:
+            await asyncio.to_thread(
+                _set_activity_description, client, activity_id, activity.description
             )
         if log:
             log.info(

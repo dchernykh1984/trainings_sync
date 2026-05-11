@@ -87,14 +87,19 @@ class GarminConnector(ServiceConnector):
         self._credentials = credentials
         self._client: Garmin | None = None
 
+    @property
+    def user_label(self) -> str:
+        return self._credentials.login
+
     def _require_client(self) -> Garmin:
         if self._client is None:
-            raise RuntimeError("Not logged in — call login() first")
+            raise RuntimeError("Not logged in - call login() first")
         return self._client
 
     async def login(self) -> None:
-        task_name = self._task_name("Garmin: login")
-        await self._tracker.add_task(task_name, total=1)
+        task_name = await self._tracker.add_task(
+            f"Garmin ({self._credentials.login}): login", total=1
+        )
         log = self._tracker.sync_logger
         if log:
             log.info(f"[garmin] Login: account={self._credentials.login!r}")
@@ -115,8 +120,9 @@ class GarminConnector(ServiceConnector):
 
     async def list_activities(self, start: date, end: date) -> list[ActivityMeta]:
         client = self._require_client()
-        task_name = self._task_name("Garmin: fetch activity list")
-        await self._tracker.add_task(task_name, total=None)
+        task_name = await self._tracker.add_task(
+            f"Garmin ({self._credentials.login}): fetch activity list", total=None
+        )
         log = self._tracker.sync_logger
         raw: list[dict] = []
         page_start = 0
@@ -140,7 +146,7 @@ class GarminConnector(ServiceConnector):
                 if log:
                     log.debug(
                         f"[garmin] List: page {page_start // _PAGE_SIZE}"
-                        f" → {len(page)} activities"
+                        f" -> {len(page)} activities"
                     )
                 if len(page) < _PAGE_SIZE:
                     break
@@ -215,7 +221,7 @@ class GarminConnector(ServiceConnector):
             if log:
                 log.info(
                     f"[garmin] Upload: {activity.external_id!r}"
-                    f" {activity.start_time.date()} — duplicate, skipped"
+                    f" {activity.start_time.date()} - duplicate, skipped"
                 )
             return None
         finally:
@@ -226,7 +232,7 @@ class GarminConnector(ServiceConnector):
             if log:
                 log.warning(
                     f"[garmin] Upload: {activity.external_id!r}"
-                    f" — uploaded but activity ID not found"
+                    f" - uploaded but activity ID not found"
                 )
             return None
         if activity.name:
@@ -241,6 +247,6 @@ class GarminConnector(ServiceConnector):
         if log:
             log.info(
                 f"[garmin] Upload: {activity.external_id!r}"
-                f" {activity.start_time.date()} — success (id={activity_id})"
+                f" {activity.start_time.date()} - success (id={activity_id})"
             )
         return None

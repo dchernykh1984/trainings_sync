@@ -56,6 +56,10 @@ class ServiceConnector(ABC):
         self._tracker = tracker
         self._counter = itertools.count(1)
 
+    @property
+    def user_label(self) -> str:
+        return ""
+
     def _task_name(self, label: str) -> str:
         return f"{label} #{next(self._counter)}"
 
@@ -85,8 +89,9 @@ class ServiceConnector(ABC):
         if not metas:
             return []
 
-        task_name = self._task_name("Download activities")
-        await self._tracker.add_task(task_name, total=len(metas))
+        task_name = await self._tracker.add_task(
+            self._task_name("Download activities"), total=len(metas)
+        )
         sem = asyncio.Semaphore(self._max_concurrent)
 
         async def _download(meta: ActivityMeta) -> Activity:
@@ -107,8 +112,9 @@ class ServiceConnector(ABC):
         if not activities:
             return
 
-        task_name = self._task_name("Upload activities")
-        await self._tracker.add_task(task_name, total=len(activities))
+        task_name = await self._tracker.add_task(
+            self._task_name("Upload activities"), total=len(activities)
+        )
         sem = asyncio.Semaphore(self._max_concurrent)
 
         async def _upload(activity: Activity) -> None:

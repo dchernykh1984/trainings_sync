@@ -33,9 +33,14 @@ class LocalFolderConnector(ServiceConnector):
         self._cache = cache
         self._dest_id = dest_id
 
+    @property
+    def user_label(self) -> str:
+        return str(self._folder)
+
     async def login(self) -> None:
-        task_name = self._task_name("Local folder: connect")
-        await self._tracker.add_task(task_name, total=1)
+        task_name = await self._tracker.add_task(
+            f"Local folder ({self._folder}): connect", total=1
+        )
         log = self._tracker.sync_logger
         if log:
             log.info(f"[local-folder] Connect: folder={self._folder}")
@@ -98,8 +103,9 @@ class LocalFolderConnector(ServiceConnector):
 
     async def list_activities(self, start: date, end: date) -> list[ActivityMeta]:
         log = self._tracker.sync_logger
-        task_name = self._task_name("Local folder: scan")
-        await self._tracker.add_task(task_name, total=1)
+        task_name = await self._tracker.add_task(
+            f"Local folder ({self._folder}): scan", total=1
+        )
         if self._cache is not None and self._dest_id:
             try:
                 metas = await asyncio.to_thread(self._list_from_cache, start, end)

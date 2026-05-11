@@ -14,7 +14,7 @@ from app.core.sync import SyncExecutor
 
 def _make_tracker() -> MagicMock:
     tracker = MagicMock()
-    tracker.add_task = AsyncMock()
+    tracker.add_task = AsyncMock(side_effect=lambda name, **_: name)
     tracker.advance = AsyncMock()
     tracker.finish = AsyncMock()
     tracker.fail = AsyncMock()
@@ -113,6 +113,7 @@ def _dest_conn(existing: list | None = None) -> MagicMock:
     conn = MagicMock()
     conn.upload_activity = AsyncMock()
     conn.list_activities = AsyncMock(return_value=existing or [])
+    conn.user_label = ""
     return conn
 
 
@@ -614,6 +615,7 @@ class TestSyncExecutorTracking:
         dest = MagicMock()
         dest.upload_activity = AsyncMock(side_effect=OSError("upload failed"))
         dest.list_activities = AsyncMock(return_value=[])
+        dest.user_label = ""
         tracker = _make_tracker()
         executor = SyncExecutor(
             sources=[(_spec("garmin"), _source_conn())],

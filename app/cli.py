@@ -139,8 +139,8 @@ def _validate(
         sys.exit(1)
     if _credentials_needed(config) and not (args.creds_json or args.creds_keepass):
         print(
-            "error: this config requires credentials — "
-            "provide --creds-json or --creds-keepass",
+            "error: this config requires credentials -"
+            " provide --creds-json or --creds-keepass",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -156,8 +156,8 @@ def _validate(
     if conflicts:
         names = ", ".join(sorted(conflicts))
         print(
-            f"error: Strava source and destination share the same id(s): {names} — "
-            "ids must be unique across sources and destinations",
+            f"error: Strava source and destination share the same id(s): {names} -"
+            " ids must be unique across sources and destinations",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -172,15 +172,15 @@ def _validate(
     if strava_src_creds & strava_dest_creds:
         print(
             "error: the same Strava credential appears in both sources and destinations"
-            " — this would cause a token rotation race on login",
+            " - this would cause a token rotation race on login",
             file=sys.stderr,
         )
         sys.exit(1)
     has_strava = bool(strava_src_ids or strava_dest_ids)
     if args.creds_keepass and has_strava:
         print(
-            "error: --creds-keepass does not support Strava — "
-            "KeePass refresh token persistence is not implemented; use --creds-json",
+            "error: --creds-keepass does not support Strava -"
+            " KeePass refresh token persistence is not implemented; use --creds-json",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -193,7 +193,7 @@ async def _run_sync(
     start: date,
     end: date,
 ) -> None:
-    # Prompt before ConsoleRenderer starts — getpass conflicts with Rich.
+    # Prompt before ConsoleRenderer starts - getpass conflicts with Rich.
     keepass_password: str | None = None
     if _credentials_needed(config) and args.creds_keepass:
         keepass_password = os.environ.get("KEEPASS_PASSWORD") or getpass.getpass(

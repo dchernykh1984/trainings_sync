@@ -61,11 +61,15 @@ class TestAddTask:
         assert len(renderer.added) == 1
         assert renderer.added[0].name == "sync"
 
-    async def test_raises_on_duplicate_name(self, tracker: TaskTracker) -> None:
-        await tracker.add_task("sync", total=10)
+    async def test_auto_suffix_on_duplicate_name(self, tracker: TaskTracker) -> None:
+        first = await tracker.add_task("sync", total=10)
+        second = await tracker.add_task("sync", total=5)
+        third = await tracker.add_task("sync", total=3)
 
-        with pytest.raises(ValueError, match="sync"):
-            await tracker.add_task("sync", total=5)
+        assert first == "sync"
+        assert second == "sync #2"
+        assert third == "sync #3"
+        assert set(tracker.tasks) == {"sync", "sync #2", "sync #3"}
 
     async def test_raises_on_non_positive_total(self, tracker: TaskTracker) -> None:
         with pytest.raises(ValueError, match="total"):

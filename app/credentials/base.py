@@ -44,6 +44,6 @@ class CredentialProvider(ABC):
     async def get_credentials(self, request: CredentialRequest) -> Credentials: ...
 
     async def get_many(
-        self, requests: Sequence[CredentialRequest]
+        self, requests: Sequence[CredentialRequest], context: str = ""
     ) -> list[Credentials]:
         return [await self.get_credentials(request) for request in requests]

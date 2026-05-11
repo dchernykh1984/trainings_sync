@@ -142,15 +142,22 @@ class StravaConnector(ServiceConnector):
         self._credentials = credentials
         self._on_token_refresh = on_token_refresh
         self._client: Client | None = None
+        self._athlete_id: str = ""
+        self._athlete_name: str = ""
+
+    @property
+    def user_label(self) -> str:
+        return (
+            self._athlete_name or self._athlete_id or str(self._credentials.client_id)
+        )
 
     def _require_client(self) -> Client:
         if self._client is None:
-            raise RuntimeError("Not logged in — call login() first")
+            raise RuntimeError("Not logged in - call login() first")
         return self._client
 
     async def login(self) -> None:
-        task_name = self._task_name("Strava: login")
-        await self._tracker.add_task(task_name, total=1)
+        task_name = await self._tracker.add_task("Strava: login", total=1)
         log = self._tracker.sync_logger
         if log:
             log.info(f"[strava] Login: client_id={self._credentials.client_id}")
@@ -170,11 +177,19 @@ class StravaConnector(ServiceConnector):
             if self._on_token_refresh is not None:
                 self._on_token_refresh(new_credentials)
             self._client = Client(access_token=token_info["access_token"])
+            athlete = await asyncio.to_thread(self._client.get_athlete)
+            self._athlete_id = str(athlete.id) if athlete.id is not None else ""
+            parts = [athlete.firstname or "", athlete.lastname or ""]
+            self._athlete_name = " ".join(p for p in parts if p)
         except Exception as exc:
             await self._tracker.fail(task_name, error=f"Login failed: {exc}")
             raise
         if log:
-            log.info("[strava] Login: success")
+            name_part = f", {self._athlete_name}" if self._athlete_name else ""
+            log.info(
+                f"[strava] Login: success"
+                f" (athlete_id={self._athlete_id or 'unknown'}{name_part})"
+            )
         await self._tracker.advance(task_name)
         await self._tracker.finish(task_name)
 
@@ -183,8 +198,9 @@ class StravaConnector(ServiceConnector):
         after = datetime(start.year, start.month, start.day)
         before = datetime(end.year, end.month, end.day) + timedelta(days=1)
 
-        task_name = self._task_name("Strava: fetch activity list")
-        await self._tracker.add_task(task_name, total=None)
+        task_name = await self._tracker.add_task(
+            f"Strava ({self.user_label}): fetch activity list", total=None
+        )
         log = self._tracker.sync_logger
         raw: list = []
         seen_ids: set[int] = set()
@@ -204,7 +220,7 @@ class StravaConnector(ServiceConnector):
                 await self._tracker.advance(task_name, amount=len(batch))
                 if log:
                     log.debug(
-                        f"[strava] List: page {page_num} → {len(batch)} activities"
+                        f"[strava] List: page {page_num} -> {len(batch)} activities"
                     )
         except Exception as exc:
             await self._tracker.fail(task_name, error=str(exc))
@@ -232,7 +248,7 @@ class StravaConnector(ServiceConnector):
         except ObjectNotFound as exc:
             raise ActivityUnavailableError(
                 f"Strava activity {meta.external_id!r} ({meta.name!r}):"
-                " streams not found — likely a manual activity without sensor data"
+                " streams not found - likely a manual activity without sensor data"
             ) from exc
         if not _stream_data(streams, "time"):
             raise ActivityUnavailableError(

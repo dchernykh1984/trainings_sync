@@ -119,11 +119,17 @@ class SyncExecutor:
         connector: ServiceConnector,
         tracking: tuple[TaskTracker, str] | None,
     ) -> None:
+        log = self._tracker.sync_logger if self._tracker is not None else None
         try:
             for item in items:
                 try:
                     activity = await connector.download_activity(item.meta)
                 except ActivityUnavailableError:
+                    if log:
+                        log.info(
+                            f"[download] {source_id}: {item.meta.external_id!r}"
+                            f" — unavailable, skipped"
+                        )
                     if tracking is not None:
                         await tracking[0].advance(tracking[1])
                     continue
@@ -136,7 +142,13 @@ class SyncExecutor:
                     name=activity.name,
                     sport_type=activity.sport_type,
                 )
-                self._cache.put(entry, activity.content)
+                stored = self._cache.put(entry, activity.content)
+                if log:
+                    log.info(
+                        f"[download] {source_id}: {activity.external_id!r}"
+                        f" {activity.start_time.date()}"
+                        f' "{activity.name}" → {stored.filename}'
+                    )
                 if tracking is not None:
                     await tracking[0].advance(tracking[1])
         except Exception as exc:
@@ -173,7 +185,26 @@ class SyncExecutor:
             raise
         if plan_task is not None and tracker is not None:
             await tracker.finish(plan_task)
+        self._log_plan_summary(to_download, source_metas)
         return to_download
+
+    def _log_plan_summary(
+        self,
+        to_download: list[DownloadItem],
+        source_metas: list[tuple[SourceSpec, list[ActivityMeta]]],
+    ) -> None:
+        log = self._tracker.sync_logger if self._tracker is not None else None
+        if log is None:
+            return
+        by_src: dict[str, int] = {}
+        for item in to_download:
+            by_src[item.source_id] = by_src.get(item.source_id, 0) + 1
+        for spec, metas in source_metas:
+            to_dl = by_src.get(spec.source_id, 0)
+            log.info(
+                f"[plan] {spec.source_id}:"
+                f" {to_dl} to download, {len(metas) - to_dl} skipped"
+            )
 
     async def _download(self, start: date, end: date, *, force: bool) -> None:
         source_metas: list[tuple[SourceSpec, list[ActivityMeta]]] = []
@@ -211,6 +242,18 @@ class SyncExecutor:
             and self._cache.has(e.external_id, e.source_id)
         ]
 
+    def _log_upload_decision(
+        self, entry: CacheEntry, dest_id: str | None, reason: str
+    ) -> None:
+        log = self._tracker.sync_logger if self._tracker is not None else None
+        if log is None:
+            return
+        where = f" → {dest_id}" if dest_id else ""
+        log.debug(
+            f"[upload-plan] {entry.source_id}: {entry.external_id!r}"
+            f" {entry.start_time.date()}{where}: {reason}"
+        )
+
     async def _collect_uploads(
         self,
         candidates: list[CacheEntry],
@@ -231,7 +274,7 @@ class SyncExecutor:
 
         by_dest: dict[str, list[CacheEntry]] = {}
         for entry in candidates:
-            if not _shadowed_by_higher_priority(
+            if _shadowed_by_higher_priority(
                 entry,
                 candidates,
                 source_priority,
@@ -239,12 +282,17 @@ class SyncExecutor:
                 min_overlap_s,
                 fallback_s,
             ):
+                self._log_upload_decision(
+                    entry, None, "shadowed by higher-priority source"
+                )
+            else:
                 for dest_id, connector in self._destinations:
                     if dest_id == entry.source_id:
                         continue
                     if dest_id in entry.uploaded_to and connector.has_activity(
                         entry.external_id, entry.source_id
                     ):
+                        self._log_upload_decision(entry, dest_id, "already uploaded")
                         continue
                     existing = dest_existing.get(dest_id, [])
                     if any(
@@ -252,8 +300,12 @@ class SyncExecutor:
                         for m in existing
                     ):
                         self._cache.mark_uploaded(entry, dest_id)
+                        self._log_upload_decision(
+                            entry, dest_id, "overlaps existing — marked uploaded"
+                        )
                         continue
                     by_dest.setdefault(dest_id, []).append(entry)
+                    self._log_upload_decision(entry, dest_id, "queued for upload")
             if tracking is not None:
                 await tracking[0].advance(tracking[1])
         return by_dest
@@ -265,6 +317,7 @@ class SyncExecutor:
         connector: ServiceConnector,
         tracking: tuple[TaskTracker, str] | None,
     ) -> None:
+        log = self._tracker.sync_logger if self._tracker is not None else None
         try:
             for entry in entries:
                 content = self._cache.read_content(entry)
@@ -279,6 +332,12 @@ class SyncExecutor:
                 )
                 local_path = await connector.upload_activity(activity)
                 self._cache.mark_uploaded(entry, dest_id, local_path=local_path)
+                if log:
+                    result = local_path if local_path is not None else "ok"
+                    log.info(
+                        f"[upload] {entry.external_id!r} ({entry.source_id})"
+                        f" → {dest_id}: {result}"
+                    )
                 if tracking is not None:
                     await tracking[0].advance(tracking[1])
         except Exception as exc:

@@ -301,7 +301,7 @@ class TestTokenRefreshCallback:
 
 
 class TestMain:
-    def test_unexpected_exception_prints_traceback_and_exits_1(
+    def test_unexpected_exception_prints_error_and_exits_1(
         self, capsys: pytest.CaptureFixture
     ) -> None:
         with (
@@ -315,4 +315,4 @@ class TestMain:
         assert exc.value.code == 1
         err = capsys.readouterr().err
         assert "boom" in err
-        assert "Traceback" in err
+        assert "Traceback" not in err

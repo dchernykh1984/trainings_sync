@@ -5,7 +5,6 @@ import asyncio
 import getpass
 import os
 import sys
-import traceback
 from datetime import date
 from pathlib import Path
 
@@ -31,6 +30,7 @@ from app.credentials.base import (
 from app.credentials.json_file import JsonFileProvider
 from app.credentials.keepass import KeePassProvider
 from app.tracking.console_renderer import ConsoleRenderer
+from app.tracking.sync_logger import SyncLogger
 from app.tracking.tracker import TaskTracker
 
 
@@ -186,21 +186,14 @@ def _validate(
         sys.exit(1)
 
 
-async def _run(args: argparse.Namespace) -> None:
-    try:
-        config = load_config(args.config)
-    except ConfigError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        sys.exit(1)
-
-    start: date = (
-        args.start if args.start is not None else (config.start or date(2000, 1, 1))
-    )
-    end: date = args.end if args.end is not None else (config.end or date.today())
-
-    _validate(args, config, start, end)
-
-    # Prompt before ConsoleRenderer starts — getpass conflicts with Rich live rendering.
+async def _run_sync(
+    args: argparse.Namespace,
+    config: AppConfig,
+    sync_logger: SyncLogger,
+    start: date,
+    end: date,
+) -> None:
+    # Prompt before ConsoleRenderer starts — getpass conflicts with Rich.
     keepass_password: str | None = None
     if _credentials_needed(config) and args.creds_keepass:
         keepass_password = os.environ.get("KEEPASS_PASSWORD") or getpass.getpass(
@@ -221,7 +214,7 @@ async def _run(args: argparse.Namespace) -> None:
     }
 
     with ConsoleRenderer() as renderer:
-        tracker = TaskTracker(renderer)
+        tracker = TaskTracker(renderer, sync_logger=sync_logger)
         provider = (
             _make_provider(args, tracker, keepass_password=keepass_password)
             if _credentials_needed(config)
@@ -244,7 +237,10 @@ async def _run(args: argparse.Namespace) -> None:
 
         try:
             sources = await build_sources(
-                config, provider, tracker, on_strava_token_refresh=_on_token_refresh
+                config,
+                provider,
+                tracker,
+                on_strava_token_refresh=_on_token_refresh,
             )
             destinations = await build_destinations(
                 config,
@@ -270,6 +266,50 @@ async def _run(args: argparse.Namespace) -> None:
         await executor.run(start, end, force=args.force)
 
 
+async def _run(args: argparse.Namespace) -> None:
+    try:
+        config = load_config(args.config)
+    except ConfigError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    sync_logger: SyncLogger | None = None
+    try:
+        sync_logger = SyncLogger(config.cache_dir / "sync.log")
+
+        start: date = (
+            args.start if args.start is not None else (config.start or date(2000, 1, 1))
+        )
+        end: date = args.end if args.end is not None else (config.end or date.today())
+
+        _validate(args, config, start, end)
+
+        sync_logger.run_start(start=start, end=end, force=args.force)
+        if _credentials_needed(config):
+            if args.creds_json:
+                sync_logger.info(f"[credentials] Source: JSON file {args.creds_json}")
+            elif args.creds_keepass:
+                sync_logger.info(f"[credentials] Source: KeePass {args.creds_keepass}")
+
+        await _run_sync(args, config, sync_logger, start, end)
+
+        sync_logger.run_end()
+    except Exception as exc:
+        if sync_logger is not None:
+            sync_logger.error(f"Unexpected error: {exc}", exc_info=True)
+            print(f"error: {exc}", file=sys.stderr)
+            print(
+                f"(see {sync_logger.path} for the full traceback)",
+                file=sys.stderr,
+            )
+        else:
+            print(f"error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    finally:
+        if sync_logger is not None:
+            sync_logger.close()
+
+
 def main() -> None:
     parser = _build_arg_parser()
     args = parser.parse_args()
@@ -277,7 +317,6 @@ def main() -> None:
         asyncio.run(_run(args))
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
-        traceback.print_exc(file=sys.stderr)
         sys.exit(1)
 
 

@@ -345,12 +345,45 @@ class SyncExecutor:
                 await tracking[0].advance(tracking[1])
         return by_dest
 
+    def _compute_borrowed_descriptions(
+        self, candidates: list[CacheEntry]
+    ) -> dict[tuple[str, str], str]:
+        source_priority = {spec.source_id: spec.priority for spec, _ in self._sources}
+        source_order = {spec.source_id: i for i, (spec, _) in enumerate(self._sources)}
+        min_overlap_s = self._planner.min_overlap_s
+        fallback_s = self._planner.fallback_s
+
+        result: dict[tuple[str, str], str] = {}
+        for winner in candidates:
+            if winner.description is not None:
+                continue
+            winner_key = (
+                source_priority.get(winner.source_id, _UNKNOWN_PRIORITY),
+                source_order.get(winner.source_id, _UNKNOWN_ORDER),
+            )
+            for other in candidates:
+                if other.source_id == winner.source_id:
+                    continue
+                if other.description is None:
+                    continue
+                other_key = (
+                    source_priority.get(other.source_id, _UNKNOWN_PRIORITY),
+                    source_order.get(other.source_id, _UNKNOWN_ORDER),
+                )
+                if winner_key < other_key and _entries_overlap(
+                    winner, other, min_overlap_s, fallback_s
+                ):
+                    result[(winner.external_id, winner.source_id)] = other.description
+                    break
+        return result
+
     async def _upload_to_dest(
         self,
         dest_id: str,
         entries: list[CacheEntry],
         connector: ServiceConnector,
         tracking: tuple[TaskTracker, str] | None,
+        borrowed_descriptions: dict[tuple[str, str], str] | None = None,
     ) -> None:
         log = self._tracker.sync_logger if self._tracker is not None else None
         dest_label = connector.user_label
@@ -358,6 +391,11 @@ class SyncExecutor:
         try:
             for entry in entries:
                 content = self._cache.read_content(entry)
+                description = entry.description
+                if description is None and borrowed_descriptions is not None:
+                    description = borrowed_descriptions.get(
+                        (entry.external_id, entry.source_id)
+                    )
                 activity = Activity(
                     external_id=entry.external_id,
                     name=entry.name,
@@ -366,7 +404,7 @@ class SyncExecutor:
                     elapsed_s=entry.elapsed_s,
                     content=content,
                     format=entry.format,
-                    description=entry.description,
+                    description=description,
                 )
                 local_path = await connector.upload_activity(activity)
                 self._cache.mark_uploaded(entry, dest_id, local_path=local_path)
@@ -411,6 +449,8 @@ class SyncExecutor:
         if not by_dest:
             return
 
+        borrowed_descriptions = self._compute_borrowed_descriptions(candidates)
+
         tracker = self._tracker
         dest_map = {dest_id: conn for dest_id, conn in self._destinations}
         dest_task_names: dict[str, str] = {}
@@ -427,4 +467,6 @@ class SyncExecutor:
             tracking = (
                 (tracker, task_name) if tracker is not None and task_name else None
             )
-            await self._upload_to_dest(dest_id, entries, dest_map[dest_id], tracking)
+            await self._upload_to_dest(
+                dest_id, entries, dest_map[dest_id], tracking, borrowed_descriptions
+            )

@@ -158,10 +158,10 @@ async def test_strava_source_builds_strava_connector(tracker: TaskTracker) -> No
 
 
 async def test_strava_source_token_refresh_callback_wired(tracker: TaskTracker) -> None:
-    refreshed: list[tuple[str, StravaCredentials]] = []
+    refreshed: list[tuple[str, StravaCredentials, str]] = []
 
-    def on_refresh(src_id: str, new_creds: StravaCredentials) -> None:
-        refreshed.append((src_id, new_creds))
+    def on_refresh(src_id: str, new_creds: StravaCredentials, user_label: str) -> None:
+        refreshed.append((src_id, new_creds, user_label))
 
     provider = _FakeProvider([_STRAVA_CREDS])
     sources = await build_sources(
@@ -177,9 +177,9 @@ async def test_strava_source_token_refresh_callback_wired(tracker: TaskTracker) 
         client_id=99999, client_secret="s", refresh_token="new-rt"
     )
     assert connector._on_token_refresh is not None
-    connector._on_token_refresh(new_creds)
+    connector._on_token_refresh(new_creds, "John Doe")
 
-    assert refreshed == [("strava-main", new_creds)]
+    assert refreshed == [("strava-main", new_creds, "John Doe")]
 
 
 async def test_strava_source_no_callback_sets_to_none(tracker: TaskTracker) -> None:
@@ -331,10 +331,10 @@ async def test_different_strava_cred_refs_allowed(tracker: TaskTracker) -> None:
 async def test_strava_token_refresh_callback_called_with_connector_id(
     tracker: TaskTracker,
 ) -> None:
-    refreshed: list[tuple[str, StravaCredentials]] = []
+    refreshed: list[tuple[str, StravaCredentials, str]] = []
 
-    def on_refresh(dest_id: str, new_creds: StravaCredentials) -> None:
-        refreshed.append((dest_id, new_creds))
+    def on_refresh(dest_id: str, new_creds: StravaCredentials, user_label: str) -> None:
+        refreshed.append((dest_id, new_creds, user_label))
 
     provider = _FakeProvider([_STRAVA_CREDS])
     dests = await build_destinations(
@@ -350,9 +350,9 @@ async def test_strava_token_refresh_callback_called_with_connector_id(
         client_id=99999, client_secret="s", refresh_token="new-rt"
     )
     assert connector._on_token_refresh is not None
-    connector._on_token_refresh(new_creds)
+    connector._on_token_refresh(new_creds, "John Doe")
 
-    assert refreshed == [("strava-upload", new_creds)]
+    assert refreshed == [("strava-upload", new_creds, "John Doe")]
 
 
 async def test_no_callback_sets_strava_callback_to_none(tracker: TaskTracker) -> None:

@@ -221,15 +221,15 @@ async def _run_sync(
             else _NullProvider()
         )
 
-        def _on_token_refresh(dest_id: str, new_creds: StravaCredentials) -> None:
+        def _on_token_refresh(
+            dest_id: str, new_creds: StravaCredentials, user_label: str
+        ) -> None:
             if isinstance(provider, JsonFileProvider):
                 provider.update_refresh_token(
                     strava_cred_map[dest_id], new_creds.refresh_token
                 )
-                print(
-                    f"info: Strava refresh token for {dest_id!r} auto-updated"
-                    f" in {args.creds_json}.",
-                    file=sys.stderr,
+                sync_logger.info(
+                    f"[strava] Token refresh ({user_label}): saved to {args.creds_json}"
                 )
 
         cache = ActivityCache(config.cache_dir)

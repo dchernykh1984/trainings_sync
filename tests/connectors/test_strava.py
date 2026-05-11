@@ -195,11 +195,11 @@ class TestLogin:
         assert connector._credentials.refresh_token == "rotated_refresh"
 
     async def test_calls_on_token_refresh_callback(self, tracker: TaskTracker) -> None:
-        received: list[StravaCredentials] = []
+        received: list[tuple[StravaCredentials, str]] = []
         connector = StravaConnector(
             credentials=_CREDENTIALS,
             tracker=tracker,
-            on_token_refresh=received.append,
+            on_token_refresh=lambda creds, label: received.append((creds, label)),
         )
         with (
             patch("app.connectors.strava.Client") as mock_client_class,
@@ -213,8 +213,10 @@ class TestLogin:
             await connector.login()
 
         assert len(received) == 1
-        assert received[0].refresh_token == "rotated_refresh"
-        assert received[0].client_id == _CREDENTIALS.client_id
+        creds, label = received[0]
+        assert creds.refresh_token == "rotated_refresh"
+        assert creds.client_id == _CREDENTIALS.client_id
+        assert label == "John Doe"
 
     async def test_task_fails_on_error(
         self, connector: StravaConnector, tracker: TaskTracker
@@ -233,7 +235,7 @@ class TestLogin:
         assert _first_task(tracker).status == TaskStatus.FAILED
 
     async def test_task_fails_when_callback_raises(self, tracker: TaskTracker) -> None:
-        def _failing_callback(creds: StravaCredentials) -> None:
+        def _failing_callback(creds: StravaCredentials, label: str) -> None:
             raise OSError("disk full")
 
         connector = StravaConnector(

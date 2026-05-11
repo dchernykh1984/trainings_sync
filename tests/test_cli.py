@@ -213,6 +213,7 @@ class TestBuildSourcesCallback:
                                 client_secret="secret",
                                 refresh_token=new_rt,
                             ),
+                            "John Doe",
                         )
 
             return [((None, None), _FakeConnector())]
@@ -280,6 +281,7 @@ class TestTokenRefreshCallback:
                                 client_secret="client-secret",
                                 refresh_token=new_rt,
                             ),
+                            "John Doe",
                         )
 
             return [("strava-dest", _FakeConnector())]

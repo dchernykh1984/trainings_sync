@@ -113,7 +113,7 @@ class GarminConnector(ServiceConnector):
             await self._tracker.fail(task_name, error=f"Login failed: {exc}")
             raise
         if log:
-            log.info("[garmin] Login: success")
+            log.info(f"[garmin] Login: success ({self._credentials.login})")
         self._client = client
         await self._tracker.advance(task_name)
         await self._tracker.finish(task_name)
@@ -145,8 +145,8 @@ class GarminConnector(ServiceConnector):
                 await self._tracker.advance(task_name, amount=len(page))
                 if log:
                     log.debug(
-                        f"[garmin] List: page {page_start // _PAGE_SIZE}"
-                        f" -> {len(page)} activities"
+                        f"[garmin] List ({self._credentials.login}):"
+                        f" page {page_start // _PAGE_SIZE} -> {len(page)} activities"
                     )
                 if len(page) < _PAGE_SIZE:
                     break
@@ -205,6 +205,7 @@ class GarminConnector(ServiceConnector):
     async def upload_activity(self, activity: Activity) -> str | None:
         log = self._tracker.sync_logger
         client = self._require_client()
+        account = self._credentials.login
         date_str = activity.start_time.strftime("%Y-%m-%d")
         pre_existing_ids = await _ids_on_date(client, date_str)
 
@@ -220,7 +221,7 @@ class GarminConnector(ServiceConnector):
                 raise
             if log:
                 log.info(
-                    f"[garmin] Upload: {activity.external_id!r}"
+                    f"[garmin] Upload ({account}): {activity.external_id!r}"
                     f" {activity.start_time.date()} - duplicate, skipped"
                 )
             return None
@@ -231,7 +232,7 @@ class GarminConnector(ServiceConnector):
         if activity_id is None:
             if log:
                 log.warning(
-                    f"[garmin] Upload: {activity.external_id!r}"
+                    f"[garmin] Upload ({account}): {activity.external_id!r}"
                     f" - uploaded but activity ID not found"
                 )
             return None
@@ -246,7 +247,7 @@ class GarminConnector(ServiceConnector):
             )
         if log:
             log.info(
-                f"[garmin] Upload: {activity.external_id!r}"
+                f"[garmin] Upload ({account}): {activity.external_id!r}"
                 f" {activity.start_time.date()} - success (id={activity_id})"
             )
         return None

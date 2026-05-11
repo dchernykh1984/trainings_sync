@@ -19,18 +19,18 @@ from app.core.planner import SourceSpec
 from app.credentials.base import CredentialProvider, StravaCredentials
 from app.tracking.tracker import TaskTracker
 
-OnStravaTokenRefresh = Callable[[str, StravaCredentials], None]
+OnStravaTokenRefresh = Callable[[str, StravaCredentials, str], None]
 
 
 def _strava_callback(
     connector_id: str,
     on_refresh: OnStravaTokenRefresh | None,
-) -> Callable[[StravaCredentials], None] | None:
+) -> Callable[[StravaCredentials, str], None] | None:
     if on_refresh is None:
         return None
 
-    def _cb(new_creds: StravaCredentials) -> None:
-        on_refresh(connector_id, new_creds)
+    def _cb(new_creds: StravaCredentials, user_label: str) -> None:
+        on_refresh(connector_id, new_creds, user_label)
 
     return _cb
 

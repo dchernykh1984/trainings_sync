@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import date
 from pathlib import Path
 
@@ -10,6 +11,17 @@ from app.parsers.fit import FitParser
 from app.parsers.gpx import GpxParser
 from app.parsers.tcx import TcxParser
 from app.tracking.tracker import TaskTracker
+
+
+def _write_sidecar(path: Path, payload: str) -> None:
+    tmp = path.with_suffix(".tmp")
+    try:
+        tmp.write_text(payload, encoding="utf-8")
+        tmp.replace(path)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
+
 
 _DEFAULT_PARSERS: dict[str, ActivityParser] = {
     ".fit": FitParser(),
@@ -137,13 +149,22 @@ class LocalFolderConnector(ServiceConnector):
     async def download_activity(self, meta: ActivityMeta) -> Activity:
         path = Path(meta.external_id)
         content = await asyncio.to_thread(path.read_bytes)
+        description: str | None = None
+        sidecar = path.with_suffix(".json")
+        if sidecar.exists():
+            raw = json.loads(
+                await asyncio.to_thread(sidecar.read_text, encoding="utf-8")
+            )
+            description = raw.get("description") or None
         return Activity(
             external_id=meta.external_id,
             name=meta.name,
             sport_type=meta.sport_type,
             start_time=meta.start_time,
+            elapsed_s=meta.elapsed_s,
             content=content,
             format=path.suffix.lstrip(".").lower(),
+            description=description,
         )
 
     def has_activity(self, external_id: str, source_id: str) -> bool:
@@ -169,5 +190,13 @@ class LocalFolderConnector(ServiceConnector):
             f"{activity.start_time.strftime('%Y%m%dT%H%M%S')}_{stem}.{activity.format}"
         )
         dest = self._folder / filename
+        sidecar = dest.with_suffix(".json")
         await asyncio.to_thread(dest.write_bytes, activity.content)
+        if activity.description is not None:
+            payload = json.dumps(
+                {"description": activity.description}, ensure_ascii=False
+            )
+            await asyncio.to_thread(_write_sidecar, sidecar, payload)
+        else:
+            await asyncio.to_thread(sidecar.unlink, missing_ok=True)
         return str(dest)

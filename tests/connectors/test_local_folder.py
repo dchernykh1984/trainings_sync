@@ -90,6 +90,13 @@ def tracker() -> TaskTracker:
 
 
 @pytest.fixture
+def tracker_with_log() -> TaskTracker:
+    sync_logger = MagicMock()
+    sync_logger.info = MagicMock()
+    return TaskTracker(_FakeRenderer(), sync_logger=sync_logger)
+
+
+@pytest.fixture
 def folder(tmp_path: Path) -> Path:
     return tmp_path
 
@@ -691,6 +698,79 @@ class TestUploadActivityReturnsPath:
         assert isinstance(result, str)
         assert result == str(folder / "20260501T082855_12345.fit")
         assert Path(result).is_file()
+
+
+class TestUserLabel:
+    def test_user_label_is_folder_path(
+        self, folder: Path, tracker: TaskTracker
+    ) -> None:
+        connector = _make_connector(folder, tracker)
+        assert connector.user_label == str(folder)
+
+
+class TestLoginWithLogging:
+    async def test_login_logs_when_sync_logger_present(
+        self, tracker_with_log: TaskTracker, tmp_path: Path
+    ) -> None:
+        connector = LocalFolderConnector(folder=tmp_path, tracker=tracker_with_log)
+        await connector.login()
+        log = tracker_with_log.sync_logger
+        assert log is not None
+        msgs = [c.args[0] for c in log.info.call_args_list]  # type: ignore[attr-defined]
+        assert any("[local-folder]" in m and str(tmp_path) in m for m in msgs)
+
+
+class TestListActivitiesWithLogging:
+    async def test_disk_scan_logs_when_sync_logger_present(
+        self, tracker_with_log: TaskTracker, tmp_path: Path
+    ) -> None:
+        connector = LocalFolderConnector(folder=tmp_path, tracker=tracker_with_log)
+        await connector.list_activities(date(2026, 5, 1), date(2026, 5, 1))
+        log = tracker_with_log.sync_logger
+        assert log is not None
+        msgs = [c.args[0] for c in log.info.call_args_list]  # type: ignore[attr-defined]
+        assert any(
+            "[local-folder]" in m and "disk scan" in m and str(tmp_path) in m
+            for m in msgs
+        )
+
+    async def test_cache_backed_logs_when_sync_logger_present(
+        self, tracker_with_log: TaskTracker, tmp_path: Path
+    ) -> None:
+        cache = ActivityCache(tmp_path / "cache")
+        cache.load()
+        _make_cache_entry(cache, dest_id="local-dest")
+        folder = tmp_path / "output"
+        folder.mkdir()
+        connector = LocalFolderConnector(
+            folder=folder,
+            tracker=tracker_with_log,
+            cache=cache,
+            dest_id="local-dest",
+        )
+        await connector.list_activities(date(2026, 5, 1), date(2026, 5, 1))
+        log = tracker_with_log.sync_logger
+        assert log is not None
+        msgs = [c.args[0] for c in log.info.call_args_list]  # type: ignore[attr-defined]
+        assert any("[local-folder]" in m and "cache-backed" in m for m in msgs)
+
+    async def test_cache_backed_exception_fails_task_and_raises(
+        self, tracker_with_log: TaskTracker, tmp_path: Path
+    ) -> None:
+        cache = MagicMock()
+        cache.all_entries.side_effect = RuntimeError("cache boom")
+        folder = tmp_path / "output"
+        folder.mkdir()
+        connector = LocalFolderConnector(
+            folder=folder,
+            tracker=tracker_with_log,
+            cache=cache,
+            dest_id="local-dest",
+        )
+        with pytest.raises(RuntimeError, match="cache boom"):
+            await connector.list_activities(date(2026, 5, 1), date(2026, 5, 1))
+        task = next(iter(tracker_with_log.tasks.values()))
+        assert task.status == TaskStatus.FAILED
 
 
 class TestCacheBackedIntegration:

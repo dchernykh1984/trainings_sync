@@ -6,6 +6,7 @@ from datetime import date, datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from stravalib.exc import ObjectNotFound
 
 from app.connectors.base import Activity, ActivityMeta, ActivityUnavailableError
 from app.connectors.strava import StravaConnector
@@ -67,6 +68,14 @@ def tracker() -> TaskTracker:
 
 
 @pytest.fixture
+def tracker_with_log() -> TaskTracker:
+    sync_logger = MagicMock()
+    sync_logger.info = MagicMock()
+    sync_logger.debug = MagicMock()
+    return TaskTracker(_FakeRenderer(), sync_logger=sync_logger)
+
+
+@pytest.fixture
 def mock_client() -> MagicMock:
     return MagicMock()
 
@@ -77,9 +86,22 @@ def connector(tracker: TaskTracker) -> StravaConnector:
 
 
 @pytest.fixture
+def connector_with_log(tracker_with_log: TaskTracker) -> StravaConnector:
+    return StravaConnector(credentials=_CREDENTIALS, tracker=tracker_with_log)
+
+
+@pytest.fixture
 def logged_in(connector: StravaConnector, mock_client: MagicMock) -> StravaConnector:
     connector._client = mock_client
     return connector
+
+
+@pytest.fixture
+def logged_in_with_log(
+    connector_with_log: StravaConnector, mock_client: MagicMock
+) -> StravaConnector:
+    connector_with_log._client = mock_client
+    return connector_with_log
 
 
 def _first_task(tracker: TaskTracker) -> Task:
@@ -260,6 +282,26 @@ class TestLogin:
             await connector.login()
 
         assert _first_task(tracker).status == TaskStatus.FAILED
+
+
+class TestListActivitiesError:
+    async def test_exception_in_get_activities_fails_task_and_raises(
+        self, logged_in: StravaConnector, mock_client: MagicMock, tracker: TaskTracker
+    ) -> None:
+        mock_client.get_activities.side_effect = OSError("network boom")
+
+        with (
+            patch(
+                "app.connectors.strava.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=_call_sync,
+            ),
+            pytest.raises(OSError, match="network boom"),
+        ):
+            await logged_in.list_activities(_START, _END)
+
+        task = next(iter(tracker.tasks.values()))
+        assert task.status == TaskStatus.FAILED
 
 
 class TestListActivities:
@@ -576,3 +618,90 @@ class TestUploadActivity:
     async def test_raises_when_not_logged_in(self, connector: StravaConnector) -> None:
         with pytest.raises(RuntimeError, match="login"):
             await connector.upload_activity(_make_activity())
+
+
+class TestLoginWithLogging:
+    async def test_login_logs_when_sync_logger_present(
+        self, connector_with_log: StravaConnector, tracker_with_log: TaskTracker
+    ) -> None:
+        with (
+            patch("app.connectors.strava.Client") as mock_client_class,
+            patch(
+                "app.connectors.strava.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=_call_sync,
+            ),
+        ):
+            _setup_login_mock(mock_client_class)
+            await connector_with_log.login()
+
+        log = tracker_with_log.sync_logger
+        assert log is not None
+        msgs = [c.args[0] for c in log.info.call_args_list]  # type: ignore[attr-defined]
+        assert any("athlete_id=1613761" in m and "John Doe" in m for m in msgs)
+
+    async def test_login_success_log_without_athlete_name(
+        self, tracker_with_log: TaskTracker
+    ) -> None:
+        connector = StravaConnector(credentials=_CREDENTIALS, tracker=tracker_with_log)
+        with (
+            patch("app.connectors.strava.Client") as mock_client_class,
+            patch(
+                "app.connectors.strava.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=_call_sync,
+            ),
+        ):
+            # athlete with no name parts -> _athlete_name stays ""
+            mock_client_class.return_value.refresh_access_token.return_value = {
+                "access_token": "tok",
+                "refresh_token": "rt",
+                "expires_at": 9999999999,
+            }
+            mock_client_class.return_value.get_athlete.return_value.id = 1234
+            mock_client_class.return_value.get_athlete.return_value.firstname = ""
+            mock_client_class.return_value.get_athlete.return_value.lastname = ""
+            await connector.login()
+
+        log = tracker_with_log.sync_logger
+        assert log is not None
+        msgs = [c.args[0] for c in log.info.call_args_list]  # type: ignore[attr-defined]
+        assert any("athlete_id=1234" in m for m in msgs)
+        assert not any("John Doe" in m for m in msgs)
+
+
+class TestListActivitiesWithLogging:
+    async def test_list_activities_logs_pages_when_sync_logger_present(
+        self, logged_in_with_log: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.get_activities.return_value = [_make_strava_activity()]
+
+        with patch(
+            "app.connectors.strava.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            await logged_in_with_log.list_activities(_START, _END)
+
+        log = logged_in_with_log._tracker.sync_logger
+        assert log is not None
+        msg = log.debug.call_args.args[0]  # type: ignore[attr-defined]
+        assert "[strava]" in msg
+        assert "page" in msg
+
+
+class TestDownloadActivityObjectNotFound:
+    async def test_object_not_found_raises_activity_unavailable_error(
+        self, logged_in: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.get_activity_streams.side_effect = ObjectNotFound("not found")
+
+        with (
+            patch(
+                "app.connectors.strava.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=_call_sync,
+            ),
+            pytest.raises(ActivityUnavailableError, match="streams not found"),
+        ):
+            await logged_in.download_activity(_make_meta())

@@ -145,6 +145,13 @@ class TestActivityMeta:
         assert meta.end_time == _DT + timedelta(seconds=3600)
 
 
+class TestUserLabel:
+    def test_default_user_label_is_empty_string(
+        self, connector: _FakeConnector
+    ) -> None:
+        assert connector.user_label == ""
+
+
 class TestHasActivity:
     def test_default_returns_true(self, connector: _FakeConnector) -> None:
         assert connector.has_activity("12345", "garmin") is True

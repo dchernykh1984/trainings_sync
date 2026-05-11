@@ -65,6 +65,15 @@ def tracker() -> TaskTracker:
 
 
 @pytest.fixture
+def tracker_with_log() -> TaskTracker:
+    sync_logger = MagicMock()
+    sync_logger.info = MagicMock()
+    sync_logger.debug = MagicMock()
+    sync_logger.warning = MagicMock()
+    return TaskTracker(_FakeRenderer(), sync_logger=sync_logger)
+
+
+@pytest.fixture
 def mock_client() -> MagicMock:
     return MagicMock()
 
@@ -75,9 +84,22 @@ def connector(tracker: TaskTracker) -> GarminConnector:
 
 
 @pytest.fixture
+def connector_with_log(tracker_with_log: TaskTracker) -> GarminConnector:
+    return GarminConnector(credentials=_CREDENTIALS, tracker=tracker_with_log)
+
+
+@pytest.fixture
 def logged_in(connector: GarminConnector, mock_client: MagicMock) -> GarminConnector:
     connector._client = mock_client
     return connector
+
+
+@pytest.fixture
+def logged_in_with_log(
+    connector_with_log: GarminConnector, mock_client: MagicMock
+) -> GarminConnector:
+    connector_with_log._client = mock_client
+    return connector_with_log
 
 
 def _first_task(tracker: TaskTracker) -> Task:
@@ -591,3 +613,145 @@ class TestUploadActivity:
             await logged_in.upload_activity(_make_activity())
 
         mock_client.set_activity_name.assert_not_called()
+
+
+class TestUserLabel:
+    def test_user_label_returns_login(self, connector: GarminConnector) -> None:
+        assert connector.user_label == _CREDENTIALS.login
+
+
+class TestFindUploadedIdException:
+    async def test_activity_without_start_time_gmt_is_skipped(
+        self, logged_in: GarminConnector, mock_client: MagicMock
+    ) -> None:
+        """Activity missing 'startTimeGMT' triggers KeyError -> continue."""
+        # First call (pre-existing): empty; second call (post-upload): entry missing key
+        mock_client.get_activities_by_date.side_effect = [
+            [],
+            [{"activityId": 99999}],  # missing "startTimeGMT"
+        ]
+
+        with (
+            patch("app.connectors.garmin._UPLOAD_SETTLE_S", 0),
+            patch(
+                "app.connectors.garmin.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=_call_sync,
+            ),
+        ):
+            result = await logged_in.upload_activity(_make_activity())
+
+        # The entry was skipped (no match found), so None is returned
+        assert result is None
+        mock_client.set_activity_name.assert_not_called()
+
+
+class TestLoginWithLogging:
+    async def test_login_logs_success_when_sync_logger_present(
+        self, connector_with_log: GarminConnector, tracker_with_log: TaskTracker
+    ) -> None:
+        with (
+            patch("app.connectors.garmin.Garmin"),
+            patch(
+                "app.connectors.garmin.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=_call_sync,
+            ),
+        ):
+            await connector_with_log.login()
+
+        log = tracker_with_log.sync_logger
+        assert log is not None
+        msgs = [c.args[0] for c in log.info.call_args_list]  # type: ignore[attr-defined]
+        assert any("user@example.com" in m and "Login" in m for m in msgs)
+        assert any("user@example.com" in m and "success" in m for m in msgs)
+
+
+class TestListActivitiesWithLogging:
+    async def test_list_activities_logs_pages_when_sync_logger_present(
+        self, logged_in_with_log: GarminConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.connectapi.return_value = [_RAW_ACTIVITY]
+
+        with patch(
+            "app.connectors.garmin.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            await logged_in_with_log.list_activities(_START, _END)
+
+        log = logged_in_with_log._tracker.sync_logger
+        assert log is not None
+        msg = log.debug.call_args.args[0]  # type: ignore[attr-defined]
+        assert "[garmin]" in msg
+        assert "user@example.com" in msg
+        assert "page" in msg
+
+
+class TestUploadActivityWithLogging:
+    async def test_upload_logs_success_when_activity_id_found(
+        self, logged_in_with_log: GarminConnector, mock_client: MagicMock
+    ) -> None:
+        post = {"activityId": 99999, "startTimeGMT": "2026-01-01 08:00:00"}
+        mock_client.get_activities_by_date.side_effect = [[], [post]]
+
+        with (
+            patch("app.connectors.garmin._UPLOAD_SETTLE_S", 0),
+            patch(
+                "app.connectors.garmin.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=_call_sync,
+            ),
+        ):
+            await logged_in_with_log.upload_activity(_make_activity())
+
+        log = logged_in_with_log._tracker.sync_logger
+        assert log is not None
+        msg = log.info.call_args.args[0]  # type: ignore[attr-defined]
+        assert "[garmin]" in msg
+        assert "user@example.com" in msg
+        assert "success" in msg
+
+    async def test_upload_logs_warning_when_activity_id_not_found(
+        self, logged_in_with_log: GarminConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.get_activities_by_date.return_value = []
+
+        with (
+            patch("app.connectors.garmin._UPLOAD_SETTLE_S", 0),
+            patch(
+                "app.connectors.garmin.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=_call_sync,
+            ),
+        ):
+            await logged_in_with_log.upload_activity(_make_activity())
+
+        log = logged_in_with_log._tracker.sync_logger
+        assert log is not None
+        msg = log.warning.call_args.args[0]  # type: ignore[attr-defined]
+        assert "[garmin]" in msg
+        assert "user@example.com" in msg
+        assert "not found" in msg
+
+    async def test_upload_logs_duplicate_skip(
+        self, logged_in_with_log: GarminConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.upload_activity.side_effect = GarminConnectConnectionError(
+            "Duplicate Activity"
+        )
+        mock_client.get_activities_by_date.return_value = []
+
+        with patch(
+            "app.connectors.garmin.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            await logged_in_with_log.upload_activity(_make_activity())
+
+        log = logged_in_with_log._tracker.sync_logger
+        assert log is not None
+        msg = log.info.call_args.args[0]  # type: ignore[attr-defined]
+        assert "[garmin]" in msg
+        assert "user@example.com" in msg
+        assert "duplicate" in msg

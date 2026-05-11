@@ -731,6 +731,127 @@ class TestSyncExecutorTracking:
         assert "Sync: plan" not in finish_names
 
 
+class TestSyncExecutorEntryOverlapsMeta:
+    async def test_uploads_when_existing_dest_activity_does_not_overlap(
+        self, cache: ActivityCache
+    ) -> None:
+        # Cache has an entry at 8:00-9:00; destination has existing meta at 11:00-12:00.
+        # No overlap -> _entry_overlaps_meta returns False -> entry is uploaded.
+        t_existing = datetime(2026, 1, 1, 11, 0, tzinfo=_UTC)
+        cache.put(_entry(source_id="garmin"), b"fit-content")
+        existing_meta = _meta(
+            external_id="dest-1", start_time=t_existing, elapsed_s=3600
+        )
+        dest = _dest_conn(existing=[existing_meta])
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), _source_conn())],
+            destinations=[("strava", dest)],
+            cache=cache,
+        )
+        await executor.run(_START, _END)
+        dest.upload_activity.assert_called_once()
+
+
+class TestSyncSourceUserLabelFallback:
+    async def test_shadowed_entry_skipped_only_winner_uploaded(
+        self, cache: ActivityCache
+    ) -> None:
+        # hi (priority=1) and lo (priority=2) overlap -> lo shadowed by hi.
+        # Only hi is uploaded; the run must not raise.
+        t0 = _T0
+        cache.put(_entry(external_id="hi-act", source_id="hi", start_time=t0), b"hi")
+        cache.put(_entry(external_id="lo-act", source_id="lo", start_time=t0), b"lo")
+        dest = _dest_conn()
+        tracker = _make_tracker()
+        tracker.sync_logger = MagicMock()
+        tracker.sync_logger.info = MagicMock()
+        tracker.sync_logger.debug = MagicMock()
+        executor = SyncExecutor(
+            sources=[
+                (_spec("hi", priority=1), _source_conn()),
+                (_spec("lo", priority=2), _source_conn()),
+            ],
+            destinations=[("strava", dest)],
+            cache=cache,
+            tracker=tracker,
+        )
+        await executor.run(_START, _END)
+        assert dest.upload_activity.call_count == 1
+
+    async def test_source_user_label_returns_empty_when_not_found(
+        self, cache: ActivityCache
+    ) -> None:
+        # _source_user_label should return "" for an unknown source_id not in
+        # sources or destinations. Force this by putting a log and having a shadowed
+        # entry whose source doesn't appear anywhere.
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), _source_conn())],
+            destinations=[("strava", _dest_conn())],
+            cache=cache,
+        )
+        result = executor._source_user_label("unknown-source-id")
+        assert result == ""
+
+    async def test_source_user_label_found_in_destinations(
+        self, cache: ActivityCache
+    ) -> None:
+        # source_id matches a destination connector id (not a source).
+        dest_conn = _dest_conn()
+        dest_conn.user_label = "strava-label"
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), _source_conn())],
+            destinations=[("strava", dest_conn)],
+            cache=cache,
+        )
+        result = executor._source_user_label("strava")
+        assert result == "strava-label"
+
+    async def test_dest_user_label_returns_empty_when_not_found(
+        self, cache: ActivityCache
+    ) -> None:
+        # _dest_user_label returns "" when dest_id is absent from destinations.
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), _source_conn())],
+            destinations=[("strava", _dest_conn())],
+            cache=cache,
+        )
+        result = executor._dest_user_label("unknown-dest-id")
+        assert result == ""
+
+
+class TestLogUploadDecisionNoDest:
+    async def test_log_upload_decision_with_dest_id_none_sets_where_to_empty(
+        self, cache: ActivityCache
+    ) -> None:
+        # When dest_id is None (shadowed activity), _log_upload_decision uses where="".
+        t0 = _T0
+        cache.put(_entry(external_id="hi-act", source_id="hi", start_time=t0), b"hi")
+        cache.put(_entry(external_id="lo-act", source_id="lo", start_time=t0), b"lo")
+        dest = _dest_conn()
+        tracker = _make_tracker()
+        tracker.sync_logger = MagicMock()
+        tracker.sync_logger.info = MagicMock()
+        tracker.sync_logger.debug = MagicMock()
+        executor = SyncExecutor(
+            sources=[
+                (_spec("hi", priority=1), _source_conn()),
+                (_spec("lo", priority=2), _source_conn()),
+            ],
+            destinations=[("strava", dest)],
+            cache=cache,
+            tracker=tracker,
+        )
+        # lo is shadowed by hi, triggering _log_upload_decision with dest_id=None.
+        await executor.run(_START, _END)
+        msgs = [c.args[0] for c in tracker.sync_logger.debug.call_args_list]
+        shadow_msgs = [m for m in msgs if "[upload-plan] lo:" in m]
+        assert shadow_msgs, (
+            "expected at least one upload-plan debug line for source 'lo'"
+        )
+        assert any("shadowed by hi" in m for m in shadow_msgs)
+        assert not any(" -> " in m for m in shadow_msgs)
+
+
 class TestSyncExecutorUploadPriority:
     async def test_higher_priority_source_wins_upload(
         self, cache: ActivityCache

@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from stravalib.exc import ObjectNotFound
 
-from app.connectors.base import Activity, ActivityMeta, ActivityUnavailableError
+from app.connectors.base import Activity, ActivityMeta
 from app.connectors.strava import StravaConnector
 from app.credentials.base import StravaCredentials
 from app.tracking.tracker import ProgressRenderer, Task, TaskStatus, TaskTracker
@@ -77,7 +77,9 @@ def tracker_with_log() -> TaskTracker:
 
 @pytest.fixture
 def mock_client() -> MagicMock:
-    return MagicMock()
+    m = MagicMock()
+    m.get_activity.return_value.description = None
+    return m
 
 
 @pytest.fixture
@@ -501,7 +503,20 @@ class TestDownloadActivity:
             99999, types=["time", "latlng", "altitude", "heartrate", "cadence", "watts"]
         )
 
-    async def test_raises_when_time_stream_absent(
+    async def test_get_activity_failure_raises_and_cleans_up(
+        self, logged_in: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.get_activity.side_effect = RuntimeError("network error")
+        mock_client.get_activity_streams.return_value = _make_gps_streams()
+        with patch(
+            "app.connectors.strava.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            with pytest.raises(RuntimeError, match="network error"):
+                await logged_in.download_activity(_make_meta())
+
+    async def test_returns_minimal_tcx_when_time_stream_absent(
         self, logged_in: StravaConnector, mock_client: MagicMock
     ) -> None:
         mock_client.get_activity_streams.return_value = {}
@@ -510,12 +525,14 @@ class TestDownloadActivity:
             new_callable=AsyncMock,
             side_effect=_call_sync,
         ):
-            with pytest.raises(
-                ActivityUnavailableError, match="time stream is absent or empty"
-            ):
-                await logged_in.download_activity(_make_meta())
+            result = await logged_in.download_activity(_make_meta())
 
-    async def test_raises_when_time_stream_empty(
+        assert result.format == "tcx"
+        ns = {"tcd": "http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2"}
+        root = ET.fromstring(result.content)  # noqa: S314
+        assert not root.findall(".//tcd:Trackpoint", ns)
+
+    async def test_returns_minimal_tcx_when_time_stream_empty(
         self, logged_in: StravaConnector, mock_client: MagicMock
     ) -> None:
         mock_client.get_activity_streams.return_value = {"time": _make_stream([])}
@@ -524,10 +541,40 @@ class TestDownloadActivity:
             new_callable=AsyncMock,
             side_effect=_call_sync,
         ):
-            with pytest.raises(
-                ActivityUnavailableError, match="time stream is absent or empty"
-            ):
-                await logged_in.download_activity(_make_meta())
+            result = await logged_in.download_activity(_make_meta())
+
+        assert result.format == "tcx"
+        ns = {"tcd": "http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2"}
+        root = ET.fromstring(result.content)  # noqa: S314
+        assert not root.findall(".//tcd:Trackpoint", ns)
+
+    async def test_description_populated_from_get_activity(
+        self, logged_in: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.get_activity_streams.return_value = _make_gps_streams()
+        mock_client.get_activity.return_value.description = "Great ride today!"
+        with patch(
+            "app.connectors.strava.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            result = await logged_in.download_activity(_make_meta())
+
+        assert result.description == "Great ride today!"
+
+    async def test_description_none_when_get_activity_has_no_description(
+        self, logged_in: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.get_activity_streams.return_value = _make_gps_streams()
+        mock_client.get_activity.return_value.description = None
+        with patch(
+            "app.connectors.strava.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            result = await logged_in.download_activity(_make_meta())
+
+        assert result.description is None
 
     async def test_gpx_tolerates_shorter_optional_streams(
         self, logged_in: StravaConnector, mock_client: MagicMock
@@ -619,6 +666,103 @@ class TestUploadActivity:
         with pytest.raises(RuntimeError, match="login"):
             await connector.upload_activity(_make_activity())
 
+    async def test_sets_description_when_result_has_id(
+        self, logged_in: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        mock_uploader = MagicMock()
+        mock_uploader.wait.return_value.id = 42
+        mock_client.upload_activity.return_value = mock_uploader
+        activity = Activity(
+            external_id="99999",
+            name="Morning Run",
+            sport_type="Run",
+            start_time=_DT,
+            content=b"content",
+            format="tcx",
+            description="Felt great",
+        )
+
+        with patch(
+            "app.connectors.strava.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            await logged_in.upload_activity(activity)
+
+        mock_client.update_activity.assert_called_once_with(
+            42, description="Felt great"
+        )
+
+    async def test_skips_description_update_when_result_has_no_id(
+        self, logged_in: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        mock_uploader = MagicMock()
+        mock_uploader.wait.return_value = None
+        mock_client.upload_activity.return_value = mock_uploader
+        activity = Activity(
+            external_id="99999",
+            name="Morning Run",
+            sport_type="Run",
+            start_time=_DT,
+            content=b"content",
+            format="tcx",
+            description="Felt great",
+        )
+
+        with patch(
+            "app.connectors.strava.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            await logged_in.upload_activity(activity)
+
+        mock_client.update_activity.assert_not_called()
+
+    async def test_skips_description_update_when_no_description(
+        self, logged_in: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        mock_uploader = MagicMock()
+        mock_uploader.wait.return_value.id = 42
+        mock_client.upload_activity.return_value = mock_uploader
+
+        with patch(
+            "app.connectors.strava.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            await logged_in.upload_activity(_make_activity())
+
+        mock_client.update_activity.assert_not_called()
+
+    async def test_logs_warning_when_result_has_no_id(
+        self, logged_in_with_log: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        mock_uploader = MagicMock()
+        mock_uploader.wait.return_value = None
+        mock_client.upload_activity.return_value = mock_uploader
+        activity = Activity(
+            external_id="99999",
+            name="Morning Run",
+            sport_type="Run",
+            start_time=_DT,
+            content=b"content",
+            format="tcx",
+            description="Felt great",
+        )
+
+        with patch(
+            "app.connectors.strava.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            await logged_in_with_log.upload_activity(activity)
+
+        log = logged_in_with_log._tracker.sync_logger
+        assert log is not None
+        msgs = [c.args[0] for c in log.warning.call_args_list]  # type: ignore[attr-defined]
+        assert any("[strava]" in m and "description not set" in m for m in msgs)
+        assert any(logged_in_with_log.user_label in m for m in msgs)
+
 
 class TestLoginWithLogging:
     async def test_login_logs_when_sync_logger_present(
@@ -691,17 +835,39 @@ class TestListActivitiesWithLogging:
 
 
 class TestDownloadActivityObjectNotFound:
-    async def test_object_not_found_raises_activity_unavailable_error(
+    async def test_returns_minimal_tcx_when_streams_not_found(
         self, logged_in: StravaConnector, mock_client: MagicMock
     ) -> None:
         mock_client.get_activity_streams.side_effect = ObjectNotFound("not found")
+        mock_client.get_activity.return_value.description = "Manual workout"
 
-        with (
-            patch(
-                "app.connectors.strava.asyncio.to_thread",
-                new_callable=AsyncMock,
-                side_effect=_call_sync,
-            ),
-            pytest.raises(ActivityUnavailableError, match="streams not found"),
+        with patch(
+            "app.connectors.strava.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
         ):
-            await logged_in.download_activity(_make_meta())
+            result = await logged_in.download_activity(_make_meta())
+
+        assert result.format == "tcx"
+        assert result.description == "Manual workout"
+        ns = {"tcd": "http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2"}
+        root = ET.fromstring(result.content)  # noqa: S314
+        assert not root.findall(".//tcd:Trackpoint", ns)
+
+    async def test_fallback_logs_when_sync_logger_present(
+        self, logged_in_with_log: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.get_activity_streams.side_effect = ObjectNotFound("not found")
+        mock_client.get_activity.return_value.description = None
+
+        with patch(
+            "app.connectors.strava.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            await logged_in_with_log.download_activity(_make_meta())
+
+        log = logged_in_with_log._tracker.sync_logger
+        assert log is not None
+        msgs = [c.args[0] for c in log.info.call_args_list]  # type: ignore[attr-defined]
+        assert any("[strava]" in m and "minimal TCX fallback" in m for m in msgs)

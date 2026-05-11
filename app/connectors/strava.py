@@ -16,7 +16,6 @@ from stravalib.exc import ObjectNotFound
 from app.connectors.base import (
     Activity,
     ActivityMeta,
-    ActivityUnavailableError,
     ServiceConnector,
 )
 from app.credentials.base import StravaCredentials
@@ -244,21 +243,47 @@ class StravaConnector(ServiceConnector):
 
     async def download_activity(self, meta: ActivityMeta) -> Activity:
         client = self._require_client()
-        try:
-            streams = await asyncio.to_thread(
+        log = self._tracker.sync_logger
+        streams_task = asyncio.create_task(
+            asyncio.to_thread(
                 client.get_activity_streams,
                 int(meta.external_id),
                 types=_STREAM_TYPES,
             )
-        except ObjectNotFound as exc:
-            raise ActivityUnavailableError(
-                f"Strava activity {meta.external_id!r} ({meta.name!r}):"
-                " streams not found - likely a manual activity without sensor data"
-            ) from exc
-        if not _stream_data(streams, "time"):
-            raise ActivityUnavailableError(
-                f"Strava activity {meta.external_id!r} ({meta.name!r}):"
-                " time stream is absent or empty"
+        )
+        detail_task = asyncio.create_task(
+            asyncio.to_thread(client.get_activity, int(meta.external_id))
+        )
+        try:
+            raw = await detail_task
+        except Exception:
+            streams_task.cancel()
+            await asyncio.gather(streams_task, return_exceptions=True)
+            raise
+        description: str | None = getattr(raw, "description", None) or None
+
+        no_streams = False
+        try:
+            streams = await streams_task
+        except ObjectNotFound:
+            no_streams = True
+            streams = None
+
+        if no_streams or not _stream_data(streams, "time"):
+            if log:
+                log.info(
+                    f"[strava] Download ({self.user_label}): {meta.external_id!r}"
+                    f" {meta.name!r} - no sensor data, minimal TCX fallback"
+                )
+            return Activity(
+                external_id=meta.external_id,
+                name=meta.name,
+                sport_type=meta.sport_type,
+                start_time=meta.start_time,
+                elapsed_s=meta.elapsed_s,
+                content=_build_tcx(meta, None),
+                format="tcx",
+                description=description,
             )
         if bool(_stream_data(streams, "latlng")):
             content = _build_gpx(meta, streams)
@@ -274,15 +299,30 @@ class StravaConnector(ServiceConnector):
             elapsed_s=meta.elapsed_s,
             content=content,
             format=fmt,
+            description=description,
         )
 
-    async def upload_activity(self, activity: Activity) -> None:
+    async def upload_activity(self, activity: Activity) -> str | None:
         client = self._require_client()
+        log = self._tracker.sync_logger
         uploader = await asyncio.to_thread(
             client.upload_activity,
             activity_file=io.BytesIO(activity.content),
             data_type=activity.format,  # type: ignore[arg-type]
             name=activity.name,
         )
-        await asyncio.to_thread(uploader.wait)
+        result = await asyncio.to_thread(uploader.wait)
+        if activity.description:
+            activity_id = getattr(result, "id", None) if result is not None else None
+            if activity_id:
+                await asyncio.to_thread(
+                    client.update_activity,
+                    activity_id,
+                    description=activity.description,
+                )
+            elif log:
+                log.warning(
+                    f"[strava] Upload ({self.user_label}): {activity.external_id!r}"
+                    " - description not set (activity ID unavailable after upload)"
+                )
         return None

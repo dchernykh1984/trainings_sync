@@ -4,6 +4,10 @@ import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, replace
 from enum import Enum, auto
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.tracking.sync_logger import SyncLogger
 
 
 class TaskStatus(Enum):
@@ -44,10 +48,19 @@ class ProgressRenderer(ABC):
 
 
 class TaskTracker:
-    def __init__(self, renderer: ProgressRenderer) -> None:
+    def __init__(
+        self,
+        renderer: ProgressRenderer,
+        sync_logger: SyncLogger | None = None,
+    ) -> None:
         self._renderer = renderer
+        self._sync_logger = sync_logger
         self._tasks: dict[str, Task] = {}
         self._lock = asyncio.Lock()
+
+    @property
+    def sync_logger(self) -> SyncLogger | None:
+        return self._sync_logger
 
     async def add_task(self, name: str, total: int | None) -> None:
         if total is not None and total <= 0:
@@ -58,6 +71,8 @@ class TaskTracker:
             task = Task(name=name, total=total)
             self._tasks[name] = task
         self._renderer.on_task_added(task)
+        if self._sync_logger is not None:
+            self._sync_logger.info(f"[task] {name} — started")
 
     async def advance(self, name: str, amount: int = 1) -> None:
         if amount <= 0:
@@ -83,6 +98,8 @@ class TaskTracker:
             if task.total is not None:
                 task.progress = task.total
         self._renderer.on_task_done(task)
+        if self._sync_logger is not None:
+            self._sync_logger.info(f"[task] {name} — done")
 
     async def fail(self, name: str, error: str) -> None:
         async with self._lock:
@@ -92,6 +109,8 @@ class TaskTracker:
             task.status = TaskStatus.FAILED
             task.error = error
         self._renderer.on_task_failed(task)
+        if self._sync_logger is not None:
+            self._sync_logger.error(f"[task] {name} — FAILED: {error}")
 
     async def update_total(self, name: str, total: int) -> None:
         if total <= 0:
@@ -114,6 +133,8 @@ class TaskTracker:
                 return
             task.warnings.append(message)
         self._renderer.on_task_warning(task, message)
+        if self._sync_logger is not None:
+            self._sync_logger.warning(f"[task] {name} warning: {message}")
 
     @property
     def tasks(self) -> dict[str, Task]:

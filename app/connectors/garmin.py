@@ -95,6 +95,9 @@ class GarminConnector(ServiceConnector):
     async def login(self) -> None:
         task_name = self._task_name("Garmin: login")
         await self._tracker.add_task(task_name, total=1)
+        log = self._tracker.sync_logger
+        if log:
+            log.info(f"[garmin] Login: account={self._credentials.login!r}")
         client = Garmin(
             email=self._credentials.login,
             password=self._credentials.password,
@@ -104,6 +107,8 @@ class GarminConnector(ServiceConnector):
         except Exception as exc:
             await self._tracker.fail(task_name, error=f"Login failed: {exc}")
             raise
+        if log:
+            log.info("[garmin] Login: success")
         self._client = client
         await self._tracker.advance(task_name)
         await self._tracker.finish(task_name)
@@ -112,6 +117,7 @@ class GarminConnector(ServiceConnector):
         client = self._require_client()
         task_name = self._task_name("Garmin: fetch activity list")
         await self._tracker.add_task(task_name, total=None)
+        log = self._tracker.sync_logger
         raw: list[dict] = []
         page_start = 0
         url = client.garmin_connect_activities
@@ -131,6 +137,11 @@ class GarminConnector(ServiceConnector):
                 raw.extend(page)
                 page_start += _PAGE_SIZE
                 await self._tracker.advance(task_name, amount=len(page))
+                if log:
+                    log.debug(
+                        f"[garmin] List: page {page_start // _PAGE_SIZE}"
+                        f" → {len(page)} activities"
+                    )
                 if len(page) < _PAGE_SIZE:
                     break
         except Exception as exc:
@@ -186,6 +197,7 @@ class GarminConnector(ServiceConnector):
         )
 
     async def upload_activity(self, activity: Activity) -> str | None:
+        log = self._tracker.sync_logger
         client = self._require_client()
         date_str = activity.start_time.strftime("%Y-%m-%d")
         pre_existing_ids = await _ids_on_date(client, date_str)
@@ -200,12 +212,22 @@ class GarminConnector(ServiceConnector):
         except GarminConnectConnectionError as e:
             if "Duplicate Activity" not in str(e):
                 raise
+            if log:
+                log.info(
+                    f"[garmin] Upload: {activity.external_id!r}"
+                    f" {activity.start_time.date()} — duplicate, skipped"
+                )
             return None
         finally:
             Path(tmp_path).unlink(missing_ok=True)
 
         activity_id = await _find_uploaded_id(client, activity, pre_existing_ids)
         if activity_id is None:
+            if log:
+                log.warning(
+                    f"[garmin] Upload: {activity.external_id!r}"
+                    f" — uploaded but activity ID not found"
+                )
             return None
         if activity.name:
             await asyncio.to_thread(
@@ -215,5 +237,10 @@ class GarminConnector(ServiceConnector):
         if garmin_type:
             await asyncio.to_thread(
                 client.set_activity_type, str(activity_id), 0, garmin_type, 0
+            )
+        if log:
+            log.info(
+                f"[garmin] Upload: {activity.external_id!r}"
+                f" {activity.start_time.date()} — success (id={activity_id})"
             )
         return None

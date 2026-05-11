@@ -151,6 +151,9 @@ class StravaConnector(ServiceConnector):
     async def login(self) -> None:
         task_name = self._task_name("Strava: login")
         await self._tracker.add_task(task_name, total=1)
+        log = self._tracker.sync_logger
+        if log:
+            log.info(f"[strava] Login: client_id={self._credentials.client_id}")
         try:
             token_info = await asyncio.to_thread(
                 Client().refresh_access_token,
@@ -170,6 +173,8 @@ class StravaConnector(ServiceConnector):
         except Exception as exc:
             await self._tracker.fail(task_name, error=f"Login failed: {exc}")
             raise
+        if log:
+            log.info("[strava] Login: success")
         await self._tracker.advance(task_name)
         await self._tracker.finish(task_name)
 
@@ -180,9 +185,11 @@ class StravaConnector(ServiceConnector):
 
         task_name = self._task_name("Strava: fetch activity list")
         await self._tracker.add_task(task_name, total=None)
+        log = self._tracker.sync_logger
         raw: list = []
         seen_ids: set[int] = set()
         _page_size = 200
+        page_num = 0
         try:
             it = iter(client.get_activities(after=after, before=before))
             while True:
@@ -191,9 +198,14 @@ class StravaConnector(ServiceConnector):
                 )
                 if not batch or batch[0].id in seen_ids:
                     break
+                page_num += 1
                 seen_ids.update(a.id for a in batch)
                 raw.extend(batch)
                 await self._tracker.advance(task_name, amount=len(batch))
+                if log:
+                    log.debug(
+                        f"[strava] List: page {page_num} → {len(batch)} activities"
+                    )
         except Exception as exc:
             await self._tracker.fail(task_name, error=str(exc))
             raise

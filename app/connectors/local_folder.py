@@ -36,6 +36,9 @@ class LocalFolderConnector(ServiceConnector):
     async def login(self) -> None:
         task_name = self._task_name("Local folder: connect")
         await self._tracker.add_task(task_name, total=1)
+        log = self._tracker.sync_logger
+        if log:
+            log.info(f"[local-folder] Connect: folder={self._folder}")
         if not self._folder.is_dir():
             error = f"Folder not found: {self._folder}"
             await self._tracker.fail(task_name, error=error)
@@ -67,52 +70,60 @@ class LocalFolderConnector(ServiceConnector):
             )
         return metas
 
+    def _scan_disk(
+        self, start: date, end: date
+    ) -> tuple[list[ActivityMeta], list[str]]:
+        result: list[ActivityMeta] = []
+        warnings: list[str] = []
+        for path in sorted(self._folder.iterdir()):
+            parser = self._parsers.get(path.suffix.lower())
+            if parser is None:
+                continue
+            try:
+                data = parser.parse(path.read_bytes())
+            except ActivityParseError as exc:
+                warnings.append(f"Skipped {path.name}: {exc}")
+                continue
+            if not (start <= data.start_time.date() <= end):
+                continue
+            result.append(
+                ActivityMeta(
+                    external_id=str(path),
+                    name=data.name or "",
+                    sport_type=data.sport_type or "",
+                    start_time=data.start_time,
+                )
+            )
+        return result, warnings
+
     async def list_activities(self, start: date, end: date) -> list[ActivityMeta]:
+        log = self._tracker.sync_logger
+        task_name = self._task_name("Local folder: scan")
+        await self._tracker.add_task(task_name, total=1)
         if self._cache is not None and self._dest_id:
-            task_name = self._task_name("Local folder: scan")
-            await self._tracker.add_task(task_name, total=1)
             try:
                 metas = await asyncio.to_thread(self._list_from_cache, start, end)
             except Exception as exc:
                 await self._tracker.fail(task_name, error=str(exc))
                 raise
-            await self._tracker.advance(task_name)
-            await self._tracker.finish(task_name)
-            return metas
-
-        def _scan() -> tuple[list[ActivityMeta], list[str]]:
-            result: list[ActivityMeta] = []
-            warnings: list[str] = []
-            for path in sorted(self._folder.iterdir()):
-                parser = self._parsers.get(path.suffix.lower())
-                if parser is None:
-                    continue
-                try:
-                    data = parser.parse(path.read_bytes())
-                except ActivityParseError as exc:
-                    warnings.append(f"Skipped {path.name}: {exc}")
-                    continue
-                if not (start <= data.start_time.date() <= end):
-                    continue
-                result.append(
-                    ActivityMeta(
-                        external_id=str(path),
-                        name=data.name or "",
-                        sport_type=data.sport_type or "",
-                        start_time=data.start_time,
-                    )
+            if log:
+                log.info(
+                    f"[local-folder] List (cache-backed): {len(metas)} activities"
+                    f" in {self._folder}"
                 )
-            return result, warnings
-
-        task_name = self._task_name("Local folder: scan")
-        await self._tracker.add_task(task_name, total=1)
-        try:
-            metas, warnings = await asyncio.to_thread(_scan)
-        except Exception as exc:
-            await self._tracker.fail(task_name, error=str(exc))
-            raise
-        for warning in warnings:
-            await self._tracker.warn(task_name, warning)
+        else:
+            try:
+                metas, warnings = await asyncio.to_thread(self._scan_disk, start, end)
+            except Exception as exc:
+                await self._tracker.fail(task_name, error=str(exc))
+                raise
+            for warning in warnings:
+                await self._tracker.warn(task_name, warning)
+            if log:
+                log.info(
+                    f"[local-folder] List (disk scan): {len(metas)} activities"
+                    f" in {self._folder}"
+                )
         await self._tracker.advance(task_name)
         await self._tracker.finish(task_name)
         return metas

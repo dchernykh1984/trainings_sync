@@ -31,6 +31,7 @@ class CacheEntry:
     uploaded_to: tuple[str, ...] = field(default_factory=tuple)  # destination ids
     # per-destination file paths for local folder destinations: ((dest_id, path), ...)
     local_paths: tuple[tuple[str, str], ...] = field(default_factory=tuple)
+    description: str | None = None
 
     def __post_init__(self) -> None:
         offset = self.start_time.utcoffset()
@@ -80,6 +81,7 @@ def _entry_to_dict(e: CacheEntry) -> dict:
         "needs_refresh": e.needs_refresh,
         "uploaded_to": list(e.uploaded_to),
         "local_paths": [[k, v] for k, v in e.local_paths],
+        "description": e.description,
     }
 
 
@@ -103,6 +105,7 @@ def _entry_from_dict(d: dict) -> CacheEntry:
         needs_refresh=d.get("needs_refresh", False),
         uploaded_to=tuple(d.get("uploaded_to", [])),
         local_paths=tuple((p[0], p[1]) for p in d.get("local_paths", [])),
+        description=d.get("description"),
     )
 
 

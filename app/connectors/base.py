@@ -47,6 +47,7 @@ class ActivityMeta:
 class Activity(ActivityMeta):
     content: bytes
     format: str
+    description: str | None = field(default=None, kw_only=True)
 
 
 class ServiceConnector(ABC):

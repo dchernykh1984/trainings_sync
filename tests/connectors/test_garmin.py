@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.connectors.base import Activity, ActivityMeta
-from app.connectors.garmin import _PAGE_SIZE, GarminConnector
+from app.connectors.garmin import _PAGE_SIZE, GarminConnector, _set_activity_description
 from app.credentials.base import Credentials
 from app.tracking.tracker import ProgressRenderer, Task, TaskStatus, TaskTracker
 
@@ -75,7 +75,9 @@ def tracker_with_log() -> TaskTracker:
 
 @pytest.fixture
 def mock_client() -> MagicMock:
-    return MagicMock()
+    m = MagicMock()
+    m.get_activity_details.return_value = {"description": None}
+    return m
 
 
 @pytest.fixture
@@ -436,6 +438,105 @@ class TestDownloadActivity:
         ):
             await logged_in.download_activity(_make_meta())
 
+    async def test_description_populated_from_description_key(
+        self, logged_in: GarminConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.download_activity.return_value = _make_zip()
+        mock_client.get_activity_details.return_value = {"description": "Great climb!"}
+
+        with patch(
+            "app.connectors.garmin.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            result = await logged_in.download_activity(_make_meta())
+
+        assert result.description == "Great climb!"
+
+    async def test_description_populated_from_activity_description_key(
+        self, logged_in: GarminConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.download_activity.return_value = _make_zip()
+        mock_client.get_activity_details.return_value = {
+            "activityDescription": "Great climb!"
+        }
+
+        with patch(
+            "app.connectors.garmin.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            result = await logged_in.download_activity(_make_meta())
+
+        assert result.description == "Great climb!"
+
+    async def test_description_none_when_not_in_details(
+        self, logged_in: GarminConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.download_activity.return_value = _make_zip()
+        mock_client.get_activity_details.return_value = {}
+
+        with patch(
+            "app.connectors.garmin.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            result = await logged_in.download_activity(_make_meta())
+
+        assert result.description is None
+
+    async def test_description_none_when_details_api_fails(
+        self, logged_in: GarminConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.download_activity.return_value = _make_zip()
+        mock_client.get_activity_details.side_effect = RuntimeError("timeout")
+
+        with patch(
+            "app.connectors.garmin.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            result = await logged_in.download_activity(_make_meta())
+
+        assert result.description is None
+        assert result.content == b"fit-content"
+
+    async def test_details_failure_logs_warning_when_sync_logger_present(
+        self, logged_in_with_log: GarminConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.download_activity.return_value = _make_zip()
+        mock_client.get_activity_details.side_effect = RuntimeError("timeout")
+
+        with patch(
+            "app.connectors.garmin.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            await logged_in_with_log.download_activity(_make_meta())
+
+        log = logged_in_with_log._tracker.sync_logger
+        assert log is not None
+        msgs = [c.args[0] for c in log.warning.call_args_list]  # type: ignore[attr-defined]
+        assert any(
+            "[garmin]" in m
+            and _CREDENTIALS.login in m
+            and "description unavailable" in m
+            for m in msgs
+        )
+
+    async def test_zip_failure_raises_and_cancels_detail_task(
+        self, logged_in: GarminConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.download_activity.side_effect = RuntimeError("network error")
+
+        with patch(
+            "app.connectors.garmin.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            with pytest.raises(RuntimeError, match="network error"):
+                await logged_in.download_activity(_make_meta())
+
     async def test_raises_when_not_logged_in(self, connector: GarminConnector) -> None:
         with pytest.raises(RuntimeError, match="login"):
             await connector.download_activity(_make_meta())
@@ -613,6 +714,70 @@ class TestUploadActivity:
             await logged_in.upload_activity(_make_activity())
 
         mock_client.set_activity_name.assert_not_called()
+
+    async def test_set_activity_description_called_when_description_present(
+        self, logged_in: GarminConnector, mock_client: MagicMock
+    ) -> None:
+        activity = Activity(
+            external_id="12345",
+            name="Morning Run",
+            sport_type="running",
+            start_time=_DT,
+            content=b"fit-content",
+            format="fit",
+            description="Hard effort on the climb",
+        )
+        post = {"activityId": 99999, "startTimeGMT": "2026-01-01 08:00:00"}
+        mock_client.get_activities_by_date.side_effect = [[], [post]]
+
+        with (
+            patch("app.connectors.garmin._UPLOAD_SETTLE_S", 0),
+            patch("app.connectors.garmin._set_activity_description") as mock_set_desc,
+            patch(
+                "app.connectors.garmin.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=_call_sync,
+            ),
+        ):
+            await logged_in.upload_activity(activity)
+
+        mock_set_desc.assert_called_once_with(
+            mock_client, 99999, "Hard effort on the climb"
+        )
+
+    async def test_set_activity_description_not_called_when_no_description(
+        self, logged_in: GarminConnector, mock_client: MagicMock
+    ) -> None:
+        post = {"activityId": 99999, "startTimeGMT": "2026-01-01 08:00:00"}
+        mock_client.get_activities_by_date.side_effect = [[], [post]]
+
+        with (
+            patch("app.connectors.garmin._UPLOAD_SETTLE_S", 0),
+            patch("app.connectors.garmin._set_activity_description") as mock_set_desc,
+            patch(
+                "app.connectors.garmin.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=_call_sync,
+            ),
+        ):
+            await logged_in.upload_activity(_make_activity())
+
+        mock_set_desc.assert_not_called()
+
+
+class TestSetActivityDescription:
+    def test_calls_client_put_with_correct_payload(self) -> None:
+        client = MagicMock()
+        client.garmin_connect_activity = (
+            "https://connect.garmin.com/activity-service/activity"
+        )
+        _set_activity_description(client, 42, "A tough ride")
+        client.client.put.assert_called_once_with(
+            "connectapi",
+            "https://connect.garmin.com/activity-service/activity/42",
+            json={"activityId": 42, "description": "A tough ride"},
+            api=True,
+        )
 
 
 class TestUserLabel:

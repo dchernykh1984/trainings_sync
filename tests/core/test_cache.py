@@ -124,7 +124,7 @@ class TestLoad:
                             "external_id": "1",
                             "source_id": "g",
                             "format": "fit",
-                            "start_time": "2026-01-01T08:00:00",  # naive — no +00:00
+                            "start_time": "2026-01-01T08:00:00",  # naive - no +00:00
                             "elapsed_s": None,
                             "filename": "g/x.fit",
                         }
@@ -628,28 +628,28 @@ class TestFindOverlapping:
     def test_returns_entry_that_partially_overlaps_from_before(
         self, cache: ActivityCache
     ) -> None:
-        cache.put(_entry_at(-1800), b"x")  # [07:30, 08:30] — overlap 1800s
+        cache.put(_entry_at(-1800), b"x")  # [07:30, 08:30] - overlap 1800s
 
         assert len(cache.find_overlapping(_meta())) == 1
 
     def test_returns_entry_that_partially_overlaps_from_after(
         self, cache: ActivityCache
     ) -> None:
-        cache.put(_entry_at(1800), b"x")  # [08:30, 09:30] — overlap 1800s
+        cache.put(_entry_at(1800), b"x")  # [08:30, 09:30] - overlap 1800s
 
         assert len(cache.find_overlapping(_meta())) == 1
 
     def test_returns_empty_when_entry_ends_before_meta_starts(
         self, cache: ActivityCache
     ) -> None:
-        cache.put(_entry_at(-3600), b"x")  # [07:00, 08:00] — touching, not overlapping
+        cache.put(_entry_at(-3600), b"x")  # [07:00, 08:00] - touching, not overlapping
 
         assert cache.find_overlapping(_meta()) == []
 
     def test_returns_empty_when_entry_starts_after_meta_ends(
         self, cache: ActivityCache
     ) -> None:
-        cache.put(_entry_at(3600), b"x")  # [09:00, 10:00] — touching, not overlapping
+        cache.put(_entry_at(3600), b"x")  # [09:00, 10:00] - touching, not overlapping
 
         assert cache.find_overlapping(_meta()) == []
 
@@ -664,10 +664,10 @@ class TestFindOverlapping:
         assert len(result) == 2
 
     def test_min_overlap_s_filters_tiny_overlap(self, cache: ActivityCache) -> None:
-        # entry starts at 08:59:30 → overlap with meta [08:00, 09:00] is 30s
+        # entry starts at 08:59:30 -> overlap with meta [08:00, 09:00] is 30s
         cache.put(_entry_at(3570), b"x")  # [08:59:30, 09:59:30]
 
-        # default min_overlap_s=60 → excluded
+        # default min_overlap_s=60 -> excluded
         assert cache.find_overlapping(_meta()) == []
 
     def test_min_overlap_s_custom_allows_small_overlap(
@@ -680,8 +680,8 @@ class TestFindOverlapping:
     def test_fallback_when_both_elapsed_none_within_tolerance(
         self, cache: ActivityCache
     ) -> None:
-        # meta elapsed_s=None → treated as fallback (3600s)
-        # entry starts 30 min after meta → overlap = 30 min ≥ 60s
+        # meta elapsed_s=None -> treated as fallback (3600s)
+        # entry starts 30 min after meta -> overlap = 30 min >= 60s
         cache.put(_entry_at(1800, elapsed_s=None), b"x")
 
         assert len(cache.find_overlapping(_meta(elapsed_s=None))) == 1
@@ -689,13 +689,13 @@ class TestFindOverlapping:
     def test_fallback_when_both_elapsed_none_beyond_tolerance(
         self, cache: ActivityCache
     ) -> None:
-        # entry starts 1h after meta → overlap = 0 (touches at boundary)
+        # entry starts 1h after meta -> overlap = 0 (touches at boundary)
         cache.put(_entry_at(3600, elapsed_s=None), b"x")
 
         assert cache.find_overlapping(_meta(elapsed_s=None)) == []
 
     def test_meta_elapsed_none_entry_has_elapsed(self, cache: ActivityCache) -> None:
-        # meta: [08:00, 08:00+fallback], entry: [08:15, 09:15] → clearly overlapping
+        # meta: [08:00, 08:00+fallback], entry: [08:15, 09:15] -> clearly overlapping
         cache.put(_entry_at(900, elapsed_s=3600), b"x")  # [08:15, 09:15]
 
         assert len(cache.find_overlapping(_meta(elapsed_s=None))) == 1

@@ -83,7 +83,7 @@ def _minimal(extra: dict | None = None) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Happy path — source types
+# Happy path - source types
 # ---------------------------------------------------------------------------
 
 
@@ -119,7 +119,7 @@ def test_local_folder_source(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Happy path — destination types
+# Happy path - destination types
 # ---------------------------------------------------------------------------
 
 
@@ -157,7 +157,7 @@ def test_all_types_together(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Happy path — AppConfig fields
+# Happy path - AppConfig fields
 # ---------------------------------------------------------------------------
 
 
@@ -259,7 +259,7 @@ def test_load_config_accepts_relative_path(
 
 
 # ---------------------------------------------------------------------------
-# ConfigError — file / JSON errors
+# ConfigError - file / JSON errors
 # ---------------------------------------------------------------------------
 
 
@@ -281,7 +281,7 @@ def test_root_not_object(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# ConfigError — root-level field validation
+# ConfigError - root-level field validation
 # ---------------------------------------------------------------------------
 
 
@@ -329,7 +329,7 @@ def test_date_not_a_string(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# ConfigError — source validation
+# ConfigError - source validation
 # ---------------------------------------------------------------------------
 
 
@@ -417,7 +417,7 @@ def test_duplicate_source_ids(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# ConfigError — destination validation
+# ConfigError - destination validation
 # ---------------------------------------------------------------------------
 
 

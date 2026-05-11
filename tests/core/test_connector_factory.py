@@ -110,7 +110,7 @@ def tracker() -> TaskTracker:
 
 
 # ---------------------------------------------------------------------------
-# build_sources — connector types
+# build_sources - connector types
 # ---------------------------------------------------------------------------
 
 
@@ -191,7 +191,7 @@ async def test_strava_source_no_callback_sets_to_none(tracker: TaskTracker) -> N
 
 
 # ---------------------------------------------------------------------------
-# build_sources — credential batching
+# build_sources - credential batching
 # ---------------------------------------------------------------------------
 
 
@@ -233,7 +233,7 @@ async def test_all_local_sources_batch_is_empty(
 
 
 # ---------------------------------------------------------------------------
-# build_destinations — connector types
+# build_destinations - connector types
 # ---------------------------------------------------------------------------
 
 
@@ -297,7 +297,7 @@ async def test_all_destination_types_built_in_order(
 
 
 # ---------------------------------------------------------------------------
-# build_destinations — duplicate Strava credential check
+# build_destinations - duplicate Strava credential check
 # ---------------------------------------------------------------------------
 
 
@@ -324,7 +324,7 @@ async def test_different_strava_cred_refs_allowed(tracker: TaskTracker) -> None:
 
 
 # ---------------------------------------------------------------------------
-# build_destinations — on_strava_token_refresh callback
+# build_destinations - on_strava_token_refresh callback
 # ---------------------------------------------------------------------------
 
 
@@ -366,7 +366,7 @@ async def test_no_callback_sets_strava_callback_to_none(tracker: TaskTracker) ->
 
 
 # ---------------------------------------------------------------------------
-# build_destinations — credential batching
+# build_destinations - credential batching
 # ---------------------------------------------------------------------------
 
 

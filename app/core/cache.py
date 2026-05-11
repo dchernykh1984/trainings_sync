@@ -6,9 +6,15 @@ import json
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
+from functools import cache
 from pathlib import Path
 
 from app.connectors.base import ActivityMeta
+
+
+@cache
+def _file_exists(path: Path) -> bool:
+    return path.is_file()
 
 
 @dataclass(frozen=True)
@@ -184,6 +190,7 @@ class ActivityCache:
         tmp = Path(str(file_path) + ".tmp")
         tmp.write_bytes(content)
         tmp.replace(file_path)
+        _file_exists.cache_clear()
 
         old_entries = [
             e
@@ -202,7 +209,7 @@ class ActivityCache:
         entry = self.get_entry(external_id, source_id)
         if entry is None:
             return False
-        return self._safe_path(entry.filename).is_file() and not entry.needs_refresh
+        return _file_exists(self._safe_path(entry.filename)) and not entry.needs_refresh
 
     def get_entry(self, external_id: str, source_id: str) -> CacheEntry | None:
         for e in self._entries:
@@ -230,6 +237,14 @@ class ActivityCache:
                 self._entries[i] = dataclasses.replace(e, needs_refresh=True)
         self.save()
 
+    def healthy_entries(self) -> list[CacheEntry]:
+        """Return entries whose backing file exists and are not marked for refresh."""
+        return [
+            e
+            for e in self._entries
+            if not e.needs_refresh and _file_exists(self._safe_path(e.filename))
+        ]
+
     def find_overlapping(
         self,
         meta: ActivityMeta,
@@ -239,7 +254,7 @@ class ActivityCache:
         return [
             e
             for e in self._entries
-            if self._safe_path(e.filename).is_file()
+            if _file_exists(self._safe_path(e.filename))
             and _intervals_overlap(
                 meta.start_time,
                 meta.elapsed_s,

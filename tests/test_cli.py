@@ -268,7 +268,7 @@ class TestTokenRefreshCallback:
         new_rt = "new-refresh-token"
 
         async def _fake_build_destinations(
-            _cfg, _provider, _tracker, on_strava_token_refresh=None
+            _cfg, _provider, _tracker, cache=None, on_strava_token_refresh=None
         ):
             class _FakeConnector:
                 async def login(self):

@@ -252,3 +252,4 @@ class StravaConnector(ServiceConnector):
             name=activity.name,
         )
         await asyncio.to_thread(uploader.wait)
+        return None

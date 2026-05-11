@@ -185,7 +185,7 @@ class GarminConnector(ServiceConnector):
             elapsed_s=meta.elapsed_s,
         )
 
-    async def upload_activity(self, activity: Activity) -> None:
+    async def upload_activity(self, activity: Activity) -> str | None:
         client = self._require_client()
         date_str = activity.start_time.strftime("%Y-%m-%d")
         pre_existing_ids = await _ids_on_date(client, date_str)
@@ -200,13 +200,13 @@ class GarminConnector(ServiceConnector):
         except GarminConnectConnectionError as e:
             if "Duplicate Activity" not in str(e):
                 raise
-            return
+            return None
         finally:
             Path(tmp_path).unlink(missing_ok=True)
 
         activity_id = await _find_uploaded_id(client, activity, pre_existing_ids)
         if activity_id is None:
-            return
+            return None
         if activity.name:
             await asyncio.to_thread(
                 client.set_activity_name, str(activity_id), activity.name
@@ -216,3 +216,4 @@ class GarminConnector(ServiceConnector):
             await asyncio.to_thread(
                 client.set_activity_type, str(activity_id), 0, garmin_type, 0
             )
+        return None

@@ -277,8 +277,8 @@ class SyncExecutor:
                     content=content,
                     format=entry.format,
                 )
-                await connector.upload_activity(activity)
-                self._cache.mark_uploaded(entry, dest_id)
+                local_path = await connector.upload_activity(activity)
+                self._cache.mark_uploaded(entry, dest_id, local_path=local_path)
                 if tracking is not None:
                     await tracking[0].advance(tracking[1])
         except Exception as exc:

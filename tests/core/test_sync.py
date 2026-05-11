@@ -209,6 +209,29 @@ class TestSyncExecutorDownload:
         assert entry.name == "Morning Run"
         assert entry.sport_type == "Run"
 
+    async def test_cached_entry_stores_description(self, cache: ActivityCache) -> None:
+        act = Activity(
+            external_id="act-1",
+            name="Morning Run",
+            sport_type="Run",
+            start_time=_T0,
+            elapsed_s=3600,
+            content=b"fit-content",
+            format="fit",
+            description="Felt great today",
+        )
+        conn = _source_conn(metas=[_meta()], activity=act)
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), conn)],
+            destinations=[],
+            cache=cache,
+        )
+        await executor.run(_START, _END)
+
+        entry = cache.get_entry("act-1", "garmin")
+        assert entry is not None
+        assert entry.description == "Felt great today"
+
     async def test_skips_cached_activity_without_force(
         self, cache: ActivityCache
     ) -> None:
@@ -288,6 +311,31 @@ class TestSyncExecutorUpload:
         assert uploaded.sport_type == "Run"
         assert uploaded.content == b"fit-content"
         assert uploaded.format == "fit"
+
+    async def test_uploaded_activity_carries_description(
+        self, cache: ActivityCache
+    ) -> None:
+        entry = CacheEntry(
+            external_id="act-1",
+            source_id="garmin",
+            format="fit",
+            start_time=_T0,
+            elapsed_s=3600,
+            name="Morning Run",
+            sport_type="Run",
+            description="Long climb today",
+        )
+        cache.put(entry, b"fit-content")
+        dest = _dest_conn()
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), _source_conn())],
+            destinations=[("strava", dest)],
+            cache=cache,
+        )
+        await executor.run(_START, _END)
+
+        uploaded: Activity = dest.upload_activity.call_args[0][0]
+        assert uploaded.description == "Long climb today"
 
     async def test_skips_already_uploaded_entry(self, cache: ActivityCache) -> None:
         cache.put(_entry(source_id="garmin", uploaded_to=("strava",)), b"content")

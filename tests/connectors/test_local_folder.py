@@ -8,6 +8,7 @@ import pytest
 
 from app.connectors.base import Activity, ActivityMeta
 from app.connectors.local_folder import LocalFolderConnector
+from app.core.cache import ActivityCache, CacheEntry
 from app.parsers.base import ActivityData, ActivityParseError, ActivityParser
 from app.tracking.tracker import ProgressRenderer, Task, TaskStatus, TaskTracker
 
@@ -455,3 +456,320 @@ class TestLocalFolderConnectorIntegration:
 
         assert result.content == content
         assert result.format == "fit"
+
+
+def _make_cache_entry(
+    cache: ActivityCache,
+    *,
+    dest_id: str,
+    start_time: datetime = _DT,
+    elapsed_s: int | None = 1800,
+    external_id: str = "42",
+    source_id: str = "garmin-main",
+    name: str = "Morning Ride",
+    sport_type: str = "cycling",
+    local_path: str | None = None,
+) -> CacheEntry:
+    entry = CacheEntry(
+        external_id=external_id,
+        source_id=source_id,
+        format="fit",
+        start_time=start_time,
+        elapsed_s=elapsed_s,
+        name=name,
+        sport_type=sport_type,
+    )
+    entry = cache.put(entry, b"fit-bytes")
+    return cache.mark_uploaded(entry, dest_id, local_path=local_path)
+
+
+class TestListActivitiesWithCache:
+    async def test_returns_meta_from_cache_not_file_system(
+        self, tmp_path: Path, tracker: TaskTracker
+    ) -> None:
+        cache = ActivityCache(tmp_path / "cache")
+        cache.load()
+        _make_cache_entry(cache, dest_id="local-dest")
+        folder = tmp_path / "output"
+        folder.mkdir()
+        connector = LocalFolderConnector(
+            folder=folder, tracker=tracker, cache=cache, dest_id="local-dest"
+        )
+
+        result = await connector.list_activities(date(2026, 5, 1), date(2026, 5, 1))
+
+        assert len(result) == 1
+        assert result[0].sport_type == "cycling"
+        assert result[0].name == "Morning Ride"
+
+    async def test_date_range_excludes_out_of_range(
+        self, tmp_path: Path, tracker: TaskTracker
+    ) -> None:
+        cache = ActivityCache(tmp_path / "cache")
+        cache.load()
+        _make_cache_entry(
+            cache,
+            dest_id="local-dest",
+            start_time=datetime(2026, 3, 1, 8, 0, tzinfo=timezone.utc),
+        )
+        folder = tmp_path / "output"
+        folder.mkdir()
+        connector = LocalFolderConnector(
+            folder=folder, tracker=tracker, cache=cache, dest_id="local-dest"
+        )
+
+        result = await connector.list_activities(date(2026, 5, 1), date(2026, 5, 31))
+
+        assert result == []
+
+    async def test_skips_entry_when_local_file_missing(
+        self, tmp_path: Path, tracker: TaskTracker
+    ) -> None:
+        folder = tmp_path / "output"
+        folder.mkdir()
+        cache = ActivityCache(tmp_path / "cache")
+        cache.load()
+        _make_cache_entry(
+            cache,
+            dest_id="local-dest",
+            local_path=str(folder / "nonexistent.fit"),
+        )
+        connector = LocalFolderConnector(
+            folder=folder, tracker=tracker, cache=cache, dest_id="local-dest"
+        )
+
+        result = await connector.list_activities(date(2026, 5, 1), date(2026, 5, 1))
+
+        assert result == []
+
+    async def test_includes_entry_without_local_path_backward_compat(
+        self, tmp_path: Path, tracker: TaskTracker
+    ) -> None:
+        # Entries uploaded before local_paths was introduced have no local_path.
+        # list_activities must trust the uploaded_to flag in that case.
+        cache = ActivityCache(tmp_path / "cache")
+        cache.load()
+        _make_cache_entry(cache, dest_id="local-dest", local_path=None)
+        folder = tmp_path / "output"
+        folder.mkdir()
+        connector = LocalFolderConnector(
+            folder=folder, tracker=tracker, cache=cache, dest_id="local-dest"
+        )
+
+        result = await connector.list_activities(date(2026, 5, 1), date(2026, 5, 1))
+
+        assert len(result) == 1
+
+    async def test_includes_elapsed_s_from_cache(
+        self, tmp_path: Path, tracker: TaskTracker
+    ) -> None:
+        cache = ActivityCache(tmp_path / "cache")
+        cache.load()
+        _make_cache_entry(cache, dest_id="local-dest", elapsed_s=3600)
+        folder = tmp_path / "output"
+        folder.mkdir()
+        connector = LocalFolderConnector(
+            folder=folder, tracker=tracker, cache=cache, dest_id="local-dest"
+        )
+
+        result = await connector.list_activities(date(2026, 5, 1), date(2026, 5, 1))
+
+        assert result[0].elapsed_s == 3600
+
+    async def test_excludes_entry_uploaded_to_other_dest(
+        self, tmp_path: Path, tracker: TaskTracker
+    ) -> None:
+        cache = ActivityCache(tmp_path / "cache")
+        cache.load()
+        _make_cache_entry(cache, dest_id="other-dest")
+        folder = tmp_path / "output"
+        folder.mkdir()
+        connector = LocalFolderConnector(
+            folder=folder, tracker=tracker, cache=cache, dest_id="local-dest"
+        )
+
+        result = await connector.list_activities(date(2026, 5, 1), date(2026, 5, 1))
+
+        assert result == []
+
+    async def test_does_not_parse_files_on_disk(
+        self, tmp_path: Path, tracker: TaskTracker
+    ) -> None:
+        cache = ActivityCache(tmp_path / "cache")
+        cache.load()
+        _make_cache_entry(cache, dest_id="local-dest")
+        folder = tmp_path / "output"
+        folder.mkdir()
+        (folder / "extra.fit").write_bytes(b"content")
+        mock_parser = _make_parser()
+        connector = LocalFolderConnector(
+            folder=folder,
+            tracker=tracker,
+            cache=cache,
+            dest_id="local-dest",
+            parsers={".fit": mock_parser},
+        )
+
+        await connector.list_activities(date(2026, 5, 1), date(2026, 5, 1))
+
+        mock_parser.parse.assert_not_called()  # type: ignore[attr-defined]
+
+
+class TestHasActivityWithCache:
+    def test_returns_true_when_file_exists_at_stored_path(
+        self, tmp_path: Path, tracker: TaskTracker
+    ) -> None:
+        local_file = tmp_path / "output" / "ride.fit"
+        local_file.parent.mkdir()
+        local_file.write_bytes(b"content")
+        cache = ActivityCache(tmp_path / "cache")
+        cache.load()
+        entry = cache.put(
+            CacheEntry(
+                external_id="42",
+                source_id="garmin-main",
+                format="fit",
+                start_time=_DT,
+                elapsed_s=None,
+            ),
+            b"fit-bytes",
+        )
+        cache.mark_uploaded(entry, "local-dest", local_path=str(local_file))
+        connector = LocalFolderConnector(
+            folder=tmp_path / "output",
+            tracker=tracker,
+            cache=cache,
+            dest_id="local-dest",
+        )
+
+        assert connector.has_activity("42", "garmin-main") is True
+
+    def test_returns_false_when_stored_file_missing(
+        self, tmp_path: Path, tracker: TaskTracker
+    ) -> None:
+        folder = tmp_path / "output"
+        folder.mkdir()
+        cache = ActivityCache(tmp_path / "cache")
+        cache.load()
+        entry = cache.put(
+            CacheEntry(
+                external_id="42",
+                source_id="garmin-main",
+                format="fit",
+                start_time=_DT,
+                elapsed_s=None,
+            ),
+            b"fit-bytes",
+        )
+        cache.mark_uploaded(entry, "local-dest", local_path=str(folder / "missing.fit"))
+        connector = LocalFolderConnector(
+            folder=folder, tracker=tracker, cache=cache, dest_id="local-dest"
+        )
+
+        assert connector.has_activity("42", "garmin-main") is False
+
+    def test_returns_false_when_no_cache_entry(
+        self, tmp_path: Path, tracker: TaskTracker
+    ) -> None:
+        folder = tmp_path / "output"
+        folder.mkdir()
+        cache = ActivityCache(tmp_path / "cache")
+        cache.load()
+        connector = LocalFolderConnector(
+            folder=folder, tracker=tracker, cache=cache, dest_id="local-dest"
+        )
+
+        assert connector.has_activity("42", "garmin-main") is False
+
+
+class TestUploadActivityReturnsPath:
+    async def test_returns_absolute_path_string(
+        self, connector: LocalFolderConnector, folder: Path
+    ) -> None:
+        result = await connector.upload_activity(_make_activity())
+
+        assert isinstance(result, str)
+        assert result == str(folder / "20260501T082855_12345.fit")
+        assert Path(result).is_file()
+
+
+class TestCacheBackedIntegration:
+    async def test_upload_mark_uploaded_list_cycle(
+        self, tmp_path: Path, tracker: TaskTracker
+    ) -> None:
+        """upload returns path, mark_uploaded stores it, list_activities returns it."""
+        cache = ActivityCache(tmp_path / "cache")
+        cache.load()
+        raw_entry = CacheEntry(
+            external_id="42",
+            source_id="garmin-main",
+            format="fit",
+            start_time=_DT,
+            elapsed_s=3600,
+            name="Morning Ride",
+            sport_type="cycling",
+        )
+        cached_entry = cache.put(raw_entry, b"fit-bytes")
+
+        folder = tmp_path / "output"
+        folder.mkdir()
+        connector = LocalFolderConnector(
+            folder=folder, tracker=tracker, cache=cache, dest_id="local-dest"
+        )
+
+        activity = Activity(
+            external_id="42",
+            name="Morning Ride",
+            sport_type="cycling",
+            start_time=_DT,
+            content=b"fit-bytes",
+            format="fit",
+            elapsed_s=3600,
+        )
+        local_path = await connector.upload_activity(activity)
+        cache.mark_uploaded(cached_entry, "local-dest", local_path=local_path)
+
+        result = await connector.list_activities(date(2026, 5, 1), date(2026, 5, 1))
+
+        assert len(result) == 1
+        assert result[0].name == "Morning Ride"
+        assert result[0].elapsed_s == 3600
+
+    async def test_file_deleted_then_list_returns_empty(
+        self, tmp_path: Path, tracker: TaskTracker
+    ) -> None:
+        """If the uploaded file is later deleted, list_activities excludes the entry."""
+        cache = ActivityCache(tmp_path / "cache")
+        cache.load()
+        cached_entry = cache.put(
+            CacheEntry(
+                external_id="42",
+                source_id="garmin-main",
+                format="fit",
+                start_time=_DT,
+                elapsed_s=None,
+            ),
+            b"fit-bytes",
+        )
+        folder = tmp_path / "output"
+        folder.mkdir()
+        connector = LocalFolderConnector(
+            folder=folder, tracker=tracker, cache=cache, dest_id="local-dest"
+        )
+
+        activity = Activity(
+            external_id="42",
+            name="",
+            sport_type="",
+            start_time=_DT,
+            content=b"fit-bytes",
+            format="fit",
+        )
+        local_path = await connector.upload_activity(activity)
+        assert local_path is not None
+        cache.mark_uploaded(cached_entry, "local-dest", local_path=local_path)
+        Path(local_path).unlink()  # simulate file being deleted
+
+        result = await connector.list_activities(date(2026, 5, 1), date(2026, 5, 1))
+
+        assert result == []

@@ -239,6 +239,9 @@ async def _run(args: argparse.Namespace) -> None:
                     file=sys.stderr,
                 )
 
+        cache = ActivityCache(config.cache_dir)
+        cache.load()
+
         try:
             sources = await build_sources(
                 config, provider, tracker, on_strava_token_refresh=_on_token_refresh
@@ -247,6 +250,7 @@ async def _run(args: argparse.Namespace) -> None:
                 config,
                 provider,
                 tracker,
+                cache=cache,
                 on_strava_token_refresh=_on_token_refresh,
             )
         except CredentialsNotFoundError:
@@ -259,9 +263,6 @@ async def _run(args: argparse.Namespace) -> None:
             await connector.login()
         for _, connector in destinations:
             await connector.login()
-
-        cache = ActivityCache(config.cache_dir)
-        cache.load()
 
         executor = SyncExecutor(
             sources=sources, destinations=destinations, cache=cache, tracker=tracker

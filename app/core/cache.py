@@ -23,6 +23,8 @@ class CacheEntry:
     filename: str = ""  # relative path within cache_dir; set by ActivityCache.put
     needs_refresh: bool = False
     uploaded_to: tuple[str, ...] = field(default_factory=tuple)  # destination ids
+    # per-destination file paths for local folder destinations: ((dest_id, path), ...)
+    local_paths: tuple[tuple[str, str], ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         offset = self.start_time.utcoffset()
@@ -36,6 +38,11 @@ class CacheEntry:
         if self.elapsed_s is not None and self.elapsed_s < 0:
             raise ValueError("elapsed_s must be >= 0")
         object.__setattr__(self, "uploaded_to", tuple(self.uploaded_to))
+        object.__setattr__(
+            self,
+            "local_paths",
+            tuple((str(k), str(v)) for k, v in self.local_paths),
+        )
 
 
 _VALID_FORMATS: frozenset[str] = frozenset({"fit", "gpx", "tcx"})
@@ -66,6 +73,7 @@ def _entry_to_dict(e: CacheEntry) -> dict:
         "filename": e.filename,
         "needs_refresh": e.needs_refresh,
         "uploaded_to": list(e.uploaded_to),
+        "local_paths": [[k, v] for k, v in e.local_paths],
     }
 
 
@@ -88,6 +96,7 @@ def _entry_from_dict(d: dict) -> CacheEntry:
         filename=d["filename"],
         needs_refresh=d.get("needs_refresh", False),
         uploaded_to=tuple(d.get("uploaded_to", [])),
+        local_paths=tuple((p[0], p[1]) for p in d.get("local_paths", [])),
     )
 
 
@@ -241,13 +250,28 @@ class ActivityCache:
             )
         ]
 
-    def mark_uploaded(self, entry: CacheEntry, destination_id: str) -> CacheEntry:
+    def mark_uploaded(
+        self,
+        entry: CacheEntry,
+        destination_id: str,
+        local_path: str | None = None,
+    ) -> CacheEntry:
         for i, e in enumerate(self._entries):
             if e.external_id == entry.external_id and e.source_id == entry.source_id:
-                if destination_id in e.uploaded_to:
+                new_uploaded = (
+                    e.uploaded_to
+                    if destination_id in e.uploaded_to
+                    else (*e.uploaded_to, destination_id)
+                )
+                new_local_paths = e.local_paths
+                if local_path is not None:
+                    existing = dict(e.local_paths)
+                    existing[destination_id] = local_path
+                    new_local_paths = tuple(existing.items())
+                if new_uploaded == e.uploaded_to and new_local_paths == e.local_paths:
                     return e
                 updated = dataclasses.replace(
-                    e, uploaded_to=(*e.uploaded_to, destination_id)
+                    e, uploaded_to=new_uploaded, local_paths=new_local_paths
                 )
                 self._entries[i] = updated
                 self.save()

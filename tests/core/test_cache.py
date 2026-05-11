@@ -527,6 +527,61 @@ class TestMarkUploaded:
         assert current is not None
         assert current.needs_refresh is True  # must not have been overwritten
 
+    def test_stores_local_path_when_provided(
+        self, cache: ActivityCache, tmp_path: Path
+    ) -> None:
+        path = str(tmp_path / "ride.fit")
+        entry = cache.put(_make_entry(), b"x")
+        updated = cache.mark_uploaded(entry, "local-dest", local_path=path)
+
+        assert dict(updated.local_paths) == {"local-dest": path}
+
+    def test_updates_local_path_on_repeat_call(
+        self, cache: ActivityCache, tmp_path: Path
+    ) -> None:
+        old = str(tmp_path / "old.fit")
+        new = str(tmp_path / "new.fit")
+        entry = cache.put(_make_entry(), b"x")
+        entry = cache.mark_uploaded(entry, "local-dest", local_path=old)
+        updated = cache.mark_uploaded(entry, "local-dest", local_path=new)
+
+        assert dict(updated.local_paths) == {"local-dest": new}
+
+    def test_preserves_other_dest_local_paths(
+        self, cache: ActivityCache, tmp_path: Path
+    ) -> None:
+        path_a = str(tmp_path / "a.fit")
+        path_b = str(tmp_path / "b.fit")
+        entry = cache.put(_make_entry(), b"x")
+        entry = cache.mark_uploaded(entry, "dest-a", local_path=path_a)
+        updated = cache.mark_uploaded(entry, "dest-b", local_path=path_b)
+
+        paths = dict(updated.local_paths)
+        assert paths["dest-a"] == path_a
+        assert paths["dest-b"] == path_b
+
+    def test_local_path_none_does_not_clear_existing_paths(
+        self, cache: ActivityCache, tmp_path: Path
+    ) -> None:
+        path = str(tmp_path / "ride.fit")
+        entry = cache.put(_make_entry(), b"x")
+        entry = cache.mark_uploaded(entry, "local-dest", local_path=path)
+        updated = cache.mark_uploaded(entry, "other-dest")  # no local_path
+
+        assert dict(updated.local_paths) == {"local-dest": path}
+
+    def test_local_paths_persist_across_reload(
+        self, cache: ActivityCache, tmp_path: Path
+    ) -> None:
+        path = str(tmp_path / "ride.fit")
+        entry = cache.put(_make_entry(), b"x")
+        cache.mark_uploaded(entry, "local-dest", local_path=path)
+
+        reloaded = ActivityCache(tmp_path)
+        reloaded.load()
+        e = reloaded.all_entries()[0]
+        assert dict(e.local_paths) == {"local-dest": path}
+
 
 # ---------------------------------------------------------------------------
 # Helpers for FindOverlapping tests

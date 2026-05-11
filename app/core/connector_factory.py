@@ -6,6 +6,7 @@ from app.connectors.base import ServiceConnector
 from app.connectors.garmin import GarminConnector
 from app.connectors.local_folder import LocalFolderConnector
 from app.connectors.strava import StravaConnector
+from app.core.cache import ActivityCache
 from app.core.config import (
     AppConfig,
     GarminDestinationConfig,
@@ -80,6 +81,7 @@ async def build_destinations(
     config: AppConfig,
     provider: CredentialProvider,
     tracker: TaskTracker,
+    cache: ActivityCache | None = None,
     on_strava_token_refresh: OnStravaTokenRefresh | None = None,
 ) -> list[tuple[str, ServiceConnector]]:
     seen_strava_creds: set = set()
@@ -118,7 +120,12 @@ async def build_destinations(
                 on_token_refresh=_strava_callback(dest_cfg.id, on_strava_token_refresh),
             )
         else:  # LocalFolderDestinationConfig
-            connector = LocalFolderConnector(folder=dest_cfg.folder, tracker=tracker)
+            connector = LocalFolderConnector(
+                folder=dest_cfg.folder,
+                tracker=tracker,
+                cache=cache,
+                dest_id=dest_cfg.id,
+            )
 
         result.append((dest_cfg.id, connector))
     return result

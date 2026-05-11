@@ -255,6 +255,9 @@ class SyncExecutor:
         for spec, connector in self._sources:
             if spec.source_id == source_id:
                 return connector.user_label
+        for did, connector in self._destinations:
+            if did == source_id:
+                return connector.user_label
         return ""
 
     def _dest_user_label(self, dest_id: str) -> str:

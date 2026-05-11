@@ -380,6 +380,29 @@ class TestPlanIntraSource:
         assert plan.to_download[0].meta.external_id == "garmin-b"
 
 
+class TestMetaEntryNoOverlap:
+    def test_non_overlapping_cache_entry_does_not_block_lower_priority_source(
+        self, cache: ActivityCache
+    ) -> None:
+        # garmin (p=1) cached at T0+3600 (9:00) for 1800s (ends 9:30).
+        # strava (p=2) meta starts at T0+5460 (9:31) -> strava starts AFTER garmin ends.
+        # _meta_entry_overlap: overlap_end(9:30) <= overlap_start(9:31) -> False
+        # garmin entry is within the bisect window but has no actual overlap -> planned.
+        cache.put(
+            _entry(source_id="garmin", start_offset_s=3600, elapsed_s=1800), b"content"
+        )
+        meta = _meta(external_id="strava-act", start_offset_s=5460, elapsed_s=3600)
+        plan = SyncPlanner().plan(
+            [
+                (_spec("garmin", priority=1), []),
+                (_spec("strava", priority=2), [meta]),
+            ],
+            cache,
+        )
+        assert len(plan.to_download) == 1
+        assert plan.to_download[0].source_id == "strava"
+
+
 class TestPlanOverlapBoundary:
     def test_touching_intervals_not_overlapping(self, cache: ActivityCache) -> None:
         # strava: 8:00-9:00, garmin starts at exactly 9:00 -> 0s overlap < min

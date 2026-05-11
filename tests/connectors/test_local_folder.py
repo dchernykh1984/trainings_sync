@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from app.connectors.base import Activity, ActivityMeta
-from app.connectors.local_folder import LocalFolderConnector
+from app.connectors.local_folder import LocalFolderConnector, _write_sidecar
 from app.core.cache import ActivityCache, CacheEntry
 from app.parsers.base import ActivityData, ActivityParseError, ActivityParser
 from app.tracking.tracker import ProgressRenderer, Task, TaskStatus, TaskTracker
@@ -310,6 +310,33 @@ class TestDownloadActivity:
         assert result.start_time == _DT
         assert result.external_id == str(path)
 
+    async def test_preserves_elapsed_s(
+        self, connector: LocalFolderConnector, folder: Path
+    ) -> None:
+        path = folder / "ride.fit"
+        path.write_bytes(b"content")
+        meta = ActivityMeta(
+            external_id=str(path),
+            name="Ride",
+            sport_type="cycling",
+            start_time=_DT,
+            elapsed_s=3600,
+        )
+
+        result = await connector.download_activity(meta)
+
+        assert result.elapsed_s == 3600
+
+    async def test_elapsed_s_none_when_meta_has_no_duration(
+        self, connector: LocalFolderConnector, folder: Path
+    ) -> None:
+        path = folder / "ride.fit"
+        path.write_bytes(b"content")
+
+        result = await connector.download_activity(_make_meta(path))
+
+        assert result.elapsed_s is None
+
 
 class TestHasActivity:
     def test_returns_true_when_file_exists(
@@ -463,6 +490,31 @@ class TestLocalFolderConnectorIntegration:
 
         assert result.content == content
         assert result.format == "fit"
+
+    async def test_download_reads_description_from_sidecar(
+        self, connector: LocalFolderConnector, folder: Path
+    ) -> None:
+        import json
+
+        path = folder / "activity.fit"
+        path.write_bytes(b"fit-bytes")
+        path.with_suffix(".json").write_text(
+            json.dumps({"description": "Morning ride notes"}), encoding="utf-8"
+        )
+
+        result = await connector.download_activity(_make_meta(path))
+
+        assert result.description == "Morning ride notes"
+
+    async def test_download_description_none_when_no_sidecar(
+        self, connector: LocalFolderConnector, folder: Path
+    ) -> None:
+        path = folder / "activity.fit"
+        path.write_bytes(b"fit-bytes")
+
+        result = await connector.download_activity(_make_meta(path))
+
+        assert result.description is None
 
 
 def _make_cache_entry(
@@ -698,6 +750,76 @@ class TestUploadActivityReturnsPath:
         assert isinstance(result, str)
         assert result == str(folder / "20260501T082855_12345.fit")
         assert Path(result).is_file()
+
+
+class TestUploadActivitySidecar:
+    async def test_sidecar_written_when_description_present(
+        self, connector: LocalFolderConnector, folder: Path
+    ) -> None:
+        activity = Activity(
+            external_id="12345",
+            name="Ride",
+            sport_type="cycling",
+            start_time=_DT,
+            content=b"fit-bytes",
+            format="fit",
+            description="Tough climb today",
+        )
+        await connector.upload_activity(activity)
+
+        import json
+
+        sidecar = folder / "20260501T082855_12345.json"
+        assert sidecar.is_file()
+        assert json.loads(sidecar.read_text())["description"] == "Tough climb today"
+
+    async def test_no_sidecar_when_description_absent(
+        self, connector: LocalFolderConnector, folder: Path
+    ) -> None:
+        await connector.upload_activity(_make_activity())
+
+        assert not (folder / "20260501T082855_12345.json").exists()
+
+    async def test_stale_sidecar_deleted_on_reupload_without_description(
+        self, connector: LocalFolderConnector, folder: Path
+    ) -> None:
+        activity_with = Activity(
+            external_id="12345",
+            name="Ride",
+            sport_type="cycling",
+            start_time=_DT,
+            content=b"fit-bytes",
+            format="fit",
+            description="Old note",
+        )
+        await connector.upload_activity(activity_with)
+        sidecar = folder / "20260501T082855_12345.json"
+        assert sidecar.exists()
+
+        await connector.upload_activity(_make_activity())
+
+        assert not sidecar.exists()
+
+
+class TestWriteSidecar:
+    def test_cleans_up_tmp_and_reraises_on_failure(self, tmp_path: Path) -> None:
+        sidecar = tmp_path / "activity.json"
+        with (
+            patch.object(Path, "replace", side_effect=OSError("disk full")),
+            pytest.raises(OSError, match="disk full"),
+        ):
+            _write_sidecar(sidecar, '{"description": "x"}')
+
+        assert not (tmp_path / "activity.tmp").exists()
+
+    def test_writes_content_on_success(self, tmp_path: Path) -> None:
+        import json
+
+        sidecar = tmp_path / "activity.json"
+        _write_sidecar(sidecar, '{"description": "hello"}')
+
+        assert json.loads(sidecar.read_text())["description"] == "hello"
+        assert not (tmp_path / "activity.tmp").exists()
 
 
 class TestUserLabel:

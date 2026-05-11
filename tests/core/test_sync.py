@@ -81,6 +81,7 @@ def _entry(
     elapsed_s: int | None = 3600,
     needs_refresh: bool = False,
     uploaded_to: tuple[str, ...] = (),
+    description: str | None = None,
 ) -> CacheEntry:
     return CacheEntry(
         external_id=external_id,
@@ -92,6 +93,7 @@ def _entry(
         sport_type="Run",
         needs_refresh=needs_refresh,
         uploaded_to=uploaded_to,
+        description=description,
     )
 
 
@@ -1057,3 +1059,86 @@ class TestSyncExecutorStravaSource:
         assert entry is not None
         assert cache.read_content(entry) == b"<gpx/>"
         assert entry.format == "gpx"
+
+
+class TestBorrowedDescriptions:
+    async def test_description_from_shadowed_entry_reaches_destination(
+        self, cache: ActivityCache
+    ) -> None:
+        # Garmin has the activity (higher priority, no description).
+        # Strava has the same activity with a description (shadowed by Garmin).
+        # The description must be passed to the local-folder upload.
+        garmin_entry = cache.put(
+            _entry("g-1", "garmin", description=None), b"fit-content"
+        )
+        strava_entry = cache.put(
+            _entry("s-1", "strava", description="A tough climb"), b"<gpx/>"
+        )
+        cache.mark_uploaded(garmin_entry, "local")
+        cache.mark_uploaded(strava_entry, "local")
+
+        dest = _dest_conn()
+        executor = SyncExecutor(
+            sources=[
+                (_spec("garmin", priority=1), _source_conn()),
+                (_spec("strava", priority=2), _source_conn()),
+            ],
+            destinations=[("local", dest)],
+            cache=cache,
+        )
+        borrowed = executor._compute_borrowed_descriptions([garmin_entry, strava_entry])
+
+        assert borrowed == {("g-1", "garmin"): "A tough climb"}
+
+    async def test_no_borrow_when_winner_already_has_description(
+        self, cache: ActivityCache
+    ) -> None:
+        garmin_entry = cache.put(
+            _entry("g-1", "garmin", description="Already set"), b"fit-content"
+        )
+        strava_entry = cache.put(
+            _entry("s-1", "strava", description="Strava note"), b"<gpx/>"
+        )
+
+        executor = SyncExecutor(
+            sources=[
+                (_spec("garmin", priority=1), _source_conn()),
+                (_spec("strava", priority=2), _source_conn()),
+            ],
+            destinations=[],
+            cache=cache,
+        )
+        borrowed = executor._compute_borrowed_descriptions([garmin_entry, strava_entry])
+
+        assert borrowed == {}
+
+    async def test_description_propagated_end_to_end(
+        self, cache: ActivityCache
+    ) -> None:
+        # Simulate a second sync run where both activities are already cached:
+        # garmin (higher priority, no description) and strava (shadowed, has
+        # description). The garmin entry should be uploaded to local with the
+        # strava description.
+        cache.put(_entry("g-1", "garmin", description=None), b"fit-content")
+        strava_entry = cache.put(
+            _entry("s-1", "strava", description="Great walk in the park"), b"<gpx/>"
+        )
+        cache.mark_uploaded(strava_entry, "garmin")
+
+        garmin_conn = _source_conn(metas=[_meta("g-1")])
+        strava_conn = _source_conn(metas=[_meta("s-1")])
+        dest = _dest_conn()
+        executor = SyncExecutor(
+            sources=[
+                (_spec("garmin", priority=1), garmin_conn),
+                (_spec("strava", priority=2), strava_conn),
+            ],
+            destinations=[("local", dest)],
+            cache=cache,
+        )
+
+        await executor.run(_START, _END)
+
+        dest.upload_activity.assert_called_once()
+        uploaded: Activity = dest.upload_activity.call_args[0][0]
+        assert uploaded.description == "Great walk in the park"

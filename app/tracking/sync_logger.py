@@ -51,7 +51,7 @@ class SyncLogger:
     def run_start(self, start: date, end: date, *, force: bool) -> None:
         self._t0 = time.monotonic()
         self._log.info("=" * 60)
-        self._log.info("Sync run: %s → %s  force=%s", start, end, force)
+        self._log.info("Sync run: %s -> %s  force=%s", start, end, force)
 
     def run_end(self) -> None:
         elapsed = time.monotonic() - self._t0

@@ -46,7 +46,7 @@ async def build_sources(
         for src in config.sources
         if isinstance(src, (GarminSourceConfig, StravaSourceConfig))
     ]
-    creds = iter(await provider.get_many(cred_requests))
+    creds = iter(await provider.get_many(cred_requests, context="sources"))
 
     result: list[tuple[SourceSpec, ServiceConnector]] = []
     for src_cfg in config.sources:
@@ -89,9 +89,9 @@ async def build_destinations(
         if isinstance(dest, StravaDestinationConfig):
             if dest.credential in seen_strava_creds:
                 raise ValueError(
-                    f"destination {dest.id!r}: duplicate Strava credential ref — "
-                    "each Strava account must appear at most once "
-                    "(sharing a refresh token causes rotation races)"
+                    f"destination {dest.id!r}: duplicate Strava credential ref -"
+                    " each Strava account must appear at most once"
+                    " (sharing a refresh token causes rotation races)"
                 )
             seen_strava_creds.add(dest.credential)
 
@@ -100,7 +100,7 @@ async def build_destinations(
         for dest in config.destinations
         if isinstance(dest, (GarminDestinationConfig, StravaDestinationConfig))
     ]
-    creds = iter(await provider.get_many(cred_requests))
+    creds = iter(await provider.get_many(cred_requests, context="destinations"))
 
     result: list[tuple[str, ServiceConnector]] = []
     for dest_cfg in config.destinations:

@@ -47,6 +47,20 @@ async def _call_sync(fn, *args, **kwargs):
     return fn(*args, **kwargs)
 
 
+def _setup_login_mock(
+    mock_client_class: MagicMock,
+    new_token: str = "new_refresh",  # noqa: S107
+) -> None:
+    mock_client_class.return_value.refresh_access_token.return_value = {
+        "access_token": "test_token",
+        "refresh_token": new_token,
+        "expires_at": 9999999999,
+    }
+    mock_client_class.return_value.get_athlete.return_value.id = 1613761
+    mock_client_class.return_value.get_athlete.return_value.firstname = "John"
+    mock_client_class.return_value.get_athlete.return_value.lastname = "Doe"
+
+
 @pytest.fixture
 def tracker() -> TaskTracker:
     return TaskTracker(_FakeRenderer())
@@ -145,11 +159,7 @@ class TestLogin:
                 side_effect=_call_sync,
             ),
         ):
-            mock_client_class.return_value.refresh_access_token.return_value = {
-                "access_token": "test_token",
-                "refresh_token": "new_refresh",
-                "expires_at": 9999999999,
-            }
+            _setup_login_mock(mock_client_class)
             await connector.login()
 
         assert _first_task(tracker).status == TaskStatus.DONE
@@ -163,11 +173,7 @@ class TestLogin:
                 side_effect=_call_sync,
             ),
         ):
-            mock_client_class.return_value.refresh_access_token.return_value = {
-                "access_token": "test_token",
-                "refresh_token": "new_refresh",
-                "expires_at": 9999999999,
-            }
+            _setup_login_mock(mock_client_class)
             await connector.login()
 
         assert connector._client is not None
@@ -183,11 +189,7 @@ class TestLogin:
                 side_effect=_call_sync,
             ),
         ):
-            mock_client_class.return_value.refresh_access_token.return_value = {
-                "access_token": "test_token",
-                "refresh_token": "rotated_refresh",
-                "expires_at": 9999999999,
-            }
+            _setup_login_mock(mock_client_class, new_token="rotated_refresh")
             await connector.login()
 
         assert connector._credentials.refresh_token == "rotated_refresh"
@@ -207,11 +209,7 @@ class TestLogin:
                 side_effect=_call_sync,
             ),
         ):
-            mock_client_class.return_value.refresh_access_token.return_value = {
-                "access_token": "test_token",
-                "refresh_token": "rotated_refresh",
-                "expires_at": 9999999999,
-            }
+            _setup_login_mock(mock_client_class, new_token="rotated_refresh")
             await connector.login()
 
         assert len(received) == 1

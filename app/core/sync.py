@@ -62,7 +62,8 @@ def _shadowed_by_higher_priority(
     source_order: dict[str, int],
     min_overlap_s: int,
     fallback_s: int,
-) -> bool:
+) -> str | None:
+    """Return the shadowing source_id, or None if the entry is not shadowed."""
     entry_key = (
         source_priority.get(entry.source_id, _UNKNOWN_PRIORITY),
         source_order.get(entry.source_id, _UNKNOWN_ORDER),
@@ -77,8 +78,8 @@ def _shadowed_by_higher_priority(
         if other_key < entry_key and _entries_overlap(
             entry, other, min_overlap_s, fallback_s
         ):
-            return True
-    return False
+            return other.source_id
+    return None
 
 
 class SyncExecutor:
@@ -120,6 +121,8 @@ class SyncExecutor:
         tracking: tuple[TaskTracker, str] | None,
     ) -> None:
         log = self._tracker.sync_logger if self._tracker is not None else None
+        label = connector.user_label
+        account = f" ({label})" if label else ""
         try:
             for item in items:
                 try:
@@ -127,8 +130,8 @@ class SyncExecutor:
                 except ActivityUnavailableError:
                     if log:
                         log.info(
-                            f"[download] {source_id}: {item.meta.external_id!r}"
-                            f" — unavailable, skipped"
+                            f"[download] {source_id}{account}:"
+                            f" {item.meta.external_id!r} - unavailable, skipped"
                         )
                     if tracking is not None:
                         await tracking[0].advance(tracking[1])
@@ -145,9 +148,9 @@ class SyncExecutor:
                 stored = self._cache.put(entry, activity.content)
                 if log:
                     log.info(
-                        f"[download] {source_id}: {activity.external_id!r}"
+                        f"[download] {source_id}{account}: {activity.external_id!r}"
                         f" {activity.start_time.date()}"
-                        f' "{activity.name}" → {stored.filename}'
+                        f' "{activity.name}" -> {stored.filename}'
                     )
                 if tracking is not None:
                     await tracking[0].advance(tracking[1])
@@ -168,8 +171,7 @@ class SyncExecutor:
         total_metas = sum(len(metas) for _, metas in source_metas)
         plan_task: str | None = None
         if tracker is not None and total_metas > 0:
-            plan_task = "Sync: plan"
-            await tracker.add_task(plan_task, total=total_metas)
+            plan_task = await tracker.add_task("Sync: plan", total=total_metas)
         to_download: list[DownloadItem] = []
         try:
             for maybe_item in self._planner.plan_items(
@@ -201,8 +203,10 @@ class SyncExecutor:
             by_src[item.source_id] = by_src.get(item.source_id, 0) + 1
         for spec, metas in source_metas:
             to_dl = by_src.get(spec.source_id, 0)
+            label = self._source_user_label(spec.source_id)
+            account = f" ({label})" if label else ""
             log.info(
-                f"[plan] {spec.source_id}:"
+                f"[plan] {spec.source_id}{account}:"
                 f" {to_dl} to download, {len(metas) - to_dl} skipped"
             )
 
@@ -219,16 +223,19 @@ class SyncExecutor:
             by_source.setdefault(item.source_id, []).append(item)
 
         tracker = self._tracker
+        source_task_names: dict[str, str] = {}
         if tracker is not None:
             for source_id, items in by_source.items():
-                await tracker.add_task(
+                source_task_names[source_id] = await tracker.add_task(
                     f"Download {source_id} activities", total=len(items)
                 )
 
         source_map = {spec.source_id: conn for spec, conn in self._sources}
         for source_id, items in by_source.items():
-            task_name = f"Download {source_id} activities"
-            tracking = (tracker, task_name) if tracker is not None else None
+            task_name = source_task_names.get(source_id)
+            tracking = (
+                (tracker, task_name) if tracker is not None and task_name else None
+            )
             await self._download_source(
                 source_id, items, source_map[source_id], tracking
             )
@@ -242,15 +249,34 @@ class SyncExecutor:
             and self._cache.has(e.external_id, e.source_id)
         ]
 
+    def _source_user_label(self, source_id: str) -> str:
+        for spec, connector in self._sources:
+            if spec.source_id == source_id:
+                return connector.user_label
+        return ""
+
+    def _dest_user_label(self, dest_id: str) -> str:
+        for did, connector in self._destinations:
+            if did == dest_id:
+                return connector.user_label
+        return ""
+
     def _log_upload_decision(
         self, entry: CacheEntry, dest_id: str | None, reason: str
     ) -> None:
         log = self._tracker.sync_logger if self._tracker is not None else None
         if log is None:
             return
-        where = f" → {dest_id}" if dest_id else ""
+        src_label = self._source_user_label(entry.source_id)
+        src_suffix = f" ({src_label})" if src_label else ""
+        if dest_id is not None:
+            dest_label = self._dest_user_label(dest_id)
+            dest_suffix = f" ({dest_label})" if dest_label else ""
+            where = f" -> {dest_id}{dest_suffix}"
+        else:
+            where = ""
         log.debug(
-            f"[upload-plan] {entry.source_id}: {entry.external_id!r}"
+            f"[upload-plan] {entry.source_id}{src_suffix}: {entry.external_id!r}"
             f" {entry.start_time.date()}{where}: {reason}"
         )
 
@@ -274,16 +300,19 @@ class SyncExecutor:
 
         by_dest: dict[str, list[CacheEntry]] = {}
         for entry in candidates:
-            if _shadowed_by_higher_priority(
+            shadower = _shadowed_by_higher_priority(
                 entry,
                 candidates,
                 source_priority,
                 source_order,
                 min_overlap_s,
                 fallback_s,
-            ):
+            )
+            if shadower is not None:
+                shadower_label = self._source_user_label(shadower)
+                shadower_suffix = f" ({shadower_label})" if shadower_label else ""
                 self._log_upload_decision(
-                    entry, None, "shadowed by higher-priority source"
+                    entry, None, f"shadowed by {shadower}{shadower_suffix}"
                 )
             else:
                 for dest_id, connector in self._destinations:
@@ -301,7 +330,7 @@ class SyncExecutor:
                     ):
                         self._cache.mark_uploaded(entry, dest_id)
                         self._log_upload_decision(
-                            entry, dest_id, "overlaps existing — marked uploaded"
+                            entry, dest_id, "overlaps existing - marked uploaded"
                         )
                         continue
                     by_dest.setdefault(dest_id, []).append(entry)
@@ -318,6 +347,8 @@ class SyncExecutor:
         tracking: tuple[TaskTracker, str] | None,
     ) -> None:
         log = self._tracker.sync_logger if self._tracker is not None else None
+        dest_label = connector.user_label
+        dest_suffix = f" ({dest_label})" if dest_label else ""
         try:
             for entry in entries:
                 content = self._cache.read_content(entry)
@@ -334,9 +365,12 @@ class SyncExecutor:
                 self._cache.mark_uploaded(entry, dest_id, local_path=local_path)
                 if log:
                     result = local_path if local_path is not None else "ok"
+                    src_label = self._source_user_label(entry.source_id)
+                    src_suffix = f" ({src_label})" if src_label else ""
                     log.info(
-                        f"[upload] {entry.external_id!r} ({entry.source_id})"
-                        f" → {dest_id}: {result}"
+                        f"[upload] {entry.external_id!r}"
+                        f" ({entry.source_id}{src_suffix})"
+                        f" -> {dest_id}{dest_suffix}: {result}"
                     )
                 if tracking is not None:
                     await tracking[0].advance(tracking[1])
@@ -353,8 +387,9 @@ class SyncExecutor:
         collect_task: str | None = None
         collect_tracking: tuple[TaskTracker, str] | None = None
         if tracker is not None and candidates:
-            collect_task = "Sync: collect uploads"
-            await tracker.add_task(collect_task, total=len(candidates))
+            collect_task = await tracker.add_task(
+                "Sync: collect uploads", total=len(candidates)
+            )
             collect_tracking = (tracker, collect_task)
         try:
             by_dest = await self._collect_uploads(
@@ -370,12 +405,19 @@ class SyncExecutor:
             return
 
         tracker = self._tracker
+        dest_map = {dest_id: conn for dest_id, conn in self._destinations}
+        dest_task_names: dict[str, str] = {}
         if tracker is not None:
             for dest_id, entries in by_dest.items():
-                await tracker.add_task(f"Upload to {dest_id}", total=len(entries))
+                label = dest_map[dest_id].user_label
+                suffix = f" ({label})" if label else ""
+                dest_task_names[dest_id] = await tracker.add_task(
+                    f"Upload to {dest_id}{suffix}", total=len(entries)
+                )
 
-        dest_map = {dest_id: conn for dest_id, conn in self._destinations}
         for dest_id, entries in by_dest.items():
-            task_name = f"Upload to {dest_id}"
-            tracking = (tracker, task_name) if tracker is not None else None
+            task_name = dest_task_names.get(dest_id)
+            tracking = (
+                (tracker, task_name) if tracker is not None and task_name else None
+            )
             await self._upload_to_dest(dest_id, entries, dest_map[dest_id], tracking)

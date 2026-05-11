@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import itertools
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -23,14 +22,11 @@ class KeePassProvider(CredentialProvider):
         self._path = path
         self._password = password
         self._tracker = tracker
-        self._counter = itertools.count(1)
-
-    def _task_name(self, label: str) -> str:
-        return f"{label} #{next(self._counter)}"
 
     async def get_credentials(self, request: CredentialRequest) -> Credentials:
-        task_name = self._task_name(f"KeePass: {request.service}")
-        await self._tracker.add_task(task_name, total=2)
+        task_name = await self._tracker.add_task(
+            f"KeePass ({self._path}): {request.service}", total=2
+        )
 
         db = await self._open_db(task_name)
         await self._tracker.advance(task_name)
@@ -41,13 +37,14 @@ class KeePassProvider(CredentialProvider):
         return credentials
 
     async def get_many(
-        self, requests: Sequence[CredentialRequest]
+        self, requests: Sequence[CredentialRequest], context: str = ""
     ) -> list[Credentials]:
         if not requests:
             return []
 
-        task_name = self._task_name("KeePass credentials")
-        await self._tracker.add_task(task_name, total=1 + len(requests))
+        label = f"KeePass ({self._path})"
+        desired = f"{label}: {context}" if context else label
+        task_name = await self._tracker.add_task(desired, total=1 + len(requests))
 
         db = await self._open_db(task_name)
         await self._tracker.advance(task_name)

@@ -62,7 +62,7 @@ class _FakeProvider(CredentialProvider):
         return self._queue.pop(0)
 
     async def get_many(
-        self, requests: Sequence[CredentialRequest]
+        self, requests: Sequence[CredentialRequest], context: str = ""
     ) -> list[Credentials]:
         self.get_many_calls += 1
         return [self._queue.pop(0) for _ in requests]

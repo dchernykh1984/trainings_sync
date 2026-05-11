@@ -62,17 +62,22 @@ class TaskTracker:
     def sync_logger(self) -> SyncLogger | None:
         return self._sync_logger
 
-    async def add_task(self, name: str, total: int | None) -> None:
+    async def add_task(self, name: str, total: int | None) -> str:
         if total is not None and total <= 0:
             raise ValueError(f"total must be positive, got {total}")
         async with self._lock:
-            if name in self._tasks:
-                raise ValueError(f"Task {name!r} already exists")
-            task = Task(name=name, total=total)
-            self._tasks[name] = task
+            actual = name
+            if actual in self._tasks:
+                n = 2
+                while f"{name} #{n}" in self._tasks:
+                    n += 1
+                actual = f"{name} #{n}"
+            task = Task(name=actual, total=total)
+            self._tasks[actual] = task
         self._renderer.on_task_added(task)
         if self._sync_logger is not None:
-            self._sync_logger.info(f"[task] {name} — started")
+            self._sync_logger.info(f"[task] {actual} - started")
+        return actual
 
     async def advance(self, name: str, amount: int = 1) -> None:
         if amount <= 0:
@@ -99,7 +104,7 @@ class TaskTracker:
                 task.progress = task.total
         self._renderer.on_task_done(task)
         if self._sync_logger is not None:
-            self._sync_logger.info(f"[task] {name} — done")
+            self._sync_logger.info(f"[task] {name} - done")
 
     async def fail(self, name: str, error: str) -> None:
         async with self._lock:
@@ -110,7 +115,7 @@ class TaskTracker:
             task.error = error
         self._renderer.on_task_failed(task)
         if self._sync_logger is not None:
-            self._sync_logger.error(f"[task] {name} — FAILED: {error}")
+            self._sync_logger.error(f"[task] {name} - FAILED: {error}")
 
     async def update_total(self, name: str, total: int) -> None:
         if total <= 0:

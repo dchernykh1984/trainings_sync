@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import itertools
 import json
 from collections.abc import Sequence
 from pathlib import Path
@@ -21,14 +20,11 @@ class JsonFileProvider(CredentialProvider):
     def __init__(self, path: Path, tracker: TaskTracker) -> None:
         self._path = path
         self._tracker = tracker
-        self._counter = itertools.count(1)
-
-    def _task_name(self, label: str) -> str:
-        return f"{label} #{next(self._counter)}"
 
     async def get_credentials(self, request: CredentialRequest) -> Credentials:
-        task_name = self._task_name(f"JSON credentials: {request.service}")
-        await self._tracker.add_task(task_name, total=2)
+        task_name = await self._tracker.add_task(
+            f"JSON credentials ({self._path}): {request.service}", total=2
+        )
 
         entries = await self._load(task_name)
         await self._tracker.advance(task_name)
@@ -39,13 +35,14 @@ class JsonFileProvider(CredentialProvider):
         return credentials
 
     async def get_many(
-        self, requests: Sequence[CredentialRequest]
+        self, requests: Sequence[CredentialRequest], context: str = ""
     ) -> list[Credentials]:
         if not requests:
             return []
 
-        task_name = self._task_name("JSON credentials")
-        await self._tracker.add_task(task_name, total=1 + len(requests))
+        label = f"JSON credentials ({self._path})"
+        desired = f"{label}: {context}" if context else label
+        task_name = await self._tracker.add_task(desired, total=1 + len(requests))
 
         entries = await self._load(task_name)
         await self._tracker.advance(task_name)

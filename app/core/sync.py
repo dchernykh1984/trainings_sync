@@ -223,14 +223,16 @@ class SyncExecutor:
             by_source.setdefault(item.source_id, []).append(item)
 
         tracker = self._tracker
+        source_map = {spec.source_id: conn for spec, conn in self._sources}
         source_task_names: dict[str, str] = {}
         if tracker is not None:
             for source_id, items in by_source.items():
+                label = source_map[source_id].user_label
+                suffix = f" ({label})" if label else ""
                 source_task_names[source_id] = await tracker.add_task(
-                    f"Download {source_id} activities", total=len(items)
+                    f"Download {source_id}{suffix} activities", total=len(items)
                 )
 
-        source_map = {spec.source_id: conn for spec, conn in self._sources}
         for source_id, items in by_source.items():
             task_name = source_task_names.get(source_id)
             tracking = (

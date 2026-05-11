@@ -136,7 +136,7 @@ class StravaConnector(ServiceConnector):
         self,
         credentials: StravaCredentials,
         tracker: TaskTracker,
-        on_token_refresh: Callable[[StravaCredentials], None] | None = None,
+        on_token_refresh: Callable[[StravaCredentials, str], None] | None = None,
     ) -> None:
         super().__init__(tracker)
         self._credentials = credentials
@@ -157,7 +157,9 @@ class StravaConnector(ServiceConnector):
         return self._client
 
     async def login(self) -> None:
-        task_name = await self._tracker.add_task("Strava: login", total=1)
+        task_name = await self._tracker.add_task(
+            f"Strava ({self._credentials.client_id}): login", total=1
+        )
         log = self._tracker.sync_logger
         if log:
             log.info(f"[strava] Login: client_id={self._credentials.client_id}")
@@ -174,13 +176,15 @@ class StravaConnector(ServiceConnector):
                 refresh_token=token_info["refresh_token"],
             )
             self._credentials = new_credentials
-            if self._on_token_refresh is not None:
-                self._on_token_refresh(new_credentials)
             self._client = Client(access_token=token_info["access_token"])
-            athlete = await asyncio.to_thread(self._client.get_athlete)
-            self._athlete_id = str(athlete.id) if athlete.id is not None else ""
-            parts = [athlete.firstname or "", athlete.lastname or ""]
-            self._athlete_name = " ".join(p for p in parts if p)
+            try:
+                athlete = await asyncio.to_thread(self._client.get_athlete)
+                self._athlete_id = str(athlete.id) if athlete.id is not None else ""
+                parts = [athlete.firstname or "", athlete.lastname or ""]
+                self._athlete_name = " ".join(p for p in parts if p)
+            finally:
+                if self._on_token_refresh is not None:
+                    self._on_token_refresh(new_credentials, self.user_label)
         except Exception as exc:
             await self._tracker.fail(task_name, error=f"Login failed: {exc}")
             raise
@@ -220,7 +224,8 @@ class StravaConnector(ServiceConnector):
                 await self._tracker.advance(task_name, amount=len(batch))
                 if log:
                     log.debug(
-                        f"[strava] List: page {page_num} -> {len(batch)} activities"
+                        f"[strava] List ({self.user_label}):"
+                        f" page {page_num} -> {len(batch)} activities"
                     )
         except Exception as exc:
             await self._tracker.fail(task_name, error=str(exc))

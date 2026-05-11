@@ -106,6 +106,7 @@ def _source_conn(
     conn = MagicMock()
     conn.list_activities = AsyncMock(return_value=metas or [])
     conn.download_activity = AsyncMock(return_value=activity or _activity())
+    conn.user_label = ""
     return conn
 
 
@@ -478,6 +479,7 @@ class TestSyncExecutorTracking:
         conn = MagicMock()
         conn.list_activities = AsyncMock(return_value=metas)
         conn.download_activity = AsyncMock(side_effect=activities)
+        conn.user_label = ""
         tracker = _make_tracker()
         executor = SyncExecutor(
             sources=[(_spec("garmin"), conn)],
@@ -521,6 +523,7 @@ class TestSyncExecutorTracking:
         conn = MagicMock()
         conn.list_activities = AsyncMock(return_value=[_meta()])
         conn.download_activity = AsyncMock(side_effect=OSError("network error"))
+        conn.user_label = ""
         tracker = _make_tracker()
         executor = SyncExecutor(
             sources=[(_spec("garmin"), conn)],
@@ -545,6 +548,7 @@ class TestSyncExecutorTracking:
         conn.download_activity = AsyncMock(
             side_effect=[ActivityUnavailableError("no streams"), _activity("a2")]
         )
+        conn.user_label = ""
         tracker = _make_tracker()
         executor = SyncExecutor(
             sources=[(_spec("garmin"), conn)],

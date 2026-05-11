@@ -144,6 +144,7 @@ class SyncExecutor:
                     elapsed_s=activity.elapsed_s,
                     name=activity.name,
                     sport_type=activity.sport_type,
+                    description=activity.description,
                 )
                 stored = self._cache.put(entry, activity.content)
                 if log:
@@ -365,6 +366,7 @@ class SyncExecutor:
                     elapsed_s=entry.elapsed_s,
                     content=content,
                     format=entry.format,
+                    description=entry.description,
                 )
                 local_path = await connector.upload_activity(activity)
                 self._cache.mark_uploaded(entry, dest_id, local_path=local_path)

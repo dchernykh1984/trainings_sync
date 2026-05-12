@@ -24,6 +24,9 @@ _PREFERRED_EXTENSIONS = (".fit", ".gpx", ".tcx")
 _PAGE_SIZE = 20
 # Garmin processes uploads asynchronously; wait before querying for the new activity ID.
 _UPLOAD_SETTLE_S: float = 2.0
+# Garmin may reject photo uploads with 404 while the activity is still processing.
+_PHOTO_UPLOAD_RETRIES: int = 3
+_PHOTO_UPLOAD_RETRY_DELAY_S: float = 8.0
 
 # Maps Strava sport_type strings to Garmin Connect typeKey values.
 _STRAVA_TO_GARMIN_TYPE: dict[str, str] = {
@@ -240,6 +243,43 @@ class GarminConnector(ServiceConnector):
             )
         return items
 
+    async def _upload_single_photo(
+        self,
+        client: Garmin,
+        activity_id: int,
+        activity_external_id: str,
+        photo: MediaItem,
+        index: int,
+        task_name: str | None,
+    ) -> None:
+        log = self._tracker.sync_logger
+        account = self._credentials.login
+        last_exc: Exception | None = None
+        for attempt in range(1, _PHOTO_UPLOAD_RETRIES + 1):
+            try:
+                await asyncio.to_thread(
+                    _upload_photo_to_activity, client, activity_id, photo.content, index
+                )
+                return
+            except Exception as exc:
+                last_exc = exc
+                if attempt < _PHOTO_UPLOAD_RETRIES and "404" in str(exc):
+                    await asyncio.sleep(_PHOTO_UPLOAD_RETRY_DELAY_S)
+                else:
+                    break
+        if last_exc is not None:
+            if log:
+                log.warning(
+                    f"[garmin] Upload ({account}): {activity_external_id!r}"
+                    f" - failed to upload photo #{index}: {last_exc}"
+                )
+            if task_name:
+                await self._tracker.warn(
+                    task_name,
+                    f"{activity_external_id!r}: photo #{index} not uploaded"
+                    f" ({last_exc})",
+                )
+
     async def _upload_photos(
         self,
         client: Garmin,
@@ -267,21 +307,9 @@ class GarminConnector(ServiceConnector):
                         f" (type {photo.media_type!r} not supported by Garmin)",
                     )
                 continue
-            try:
-                await asyncio.to_thread(
-                    _upload_photo_to_activity, client, activity_id, photo.content, i
-                )
-            except Exception as exc:
-                if log:
-                    log.warning(
-                        f"[garmin] Upload ({account}): {activity_external_id!r}"
-                        f" - failed to upload photo #{i}: {exc}"
-                    )
-                if task_name:
-                    await self._tracker.warn(
-                        task_name,
-                        f"{activity_external_id!r}: photo #{i} not uploaded ({exc})",
-                    )
+            await self._upload_single_photo(
+                client, activity_id, activity_external_id, photo, i, task_name
+            )
 
     async def download_activity(self, meta: ActivityMeta) -> Activity:
         client = self._require_client()

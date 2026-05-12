@@ -72,6 +72,7 @@ def tracker_with_log() -> TaskTracker:
     sync_logger = MagicMock()
     sync_logger.info = MagicMock()
     sync_logger.debug = MagicMock()
+    sync_logger.warning = MagicMock()
     return TaskTracker(_FakeRenderer(), sync_logger=sync_logger)
 
 
@@ -79,6 +80,7 @@ def tracker_with_log() -> TaskTracker:
 def mock_client() -> MagicMock:
     m = MagicMock()
     m.get_activity.return_value.description = None
+    m.get_activity_photos.return_value = []
     return m
 
 
@@ -871,3 +873,190 @@ class TestDownloadActivityObjectNotFound:
         assert log is not None
         msgs = [c.args[0] for c in log.info.call_args_list]  # type: ignore[attr-defined]
         assert any("[strava]" in m and "minimal TCX fallback" in m for m in msgs)
+
+
+class TestDownloadBytes:
+    def test_reads_response_body_with_timeout(self) -> None:
+        from app.connectors.strava import _PHOTO_DOWNLOAD_TIMEOUT_S, _download_bytes
+
+        mock_resp = MagicMock()
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_resp.read.return_value = b"image-data"
+
+        with patch(
+            "app.connectors.strava.urllib.request.urlopen", return_value=mock_resp
+        ) as mock_urlopen:
+            result = _download_bytes("https://example.com/photo.jpg")
+
+        assert result == b"image-data"
+        mock_urlopen.assert_called_once_with(
+            "https://example.com/photo.jpg", timeout=_PHOTO_DOWNLOAD_TIMEOUT_S
+        )
+
+
+def _make_photo(
+    url: str = "https://photos.strava.com/photo.jpg", caption: str | None = None
+) -> MagicMock:
+    photo = MagicMock()
+    photo.urls = {"2048": url}
+    photo.caption = caption
+    return photo
+
+
+class TestDownloadActivityPhotos:
+    async def test_photos_returned_as_media(
+        self, logged_in: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.get_activity_streams.return_value = _make_gps_streams()
+        mock_client.get_activity_photos.return_value = [
+            _make_photo("https://example.com/p1.jpg", caption="Summit"),
+            _make_photo("https://example.com/p2.jpg", caption=None),
+        ]
+
+        with (
+            patch(
+                "app.connectors.strava.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=_call_sync,
+            ),
+            patch(
+                "app.connectors.strava._download_bytes",
+                side_effect=[b"bytes-1", b"bytes-2"],
+            ),
+        ):
+            result = await logged_in.download_activity(_make_meta())
+
+        assert len(result.media) == 2
+        assert result.media[0].content == b"bytes-1"
+        assert result.media[0].media_type == "photo"
+        assert result.media[0].caption == "Summit"
+        assert result.media[0].url == "https://example.com/p1.jpg"
+        assert result.media[1].content == b"bytes-2"
+        assert result.media[1].caption is None
+
+    async def test_media_empty_when_no_photos(
+        self, logged_in: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.get_activity_streams.return_value = _make_gps_streams()
+        mock_client.get_activity_photos.return_value = []
+
+        with patch(
+            "app.connectors.strava.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            result = await logged_in.download_activity(_make_meta())
+
+        assert result.media == ()
+
+    async def test_photo_fetch_exception_returns_empty_and_logs_warning(
+        self, logged_in_with_log: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.get_activity_streams.return_value = _make_gps_streams()
+        mock_client.get_activity_photos.side_effect = OSError("API error")
+
+        with patch(
+            "app.connectors.strava.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            result = await logged_in_with_log.download_activity(_make_meta())
+
+        assert result.media == ()
+        log = logged_in_with_log._tracker.sync_logger
+        assert log is not None
+        msgs = [c.args[0] for c in log.warning.call_args_list]  # type: ignore[attr-defined]
+        assert any("failed to fetch photo list" in m for m in msgs)
+        assert any("API error" in m for m in msgs)
+
+    async def test_photo_url_download_exception_skips_photo_and_logs_warning(
+        self, logged_in_with_log: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.get_activity_streams.return_value = _make_gps_streams()
+        mock_client.get_activity_photos.return_value = [
+            _make_photo("https://example.com/p1.jpg"),
+        ]
+
+        with (
+            patch(
+                "app.connectors.strava.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=_call_sync,
+            ),
+            patch(
+                "app.connectors.strava._download_bytes",
+                side_effect=OSError("download failed"),
+            ),
+        ):
+            result = await logged_in_with_log.download_activity(_make_meta())
+
+        assert result.media == ()
+        log = logged_in_with_log._tracker.sync_logger
+        assert log is not None
+        msgs = [c.args[0] for c in log.warning.call_args_list]  # type: ignore[attr-defined]
+        assert any("failed to download photo #1" in m for m in msgs)
+        assert any("download failed" in m for m in msgs)
+        assert not any("example.com" in m for m in msgs)
+
+    async def test_photo_without_url_skipped(
+        self, logged_in: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        photo = MagicMock()
+        photo.urls = {}
+        photo.caption = None
+        mock_client.get_activity_streams.return_value = _make_gps_streams()
+        mock_client.get_activity_photos.return_value = [photo]
+
+        with patch(
+            "app.connectors.strava.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            result = await logged_in.download_activity(_make_meta())
+
+        assert result.media == ()
+
+    async def test_photos_fetched_for_minimal_tcx_fallback(
+        self, logged_in: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.get_activity_streams.return_value = {}
+        mock_client.get_activity_photos.return_value = [
+            _make_photo("https://example.com/p.jpg")
+        ]
+
+        with (
+            patch(
+                "app.connectors.strava.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=_call_sync,
+            ),
+            patch(
+                "app.connectors.strava._download_bytes",
+                return_value=b"photo-bytes",
+            ),
+        ):
+            result = await logged_in.download_activity(_make_meta())
+
+        assert result.format == "tcx"
+        assert len(result.media) == 1
+        assert result.media[0].content == b"photo-bytes"
+
+    async def test_get_activity_photos_called_with_activity_id(
+        self, logged_in: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.get_activity_streams.return_value = _make_gps_streams()
+
+        with patch(
+            "app.connectors.strava.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            await logged_in.download_activity(_make_meta(external_id="99999"))
+
+        mock_client.get_activity_photos.assert_called_once_with(99999, size=2048)
+
+
+class TestUploadActivityMediaSupport:
+    def test_supports_media_upload_is_false(self, connector: StravaConnector) -> None:
+        assert connector.supports_media_upload is False

@@ -383,6 +383,21 @@ class SyncExecutor:
                     break
         return result
 
+    async def _warn_media_not_uploaded(
+        self,
+        external_id: str,
+        dest_id: str,
+        n_items: int,
+        tracking: tuple[TaskTracker, str] | None,
+    ) -> None:
+        if tracking is None:
+            return
+        await tracking[0].warn(
+            tracking[1],
+            f"{external_id!r}: {n_items} media item(s) not uploaded"
+            f" to {dest_id} (not supported)",
+        )
+
     async def _upload_to_dest(
         self,
         dest_id: str,
@@ -415,6 +430,10 @@ class SyncExecutor:
                     media=tuple(media),
                 )
                 local_path = await connector.upload_activity(activity)
+                if activity.media and not connector.supports_media_upload:
+                    await self._warn_media_not_uploaded(
+                        entry.external_id, dest_id, len(activity.media), tracking
+                    )
                 self._cache.mark_uploaded(entry, dest_id, local_path=local_path)
                 if log:
                     result = local_path if local_path is not None else "ok"

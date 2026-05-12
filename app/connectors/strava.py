@@ -5,6 +5,7 @@ import io
 import itertools
 import logging
 import os
+import urllib.request
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from datetime import date, datetime, timedelta, timezone
@@ -16,6 +17,7 @@ from stravalib.exc import ObjectNotFound
 from app.connectors.base import (
     Activity,
     ActivityMeta,
+    MediaItem,
     ServiceConnector,
 )
 from app.credentials.base import StravaCredentials
@@ -29,6 +31,14 @@ _GPX_NS = "http://www.topografix.com/GPX/1/1"
 _TPX_NS = "http://www.garmin.com/xmlschemas/TrackPointExtension/v1"
 _TCD_NS = "http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2"
 _AE_NS = "http://www.garmin.com/xmlschemas/ActivityExtension/v2"
+
+
+_PHOTO_DOWNLOAD_TIMEOUT_S: int = 30
+
+
+def _download_bytes(url: str) -> bytes:
+    with urllib.request.urlopen(url, timeout=_PHOTO_DOWNLOAD_TIMEOUT_S) as resp:  # noqa: S310
+        return resp.read()
 
 
 def _stream_data(streams: Any, key: str) -> list | None:
@@ -241,24 +251,65 @@ class StravaConnector(ServiceConnector):
             for a in raw
         ]
 
+    async def _fetch_photos(self, client: Client, activity_id: int) -> list[MediaItem]:
+        log = self._tracker.sync_logger
+        account = f" ({self.user_label})" if self.user_label else ""
+        try:
+            photos = await asyncio.to_thread(
+                client.get_activity_photos, activity_id, size=2048
+            )
+        except Exception as exc:
+            if log:
+                log.warning(
+                    f"[strava] Download{account}: {activity_id!r}"
+                    f" - failed to fetch photo list: {exc}"
+                )
+            return []
+        items: list[MediaItem] = []
+        for i, photo in enumerate(photos or [], 1):
+            url = (photo.urls or {}).get("2048") or (photo.urls or {}).get("100")
+            if not url:
+                continue
+            try:
+                content = await asyncio.to_thread(_download_bytes, url)
+            except Exception as exc:
+                if log:
+                    log.warning(
+                        f"[strava] Download{account}: {activity_id!r}"
+                        f" - failed to download photo #{i}: {exc}"
+                    )
+                continue
+            items.append(
+                MediaItem(
+                    content=content,
+                    media_type="photo",
+                    caption=getattr(photo, "caption", None) or None,
+                    url=url,
+                )
+            )
+        return items
+
     async def download_activity(self, meta: ActivityMeta) -> Activity:
         client = self._require_client()
         log = self._tracker.sync_logger
+        activity_id = int(meta.external_id)
         streams_task = asyncio.create_task(
             asyncio.to_thread(
                 client.get_activity_streams,
-                int(meta.external_id),
+                activity_id,
                 types=_STREAM_TYPES,
             )
         )
         detail_task = asyncio.create_task(
-            asyncio.to_thread(client.get_activity, int(meta.external_id))
+            asyncio.to_thread(client.get_activity, activity_id)
         )
+        photos_task = asyncio.create_task(self._fetch_photos(client, activity_id))
         try:
             raw = await detail_task
         except Exception:
             streams_task.cancel()
-            await asyncio.gather(streams_task, return_exceptions=True)
+            photos_task.cancel()
+            await asyncio.gather(streams_task, photos_task, return_exceptions=True)
             raise
         description: str | None = getattr(raw, "description", None) or None
 
@@ -268,6 +319,8 @@ class StravaConnector(ServiceConnector):
         except ObjectNotFound:
             no_streams = True
             streams = None
+
+        media = await photos_task
 
         if no_streams or not _stream_data(streams, "time"):
             if log:
@@ -284,6 +337,7 @@ class StravaConnector(ServiceConnector):
                 content=_build_tcx(meta, None),
                 format="tcx",
                 description=description,
+                media=tuple(media),
             )
         if bool(_stream_data(streams, "latlng")):
             content = _build_gpx(meta, streams)
@@ -300,6 +354,7 @@ class StravaConnector(ServiceConnector):
             content=content,
             format=fmt,
             description=description,
+            media=tuple(media),
         )
 
     async def upload_activity(self, activity: Activity) -> str | None:
@@ -313,11 +368,11 @@ class StravaConnector(ServiceConnector):
         )
         result = await asyncio.to_thread(uploader.wait)
         if activity.description:
-            activity_id = getattr(result, "id", None) if result is not None else None
-            if activity_id:
+            uploaded_id = getattr(result, "id", None) if result is not None else None
+            if uploaded_id:
                 await asyncio.to_thread(
                     client.update_activity,
-                    activity_id,
+                    uploaded_id,
                     description=activity.description,
                 )
             elif log:

@@ -23,6 +23,22 @@ def _write_sidecar(path: Path, payload: str) -> None:
         raise
 
 
+def _read_sidecar(path: Path) -> dict:
+    """Return parsed sidecar JSON for *path*, or {} when no sidecar exists."""
+    sidecar = path.with_suffix(".json")
+    if not sidecar.exists():
+        return {}
+    return json.loads(sidecar.read_text(encoding="utf-8"))
+
+
+def _build_sidecar(description: str | None) -> str | None:
+    """Return JSON payload to persist, or None when there is nothing to store."""
+    data: dict = {}
+    if description is not None:
+        data["description"] = description
+    return json.dumps(data, ensure_ascii=False) if data else None
+
+
 _DEFAULT_PARSERS: dict[str, ActivityParser] = {
     ".fit": FitParser(),
     ".gpx": GpxParser(),
@@ -149,13 +165,8 @@ class LocalFolderConnector(ServiceConnector):
     async def download_activity(self, meta: ActivityMeta) -> Activity:
         path = Path(meta.external_id)
         content = await asyncio.to_thread(path.read_bytes)
-        description: str | None = None
-        sidecar = path.with_suffix(".json")
-        if sidecar.exists():
-            raw = json.loads(
-                await asyncio.to_thread(sidecar.read_text, encoding="utf-8")
-            )
-            description = raw.get("description") or None
+        raw = await asyncio.to_thread(_read_sidecar, path)
+        description = raw.get("description") or None
         return Activity(
             external_id=meta.external_id,
             name=meta.name,
@@ -194,10 +205,8 @@ class LocalFolderConnector(ServiceConnector):
         dest = self._folder / filename
         sidecar = dest.with_suffix(".json")
         await asyncio.to_thread(dest.write_bytes, activity.content)
-        if activity.description is not None:
-            payload = json.dumps(
-                {"description": activity.description}, ensure_ascii=False
-            )
+        payload = _build_sidecar(activity.description)
+        if payload is not None:
             await asyncio.to_thread(_write_sidecar, sidecar, payload)
         else:
             await asyncio.to_thread(sidecar.unlink, missing_ok=True)

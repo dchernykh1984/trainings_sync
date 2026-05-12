@@ -7,7 +7,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from app.connectors.base import Activity, ActivityMeta
-from app.connectors.local_folder import LocalFolderConnector, _write_sidecar
+from app.connectors.local_folder import (
+    LocalFolderConnector,
+    _build_sidecar,
+    _read_sidecar,
+    _write_sidecar,
+)
 from app.core.cache import ActivityCache, CacheEntry
 from app.parsers.base import ActivityData, ActivityParseError, ActivityParser
 from app.tracking.tracker import ProgressRenderer, Task, TaskStatus, TaskTracker
@@ -820,6 +825,50 @@ class TestWriteSidecar:
 
         assert json.loads(sidecar.read_text())["description"] == "hello"
         assert not (tmp_path / "activity.tmp").exists()
+
+
+class TestReadSidecar:
+    def test_returns_empty_dict_when_no_sidecar(self, tmp_path: Path) -> None:
+        path = tmp_path / "activity.fit"
+        path.write_bytes(b"")
+        assert _read_sidecar(path) == {}
+
+    def test_returns_parsed_dict_when_sidecar_exists(self, tmp_path: Path) -> None:
+        import json
+
+        path = tmp_path / "activity.fit"
+        path.write_bytes(b"")
+        path.with_suffix(".json").write_text(
+            json.dumps({"description": "Great ride"}), encoding="utf-8"
+        )
+        assert _read_sidecar(path) == {"description": "Great ride"}
+
+    def test_reads_sidecar_with_same_stem(self, tmp_path: Path) -> None:
+        path = tmp_path / "20260101T080000_act.gpx"
+        path.write_bytes(b"")
+        path.with_suffix(".json").write_text('{"description": "x"}', encoding="utf-8")
+        result = _read_sidecar(path)
+        assert result["description"] == "x"
+
+
+class TestBuildSidecar:
+    def test_returns_none_when_description_is_none(self) -> None:
+        assert _build_sidecar(None) is None
+
+    def test_returns_json_with_description_when_set(self) -> None:
+        import json
+
+        payload = _build_sidecar("Great climb")
+        assert payload is not None
+        assert json.loads(payload)["description"] == "Great climb"
+
+    def test_preserves_unicode_characters(self) -> None:
+        import json
+
+        text = "caf\xe9 ride"
+        payload = _build_sidecar(text)
+        assert payload is not None
+        assert json.loads(payload)["description"] == text
 
 
 class TestUserLabel:

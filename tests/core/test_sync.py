@@ -6,7 +6,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.connectors.base import Activity, ActivityMeta, ActivityUnavailableError
+from app.connectors.base import (
+    Activity,
+    ActivityMeta,
+    ActivityUnavailableError,
+    MediaItem,
+)
 from app.core.cache import ActivityCache, CacheEntry
 from app.core.planner import SourceSpec
 from app.core.sync import SyncExecutor
@@ -234,6 +239,53 @@ class TestSyncExecutorDownload:
         assert entry is not None
         assert entry.description == "Felt great today"
 
+    async def test_media_stored_in_cache_after_download(
+        self, cache: ActivityCache
+    ) -> None:
+        act = Activity(
+            external_id="act-1",
+            name="Morning Run",
+            sport_type="Run",
+            start_time=_T0,
+            elapsed_s=3600,
+            content=b"fit-content",
+            format="fit",
+            media=(
+                MediaItem(content=b"photo-bytes", media_type="photo", caption="Summit"),
+            ),
+        )
+        conn = _source_conn(metas=[_meta()], activity=act)
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), conn)],
+            destinations=[],
+            cache=cache,
+        )
+        await executor.run(_START, _END)
+
+        entry = cache.get_entry("act-1", "garmin")
+        assert entry is not None
+        assert cache.has_media(entry)
+        result = cache.read_media(entry)
+        assert len(result) == 1
+        assert result[0].content == b"photo-bytes"
+        assert result[0].media_type == "photo"
+        assert result[0].caption == "Summit"
+
+    async def test_no_media_stored_when_activity_has_no_media(
+        self, cache: ActivityCache
+    ) -> None:
+        conn = _source_conn(metas=[_meta()], activity=_activity())
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), conn)],
+            destinations=[],
+            cache=cache,
+        )
+        await executor.run(_START, _END)
+
+        entry = cache.get_entry("act-1", "garmin")
+        assert entry is not None
+        assert not cache.has_media(entry)
+
     async def test_skips_cached_activity_without_force(
         self, cache: ActivityCache
     ) -> None:
@@ -280,6 +332,28 @@ class TestSyncExecutorDownload:
         assert entry is not None
         assert not entry.needs_refresh
         assert cache.read_content(entry) == b"new-content"
+
+    async def test_download_log_includes_cache_filename(
+        self, cache: ActivityCache
+    ) -> None:
+        conn = _source_conn(metas=[_meta()], activity=_activity())
+        tracker = _make_tracker()
+        tracker.sync_logger = MagicMock()
+        tracker.sync_logger.info = MagicMock()
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), conn)],
+            destinations=[],
+            cache=cache,
+            tracker=tracker,
+        )
+        await executor.run(_START, _END)
+
+        entry = cache.get_entry("act-1", "garmin")
+        assert entry is not None
+        msgs = [c.args[0] for c in tracker.sync_logger.info.call_args_list]
+        download_msgs = [m for m in msgs if "[download] garmin:" in m]
+        assert download_msgs, "expected at least one download info log line"
+        assert any(entry.filename in m for m in download_msgs)
 
 
 class TestSyncExecutorUpload:
@@ -479,6 +553,43 @@ class TestSyncExecutorUpload:
         )
         await executor.run(_START, _END)
         dest.list_activities.assert_not_called()
+
+    async def test_cached_media_passed_to_uploaded_activity(
+        self, cache: ActivityCache
+    ) -> None:
+        stored = cache.put(_entry(source_id="garmin"), b"fit-content")
+        cache.put_media(
+            stored,
+            [MediaItem(content=b"photo-bytes", media_type="photo", caption="View")],
+        )
+        dest = _dest_conn()
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), _source_conn())],
+            destinations=[("strava", dest)],
+            cache=cache,
+        )
+        await executor.run(_START, _END)
+
+        uploaded: Activity = dest.upload_activity.call_args[0][0]
+        assert len(uploaded.media) == 1
+        assert uploaded.media[0].content == b"photo-bytes"
+        assert uploaded.media[0].media_type == "photo"
+        assert uploaded.media[0].caption == "View"
+
+    async def test_uploaded_activity_has_empty_media_when_cache_has_none(
+        self, cache: ActivityCache
+    ) -> None:
+        cache.put(_entry(source_id="garmin"), b"fit-content")
+        dest = _dest_conn()
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), _source_conn())],
+            destinations=[("strava", dest)],
+            cache=cache,
+        )
+        await executor.run(_START, _END)
+
+        uploaded: Activity = dest.upload_activity.call_args[0][0]
+        assert uploaded.media == ()
 
 
 class TestSyncExecutorTracking:

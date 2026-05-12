@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 from datetime import date
 from pathlib import Path
 
-from app.connectors.base import Activity, ActivityMeta, ServiceConnector
+from app.connectors.base import Activity, ActivityMeta, MediaItem, ServiceConnector
 from app.parsers.base import ActivityParseError, ActivityParser
 from app.parsers.fit import FitParser
 from app.parsers.gpx import GpxParser
@@ -31,12 +32,66 @@ def _read_sidecar(path: Path) -> dict:
     return json.loads(sidecar.read_text(encoding="utf-8"))
 
 
+_MEDIA_EXTENSION: dict[str, str] = {"photo": ".jpg", "video": ".mp4"}
+
+
 def _build_sidecar(description: str | None) -> str | None:
-    """Return JSON payload to persist, or None when there is nothing to store."""
-    data: dict = {}
-    if description is not None:
-        data["description"] = description
-    return json.dumps(data, ensure_ascii=False) if data else None
+    """Return JSON payload to persist, or None when description is absent."""
+    if description is None:
+        return None
+    return json.dumps({"description": description}, ensure_ascii=False)
+
+
+def _read_from_stem_dir(path: Path) -> tuple[str | None, list[dict]]:
+    """Read description and media refs from same-stem directory.
+
+    Falls back to legacy flat .json sidecar when no stem directory exists.
+    """
+    stem_dir = path.parent / path.stem
+    if not stem_dir.is_dir():
+        legacy = _read_sidecar(path)
+        return legacy.get("description") or None, []
+    description: str | None = None
+    meta_path = stem_dir / "meta.json"
+    if meta_path.exists():
+        description = (
+            json.loads(meta_path.read_text(encoding="utf-8")).get("description") or None
+        )
+    media_refs: list[dict] = []
+    media_path = stem_dir / "media.json"
+    if media_path.exists():
+        raw = json.loads(media_path.read_text(encoding="utf-8"))
+        media_refs = raw if isinstance(raw, list) else []
+    return description, media_refs
+
+
+def _write_stem_dir(
+    stem_dir: Path,
+    description: str | None,
+    media: tuple[MediaItem, ...],
+) -> None:
+    """Write description and media into a same-stem directory, replacing prior state."""
+    if stem_dir.exists():
+        shutil.rmtree(stem_dir)
+    payload = _build_sidecar(description)
+    if payload is None and not media:
+        return
+    stem_dir.mkdir()
+    if payload is not None:
+        _write_sidecar(stem_dir / "meta.json", payload)
+    media_refs: list[dict] = []
+    for i, item in enumerate(media, 1):
+        ext = _MEDIA_EXTENSION.get(item.media_type, ".bin")
+        media_filename = f"{item.media_type}_{i}{ext}"
+        (stem_dir / media_filename).write_bytes(item.content)
+        ref: dict = {"file": media_filename, "type": item.media_type}
+        if item.caption is not None:
+            ref["caption"] = item.caption
+        media_refs.append(ref)
+    if media_refs:
+        _write_sidecar(
+            stem_dir / "media.json", json.dumps(media_refs, ensure_ascii=False)
+        )
 
 
 _DEFAULT_PARSERS: dict[str, ActivityParser] = {
@@ -47,6 +102,8 @@ _DEFAULT_PARSERS: dict[str, ActivityParser] = {
 
 
 class LocalFolderConnector(ServiceConnector):
+    supports_media_upload = True
+
     def __init__(
         self,
         folder: Path,
@@ -165,8 +222,30 @@ class LocalFolderConnector(ServiceConnector):
     async def download_activity(self, meta: ActivityMeta) -> Activity:
         path = Path(meta.external_id)
         content = await asyncio.to_thread(path.read_bytes)
-        raw = await asyncio.to_thread(_read_sidecar, path)
-        description = raw.get("description") or None
+        description, media_refs = await asyncio.to_thread(_read_from_stem_dir, path)
+        stem_dir = path.parent / path.stem
+        media: list[MediaItem] = []
+        for ref in media_refs:
+            media_type = ref.get("type", "")
+            if media_type not in ("photo", "video"):
+                continue
+            media_filename = ref.get("file", "")
+            if not media_filename or Path(media_filename).name != media_filename:
+                continue
+            media_path = stem_dir / media_filename
+            if not media_path.resolve().is_relative_to(stem_dir.resolve()):
+                continue
+            try:
+                media_content = await asyncio.to_thread(media_path.read_bytes)
+            except OSError:
+                continue
+            media.append(
+                MediaItem(
+                    content=media_content,
+                    media_type=media_type,  # type: ignore[arg-type]
+                    caption=ref.get("caption") or None,
+                )
+            )
         return Activity(
             external_id=meta.external_id,
             name=meta.name,
@@ -176,6 +255,7 @@ class LocalFolderConnector(ServiceConnector):
             content=content,
             format=path.suffix.lstrip(".").lower(),
             description=description,
+            media=tuple(media),
         )
 
     def has_activity(self, external_id: str, source_id: str) -> bool:
@@ -203,11 +283,12 @@ class LocalFolderConnector(ServiceConnector):
             f"{activity.start_time.strftime('%Y%m%dT%H%M%S')}_{stem}.{activity.format}"
         )
         dest = self._folder / filename
-        sidecar = dest.with_suffix(".json")
         await asyncio.to_thread(dest.write_bytes, activity.content)
-        payload = _build_sidecar(activity.description)
-        if payload is not None:
-            await asyncio.to_thread(_write_sidecar, sidecar, payload)
-        else:
-            await asyncio.to_thread(sidecar.unlink, missing_ok=True)
+        await asyncio.to_thread(dest.with_suffix(".json").unlink, missing_ok=True)
+        await asyncio.to_thread(
+            _write_stem_dir,
+            self._folder / dest.stem,
+            activity.description,
+            activity.media,
+        )
         return str(dest)

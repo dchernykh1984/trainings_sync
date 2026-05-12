@@ -6,12 +6,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from app.connectors.base import Activity, ActivityMeta
+from app.connectors.base import Activity, ActivityMeta, MediaItem
 from app.connectors.local_folder import (
     LocalFolderConnector,
     _build_sidecar,
+    _read_from_stem_dir,
     _read_sidecar,
     _write_sidecar,
+    _write_stem_dir,
 )
 from app.core.cache import ActivityCache, CacheEntry
 from app.parsers.base import ActivityData, ActivityParseError, ActivityParser
@@ -758,9 +760,11 @@ class TestUploadActivityReturnsPath:
 
 
 class TestUploadActivitySidecar:
-    async def test_sidecar_written_when_description_present(
+    async def test_meta_json_written_when_description_present(
         self, connector: LocalFolderConnector, folder: Path
     ) -> None:
+        import json
+
         activity = Activity(
             external_id="12345",
             name="Ride",
@@ -772,20 +776,18 @@ class TestUploadActivitySidecar:
         )
         await connector.upload_activity(activity)
 
-        import json
+        meta_json = folder / "20260501T082855_12345" / "meta.json"
+        assert meta_json.is_file()
+        assert json.loads(meta_json.read_text())["description"] == "Tough climb today"
 
-        sidecar = folder / "20260501T082855_12345.json"
-        assert sidecar.is_file()
-        assert json.loads(sidecar.read_text())["description"] == "Tough climb today"
-
-    async def test_no_sidecar_when_description_absent(
+    async def test_no_stem_dir_when_no_description_and_no_media(
         self, connector: LocalFolderConnector, folder: Path
     ) -> None:
         await connector.upload_activity(_make_activity())
 
-        assert not (folder / "20260501T082855_12345.json").exists()
+        assert not (folder / "20260501T082855_12345").exists()
 
-    async def test_stale_sidecar_deleted_on_reupload_without_description(
+    async def test_stale_stem_dir_cleared_on_reupload_without_description_or_media(
         self, connector: LocalFolderConnector, folder: Path
     ) -> None:
         activity_with = Activity(
@@ -798,12 +800,27 @@ class TestUploadActivitySidecar:
             description="Old note",
         )
         await connector.upload_activity(activity_with)
-        sidecar = folder / "20260501T082855_12345.json"
-        assert sidecar.exists()
+        stem_dir = folder / "20260501T082855_12345"
+        assert stem_dir.exists()
 
         await connector.upload_activity(_make_activity())
 
-        assert not sidecar.exists()
+        assert not stem_dir.exists()
+
+    async def test_legacy_flat_sidecar_removed_on_reupload(
+        self, connector: LocalFolderConnector, folder: Path
+    ) -> None:
+        import json
+
+        dest = folder / "20260501T082855_12345.fit"
+        dest.write_bytes(b"old-bytes")
+        dest.with_suffix(".json").write_text(
+            json.dumps({"description": "Legacy note"}), encoding="utf-8"
+        )
+
+        await connector.upload_activity(_make_activity())
+
+        assert not dest.with_suffix(".json").exists()
 
 
 class TestWriteSidecar:
@@ -869,6 +886,453 @@ class TestBuildSidecar:
         payload = _build_sidecar(text)
         assert payload is not None
         assert json.loads(payload)["description"] == text
+
+
+class TestReadFromStemDir:
+    def test_returns_description_from_meta_json(self, tmp_path: Path) -> None:
+        import json
+
+        path = tmp_path / "activity.fit"
+        path.write_bytes(b"")
+        stem_dir = tmp_path / "activity"
+        stem_dir.mkdir()
+        (stem_dir / "meta.json").write_text(
+            json.dumps({"description": "Great ride"}), encoding="utf-8"
+        )
+
+        description, media_refs = _read_from_stem_dir(path)
+
+        assert description == "Great ride"
+        assert media_refs == []
+
+    def test_returns_media_refs_from_media_json(self, tmp_path: Path) -> None:
+        import json
+
+        path = tmp_path / "activity.fit"
+        path.write_bytes(b"")
+        stem_dir = tmp_path / "activity"
+        stem_dir.mkdir()
+        refs = [{"file": "photo_1.jpg", "type": "photo"}]
+        (stem_dir / "media.json").write_text(json.dumps(refs), encoding="utf-8")
+
+        _, media_refs = _read_from_stem_dir(path)
+
+        assert media_refs == refs
+
+    def test_returns_empty_when_no_stem_dir_and_no_legacy_sidecar(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "activity.fit"
+        path.write_bytes(b"")
+
+        description, media_refs = _read_from_stem_dir(path)
+
+        assert description is None
+        assert media_refs == []
+
+    def test_legacy_sidecar_fallback_when_no_stem_dir(self, tmp_path: Path) -> None:
+        import json
+
+        path = tmp_path / "activity.fit"
+        path.write_bytes(b"")
+        path.with_suffix(".json").write_text(
+            json.dumps({"description": "Legacy note"}), encoding="utf-8"
+        )
+
+        description, media_refs = _read_from_stem_dir(path)
+
+        assert description == "Legacy note"
+        assert media_refs == []
+
+    def test_returns_none_and_empty_when_stem_dir_has_no_files(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "activity.fit"
+        path.write_bytes(b"")
+        (tmp_path / "activity").mkdir()
+
+        description, media_refs = _read_from_stem_dir(path)
+
+        assert description is None
+        assert media_refs == []
+
+
+class TestWriteStemDir:
+    def test_creates_stem_dir_with_meta_json_when_description_set(
+        self, tmp_path: Path
+    ) -> None:
+        import json
+
+        stem_dir = tmp_path / "act"
+        _write_stem_dir(stem_dir, "Great day", ())
+
+        assert (stem_dir / "meta.json").exists()
+        assert (
+            json.loads((stem_dir / "meta.json").read_text())["description"]
+            == "Great day"
+        )
+
+    def test_does_not_create_stem_dir_when_nothing_to_store(
+        self, tmp_path: Path
+    ) -> None:
+        stem_dir = tmp_path / "act"
+        _write_stem_dir(stem_dir, None, ())
+
+        assert not stem_dir.exists()
+
+    def test_creates_media_files_and_media_json(self, tmp_path: Path) -> None:
+        import json
+
+        stem_dir = tmp_path / "act"
+        _write_stem_dir(
+            stem_dir, None, (MediaItem(content=b"photo-data", media_type="photo"),)
+        )
+
+        assert (stem_dir / "photo_1.jpg").read_bytes() == b"photo-data"
+        refs = json.loads((stem_dir / "media.json").read_text())
+        assert refs == [{"file": "photo_1.jpg", "type": "photo"}]
+
+    def test_caption_included_in_media_json(self, tmp_path: Path) -> None:
+        import json
+
+        stem_dir = tmp_path / "act"
+        _write_stem_dir(
+            stem_dir,
+            None,
+            (MediaItem(content=b"photo-data", media_type="photo", caption="Summit"),),
+        )
+
+        refs = json.loads((stem_dir / "media.json").read_text())
+        assert refs[0]["caption"] == "Summit"
+
+    def test_removes_stale_stem_dir_before_writing(self, tmp_path: Path) -> None:
+        stem_dir = tmp_path / "act"
+        stem_dir.mkdir()
+        (stem_dir / "old_photo.jpg").write_bytes(b"stale")
+
+        _write_stem_dir(stem_dir, "New description", ())
+
+        assert not (stem_dir / "old_photo.jpg").exists()
+
+    def test_no_media_json_when_no_media(self, tmp_path: Path) -> None:
+        stem_dir = tmp_path / "act"
+        _write_stem_dir(stem_dir, "Description only", ())
+
+        assert not (stem_dir / "media.json").exists()
+
+
+class TestDownloadActivityMedia:
+    async def test_media_empty_when_no_media_in_stem_dir(
+        self, connector: LocalFolderConnector, folder: Path
+    ) -> None:
+        path = folder / "ride.fit"
+        path.write_bytes(b"content")
+
+        result = await connector.download_activity(_make_meta(path))
+
+        assert result.media == ()
+
+    async def test_media_populated_from_stem_dir(
+        self, connector: LocalFolderConnector, folder: Path
+    ) -> None:
+        import json
+
+        path = folder / "ride.fit"
+        path.write_bytes(b"content")
+        stem_dir = folder / "ride"
+        stem_dir.mkdir()
+        (stem_dir / "photo_1.jpg").write_bytes(b"photo-data")
+        (stem_dir / "media.json").write_text(
+            json.dumps([{"file": "photo_1.jpg", "type": "photo"}]),
+            encoding="utf-8",
+        )
+
+        result = await connector.download_activity(_make_meta(path))
+
+        assert len(result.media) == 1
+        assert result.media[0].content == b"photo-data"
+        assert result.media[0].media_type == "photo"
+
+    async def test_media_caption_restored(
+        self, connector: LocalFolderConnector, folder: Path
+    ) -> None:
+        import json
+
+        path = folder / "ride.fit"
+        path.write_bytes(b"content")
+        stem_dir = folder / "ride"
+        stem_dir.mkdir()
+        (stem_dir / "photo_1.jpg").write_bytes(b"photo-data")
+        (stem_dir / "media.json").write_text(
+            json.dumps(
+                [{"file": "photo_1.jpg", "type": "photo", "caption": "Summit view"}]
+            ),
+            encoding="utf-8",
+        )
+
+        result = await connector.download_activity(_make_meta(path))
+
+        assert result.media[0].caption == "Summit view"
+
+    async def test_missing_media_file_is_skipped(
+        self, connector: LocalFolderConnector, folder: Path
+    ) -> None:
+        import json
+
+        path = folder / "ride.fit"
+        path.write_bytes(b"content")
+        stem_dir = folder / "ride"
+        stem_dir.mkdir()
+        (stem_dir / "media.json").write_text(
+            json.dumps([{"file": "photo_1.jpg", "type": "photo"}]),
+            encoding="utf-8",
+        )
+
+        result = await connector.download_activity(_make_meta(path))
+
+        assert result.media == ()
+
+    async def test_unknown_media_type_is_skipped(
+        self, connector: LocalFolderConnector, folder: Path
+    ) -> None:
+        import json
+
+        path = folder / "ride.fit"
+        path.write_bytes(b"content")
+        stem_dir = folder / "ride"
+        stem_dir.mkdir()
+        (stem_dir / "media.json").write_text(
+            json.dumps([{"file": "audio_1.mp3", "type": "audio"}]),
+            encoding="utf-8",
+        )
+
+        result = await connector.download_activity(_make_meta(path))
+
+        assert result.media == ()
+
+    async def test_malformed_ref_missing_file_key_is_skipped(
+        self, connector: LocalFolderConnector, folder: Path
+    ) -> None:
+        import json
+
+        path = folder / "ride.fit"
+        path.write_bytes(b"content")
+        stem_dir = folder / "ride"
+        stem_dir.mkdir()
+        (stem_dir / "media.json").write_text(
+            json.dumps([{"type": "photo"}]),
+            encoding="utf-8",
+        )
+
+        result = await connector.download_activity(_make_meta(path))
+
+        assert result.media == ()
+
+    async def test_path_traversal_with_dotdot_is_rejected(
+        self, connector: LocalFolderConnector, folder: Path
+    ) -> None:
+        import json
+
+        secret = folder / "secret.txt"
+        secret.write_bytes(b"sensitive")
+        path = folder / "ride.fit"
+        path.write_bytes(b"content")
+        stem_dir = folder / "ride"
+        stem_dir.mkdir()
+        (stem_dir / "media.json").write_text(
+            json.dumps([{"file": "../secret.txt", "type": "photo"}]),
+            encoding="utf-8",
+        )
+
+        result = await connector.download_activity(_make_meta(path))
+
+        assert result.media == ()
+
+    async def test_absolute_path_in_file_ref_is_rejected(
+        self, connector: LocalFolderConnector, folder: Path
+    ) -> None:
+        import json
+
+        secret = folder / "secret.txt"
+        secret.write_bytes(b"sensitive")
+        path = folder / "ride.fit"
+        path.write_bytes(b"content")
+        stem_dir = folder / "ride"
+        stem_dir.mkdir()
+        (stem_dir / "media.json").write_text(
+            json.dumps([{"file": str(secret), "type": "photo"}]),
+            encoding="utf-8",
+        )
+
+        result = await connector.download_activity(_make_meta(path))
+
+        assert result.media == ()
+
+    async def test_symlink_escaping_stem_dir_is_rejected(
+        self, connector: LocalFolderConnector, folder: Path
+    ) -> None:
+        import json
+
+        secret = folder / "secret.txt"
+        secret.write_bytes(b"sensitive")
+        path = folder / "ride.fit"
+        path.write_bytes(b"content")
+        stem_dir = folder / "ride"
+        stem_dir.mkdir()
+        (stem_dir / "evil.jpg").symlink_to(secret)
+        (stem_dir / "media.json").write_text(
+            json.dumps([{"file": "evil.jpg", "type": "photo"}]),
+            encoding="utf-8",
+        )
+
+        result = await connector.download_activity(_make_meta(path))
+
+        assert result.media == ()
+
+
+class TestUploadActivityMedia:
+    async def test_photo_file_written_in_stem_dir(
+        self, connector: LocalFolderConnector, folder: Path
+    ) -> None:
+        activity = Activity(
+            external_id="12345",
+            name="Ride",
+            sport_type="cycling",
+            start_time=_DT,
+            content=b"fit-bytes",
+            format="fit",
+            media=(MediaItem(content=b"photo-data", media_type="photo"),),
+        )
+
+        await connector.upload_activity(activity)
+
+        photo = folder / "20260501T082855_12345" / "photo_1.jpg"
+        assert photo.is_file()
+        assert photo.read_bytes() == b"photo-data"
+
+    async def test_video_file_written_with_mp4_extension(
+        self, connector: LocalFolderConnector, folder: Path
+    ) -> None:
+        activity = Activity(
+            external_id="12345",
+            name="Ride",
+            sport_type="cycling",
+            start_time=_DT,
+            content=b"fit-bytes",
+            format="fit",
+            media=(MediaItem(content=b"video-data", media_type="video"),),
+        )
+
+        await connector.upload_activity(activity)
+
+        video = folder / "20260501T082855_12345" / "video_1.mp4"
+        assert video.is_file()
+        assert video.read_bytes() == b"video-data"
+
+    async def test_media_json_includes_media_refs(
+        self, connector: LocalFolderConnector, folder: Path
+    ) -> None:
+        import json
+
+        activity = Activity(
+            external_id="12345",
+            name="Ride",
+            sport_type="cycling",
+            start_time=_DT,
+            content=b"fit-bytes",
+            format="fit",
+            media=(MediaItem(content=b"photo-data", media_type="photo"),),
+        )
+
+        await connector.upload_activity(activity)
+
+        media_json = folder / "20260501T082855_12345" / "media.json"
+        assert json.loads(media_json.read_text()) == [
+            {"file": "photo_1.jpg", "type": "photo"}
+        ]
+
+    async def test_media_json_includes_caption_when_present(
+        self, connector: LocalFolderConnector, folder: Path
+    ) -> None:
+        import json
+
+        activity = Activity(
+            external_id="12345",
+            name="Ride",
+            sport_type="cycling",
+            start_time=_DT,
+            content=b"fit-bytes",
+            format="fit",
+            media=(
+                MediaItem(
+                    content=b"photo-data",
+                    media_type="photo",
+                    caption="Top of the climb",
+                ),
+            ),
+        )
+
+        await connector.upload_activity(activity)
+
+        media_json = folder / "20260501T082855_12345" / "media.json"
+        assert json.loads(media_json.read_text())[0]["caption"] == "Top of the climb"
+
+    async def test_no_media_files_when_activity_has_no_media(
+        self, connector: LocalFolderConnector, folder: Path
+    ) -> None:
+        await connector.upload_activity(_make_activity())
+
+        files = {f.name for f in folder.iterdir()}
+        assert not any("photo" in f or "video" in f for f in files)
+
+    async def test_multiple_media_items_indexed_correctly(
+        self, connector: LocalFolderConnector, folder: Path
+    ) -> None:
+        activity = Activity(
+            external_id="12345",
+            name="Ride",
+            sport_type="cycling",
+            start_time=_DT,
+            content=b"fit-bytes",
+            format="fit",
+            media=(
+                MediaItem(content=b"photo1", media_type="photo"),
+                MediaItem(content=b"photo2", media_type="photo"),
+            ),
+        )
+
+        await connector.upload_activity(activity)
+
+        stem_dir = folder / "20260501T082855_12345"
+        assert (stem_dir / "photo_1.jpg").read_bytes() == b"photo1"
+        assert (stem_dir / "photo_2.jpg").read_bytes() == b"photo2"
+
+    async def test_stale_media_cleaned_up_on_reupload(
+        self, connector: LocalFolderConnector, folder: Path
+    ) -> None:
+        activity_with_photo = Activity(
+            external_id="12345",
+            name="Ride",
+            sport_type="cycling",
+            start_time=_DT,
+            content=b"fit-bytes",
+            format="fit",
+            media=(MediaItem(content=b"photo-data", media_type="photo"),),
+        )
+        await connector.upload_activity(activity_with_photo)
+        stale_photo = folder / "20260501T082855_12345" / "photo_1.jpg"
+        assert stale_photo.exists()
+
+        await connector.upload_activity(_make_activity())
+
+        assert not stale_photo.exists()
+
+
+class TestLocalFolderMediaUploadSupport:
+    def test_supports_media_upload_is_true(
+        self, connector: LocalFolderConnector
+    ) -> None:
+        assert connector.supports_media_upload is True
 
 
 class TestUserLabel:

@@ -4,12 +4,14 @@ import dataclasses
 import hashlib
 import json
 import re
+import shutil
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from functools import cache
 from pathlib import Path
+from typing import ClassVar
 
-from app.connectors.base import ActivityMeta
+from app.connectors.base import ActivityMeta, MediaItem
 
 
 @cache
@@ -202,8 +204,12 @@ class ActivityCache:
         ]
         self._entries = [e for e in self._entries if e not in old_entries]
         for old in old_entries:
-            if old.filename and old.filename != filename:
-                self._safe_path(old.filename).unlink(missing_ok=True)
+            if old.filename:
+                if old.filename != filename:
+                    self._safe_path(old.filename).unlink(missing_ok=True)
+                old_media = self._safe_path(old.filename).with_suffix("")
+                if old_media.is_dir():
+                    shutil.rmtree(old_media)
         self._entries.append(entry)
         self.save()
         return entry
@@ -225,6 +231,59 @@ class ActivityCache:
 
     def read_content(self, entry: CacheEntry) -> bytes:
         return self._safe_path(entry.filename).read_bytes()
+
+    def _media_dir(self, entry: CacheEntry) -> Path:
+        return self._safe_path(entry.filename).with_suffix("")
+
+    _MEDIA_EXT: ClassVar[dict[str, str]] = {"photo": "jpg", "video": "mp4"}
+
+    def put_media(self, entry: CacheEntry, media: list[MediaItem]) -> None:
+        media_dir = self._media_dir(entry)
+        if media_dir.exists():
+            shutil.rmtree(media_dir)
+        if not media:
+            return
+        media_dir.mkdir(parents=True, exist_ok=True)
+        manifest = []
+        for i, item in enumerate(media, 1):
+            ext = self._MEDIA_EXT[item.media_type]
+            fname = f"{item.media_type}_{i:02d}.{ext}"
+            (media_dir / fname).write_bytes(item.content)
+            manifest.append(
+                {
+                    "filename": fname,
+                    "media_type": item.media_type,
+                    "caption": item.caption,
+                    "url": item.url,
+                }
+            )
+        (media_dir / "media.json").write_text(
+            json.dumps(manifest, ensure_ascii=False), encoding="utf-8"
+        )
+
+    def read_media(self, entry: CacheEntry) -> list[MediaItem]:
+        manifest_path = self._media_dir(entry) / "media.json"
+        if not manifest_path.exists():
+            return []
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        media_dir = self._media_dir(entry)
+        items = []
+        for m in manifest:
+            path = media_dir / m["filename"]
+            if not path.exists():
+                continue
+            items.append(
+                MediaItem(
+                    content=path.read_bytes(),
+                    media_type=m["media_type"],
+                    caption=m.get("caption"),
+                    url=m.get("url", ""),
+                )
+            )
+        return items
+
+    def has_media(self, entry: CacheEntry) -> bool:
+        return (self._media_dir(entry) / "media.json").exists()
 
     def mark_refresh(
         self,

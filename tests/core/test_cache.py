@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from app.connectors.base import ActivityMeta
+from app.connectors.base import ActivityMeta, MediaItem
 from app.core.cache import ActivityCache, CacheEntry
 
 _DT = datetime(2026, 1, 1, 8, 0, tzinfo=timezone.utc)
@@ -715,3 +715,201 @@ class TestFindOverlapping:
         (tmp_path / entry.filename).unlink()
 
         assert cache.find_overlapping(_meta()) == []
+
+
+class TestMedia:
+    def test_put_media_writes_photo_files(
+        self, cache: ActivityCache, tmp_path: Path
+    ) -> None:
+        entry = cache.put(_make_entry(), b"x")
+        media = [
+            MediaItem(content=b"img1", media_type="photo"),
+            MediaItem(content=b"img2", media_type="photo"),
+        ]
+
+        cache.put_media(entry, media)
+
+        media_dir = tmp_path / entry.filename.replace(".fit", "")
+        assert (media_dir / "photo_01.jpg").read_bytes() == b"img1"
+        assert (media_dir / "photo_02.jpg").read_bytes() == b"img2"
+
+    def test_put_media_writes_video_files(
+        self, cache: ActivityCache, tmp_path: Path
+    ) -> None:
+        entry = cache.put(_make_entry(), b"x")
+        cache.put_media(entry, [MediaItem(content=b"vid", media_type="video")])
+
+        media_dir = tmp_path / entry.filename.replace(".fit", "")
+        assert (media_dir / "video_01.mp4").read_bytes() == b"vid"
+
+    def test_put_media_writes_manifest(
+        self, cache: ActivityCache, tmp_path: Path
+    ) -> None:
+        entry = cache.put(_make_entry(), b"x")
+        cache.put_media(entry, [MediaItem(content=b"img", media_type="photo")])
+
+        media_dir = tmp_path / entry.filename.replace(".fit", "")
+        assert (media_dir / "media.json").exists()
+
+    def test_put_media_empty_list_does_not_create_dir(
+        self, cache: ActivityCache, tmp_path: Path
+    ) -> None:
+        entry = cache.put(_make_entry(), b"x")
+        cache.put_media(entry, [])
+
+        media_dir = tmp_path / entry.filename.replace(".fit", "")
+        assert not media_dir.exists()
+
+    def test_put_media_empty_list_removes_existing_dir(
+        self, cache: ActivityCache, tmp_path: Path
+    ) -> None:
+        entry = cache.put(_make_entry(), b"x")
+        cache.put_media(entry, [MediaItem(content=b"img", media_type="photo")])
+        cache.put_media(entry, [])
+
+        media_dir = tmp_path / entry.filename.replace(".fit", "")
+        assert not media_dir.exists()
+
+    def test_put_media_overwrites_on_second_call(
+        self, cache: ActivityCache, tmp_path: Path
+    ) -> None:
+        entry = cache.put(_make_entry(), b"x")
+        cache.put_media(entry, [MediaItem(content=b"old", media_type="photo")])
+        cache.put_media(entry, [MediaItem(content=b"new", media_type="photo")])
+
+        media_dir = tmp_path / entry.filename.replace(".fit", "")
+        assert (media_dir / "photo_01.jpg").read_bytes() == b"new"
+        assert not (media_dir / "photo_02.jpg").exists()
+
+    def test_round_trip_preserves_all_fields(self, cache: ActivityCache) -> None:
+        entry = cache.put(_make_entry(), b"x")
+        original = [
+            MediaItem(
+                content=b"img1",
+                media_type="photo",
+                caption="Great view",
+                url="https://example.com/photo.jpg",
+            ),
+            MediaItem(
+                content=b"vid1",
+                media_type="video",
+                caption=None,
+                url="",
+            ),
+        ]
+        cache.put_media(entry, original)
+
+        result = cache.read_media(entry)
+
+        assert len(result) == 2
+        assert result[0].content == b"img1"
+        assert result[0].media_type == "photo"
+        assert result[0].caption == "Great view"
+        assert result[0].url == "https://example.com/photo.jpg"
+        assert result[1].content == b"vid1"
+        assert result[1].media_type == "video"
+        assert result[1].caption is None
+        assert result[1].url == ""
+
+    def test_read_media_returns_empty_when_no_dir(self, cache: ActivityCache) -> None:
+        entry = cache.put(_make_entry(), b"x")
+
+        assert cache.read_media(entry) == []
+
+    def test_read_media_returns_photos_in_order(self, cache: ActivityCache) -> None:
+        entry = cache.put(_make_entry(), b"x")
+        media = [
+            MediaItem(content=b"img1", media_type="photo"),
+            MediaItem(content=b"img2", media_type="photo"),
+        ]
+        cache.put_media(entry, media)
+
+        result = cache.read_media(entry)
+
+        assert len(result) == 2
+        assert result[0].content == b"img1"
+        assert result[1].content == b"img2"
+
+    def test_read_media_returns_videos(self, cache: ActivityCache) -> None:
+        entry = cache.put(_make_entry(), b"x")
+        cache.put_media(entry, [MediaItem(content=b"vid", media_type="video")])
+
+        result = cache.read_media(entry)
+
+        assert len(result) == 1
+        assert result[0].media_type == "video"
+        assert result[0].content == b"vid"
+
+    def test_has_media_false_when_no_dir(self, cache: ActivityCache) -> None:
+        entry = cache.put(_make_entry(), b"x")
+
+        assert cache.has_media(entry) is False
+
+    def test_has_media_true_after_put_media(self, cache: ActivityCache) -> None:
+        entry = cache.put(_make_entry(), b"x")
+        cache.put_media(entry, [MediaItem(content=b"img", media_type="photo")])
+
+        assert cache.has_media(entry) is True
+
+    def test_has_media_false_after_put_media_with_empty_list(
+        self, cache: ActivityCache
+    ) -> None:
+        entry = cache.put(_make_entry(), b"x")
+        cache.put_media(entry, [MediaItem(content=b"img", media_type="photo")])
+        cache.put_media(entry, [])
+
+        assert cache.has_media(entry) is False
+
+    def test_has_media_false_when_dir_exists_without_manifest(
+        self, cache: ActivityCache, tmp_path: Path
+    ) -> None:
+        entry = cache.put(_make_entry(), b"x")
+        media_dir = tmp_path / entry.filename.replace(".fit", "")
+        media_dir.mkdir()
+
+        assert cache.has_media(entry) is False
+
+    def test_read_media_skips_missing_file_listed_in_manifest(
+        self, cache: ActivityCache, tmp_path: Path
+    ) -> None:
+        entry = cache.put(_make_entry(), b"x")
+        cache.put_media(
+            entry,
+            [
+                MediaItem(content=b"img1", media_type="photo"),
+                MediaItem(content=b"img2", media_type="photo"),
+            ],
+        )
+        media_dir = tmp_path / entry.filename.replace(".fit", "")
+        (media_dir / "photo_01.jpg").unlink()
+
+        result = cache.read_media(entry)
+
+        assert len(result) == 1
+        assert result[0].content == b"img2"
+
+    def test_put_cleans_media_dir_on_reput_same_filename(
+        self, cache: ActivityCache
+    ) -> None:
+        entry = cache.put(_make_entry(), b"x")
+        cache.put_media(entry, [MediaItem(content=b"img", media_type="photo")])
+        assert cache.has_media(entry)
+
+        cache.put(_make_entry(), b"new-content")
+
+        assert not cache.has_media(entry)
+
+    def test_put_cleans_old_media_dir_when_filename_changes(
+        self, cache: ActivityCache, tmp_path: Path
+    ) -> None:
+        e1 = cache.put(_make_entry(), b"x")
+        cache.put_media(e1, [MediaItem(content=b"img", media_type="photo")])
+        old_media_dir = tmp_path / e1.filename.replace(".fit", "")
+        assert old_media_dir.is_dir()
+
+        cache.put(
+            _make_entry(start_time=datetime(2026, 1, 2, 8, 0, tzinfo=timezone.utc)),
+            b"y",
+        )
+
+        assert not old_media_dir.exists()

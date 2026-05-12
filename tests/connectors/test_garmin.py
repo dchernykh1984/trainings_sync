@@ -11,6 +11,7 @@ import pytest
 from app.connectors.base import Activity, ActivityMeta, MediaItem
 from app.connectors.garmin import (
     _PAGE_SIZE,
+    _PHOTO_UPLOAD_RETRIES,
     GarminConnector,
     _download_garmin_photo,
     _list_activity_photos,
@@ -1343,6 +1344,74 @@ class TestUploadActivityPhotos:
         warn_msg = mock_warn.call_args[0][1]
         assert "photo #1" in warn_msg
         assert "endpoint unavailable" in warn_msg
+
+    async def test_photo_404_is_retried_and_succeeds(
+        self, logged_in: GarminConnector, mock_client: MagicMock
+    ) -> None:
+        post = {"activityId": 99999, "startTimeGMT": "2026-01-01 08:00:00"}
+        mock_client.get_activities_by_date.side_effect = [[], [post]]
+        activity = Activity(
+            external_id="12345",
+            name="Morning Run",
+            sport_type="running",
+            start_time=_DT,
+            content=b"fit-content",
+            format="fit",
+            media=(MediaItem(content=b"photo1", media_type="photo"),),
+        )
+        with (
+            patch("app.connectors.garmin._UPLOAD_SETTLE_S", 0),
+            patch("app.connectors.garmin._PHOTO_UPLOAD_RETRY_DELAY_S", 0),
+            patch(
+                "app.connectors.garmin._upload_photo_to_activity",
+                side_effect=[OSError("API Error 404 - Not Found"), None],
+            ) as mock_upload,
+            patch(
+                "app.connectors.garmin.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=_call_sync,
+            ),
+        ):
+            await logged_in.upload_activity(activity)
+        assert mock_upload.call_count == 2
+
+    async def test_photo_404_exhausted_logs_warning(
+        self, logged_in_with_log: GarminConnector, mock_client: MagicMock
+    ) -> None:
+        post = {"activityId": 99999, "startTimeGMT": "2026-01-01 08:00:00"}
+        mock_client.get_activities_by_date.side_effect = [[], [post]]
+        activity = Activity(
+            external_id="12345",
+            name="Morning Run",
+            sport_type="running",
+            start_time=_DT,
+            content=b"fit-content",
+            format="fit",
+            media=(MediaItem(content=b"photo1", media_type="photo"),),
+        )
+        with (
+            patch("app.connectors.garmin._UPLOAD_SETTLE_S", 0),
+            patch("app.connectors.garmin._PHOTO_UPLOAD_RETRY_DELAY_S", 0),
+            patch(
+                "app.connectors.garmin._upload_photo_to_activity",
+                side_effect=OSError("API Error 404 - Not Found"),
+            ) as mock_upload,
+            patch(
+                "app.connectors.garmin.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=_call_sync,
+            ),
+            patch.object(
+                logged_in_with_log._tracker, "warn", new_callable=AsyncMock
+            ) as mock_warn,
+        ):
+            await logged_in_with_log.upload_activity(activity, task_name="upload #1")
+        assert mock_upload.call_count == _PHOTO_UPLOAD_RETRIES
+        log = logged_in_with_log._tracker.sync_logger
+        assert log is not None
+        msgs = [c.args[0] for c in log.warning.call_args_list]  # type: ignore[attr-defined]
+        assert any("failed to upload photo #1" in m for m in msgs)
+        mock_warn.assert_awaited_once()
 
 
 class TestGarminMediaUploadSupport:

@@ -14,7 +14,7 @@ from garminconnect.exceptions import (
     GarminConnectConnectionError,  # type: ignore[import-untyped]
 )
 
-from app.connectors.base import Activity, ActivityMeta, ServiceConnector
+from app.connectors.base import Activity, ActivityMeta, MediaItem, ServiceConnector
 from app.credentials.base import Credentials
 from app.tracking.tracker import TaskTracker
 
@@ -42,6 +42,29 @@ _STRAVA_TO_GARMIN_TYPE: dict[str, str] = {
     "Rowing": "rowing",
     "StandUpPaddling": "stand_up_paddleboarding",
 }
+
+
+def _list_activity_photos(client: Garmin, activity_id: int) -> list[dict]:
+    url = f"{client.garmin_connect_activity}/{activity_id}/photos"
+    result = client.connectapi(url)
+    return result if isinstance(result, list) else []
+
+
+def _download_garmin_photo(client: Garmin, url: str) -> bytes:
+    resp = client.client.get("connectapi", url, api=True)
+    return bytes(resp.content)
+
+
+def _upload_photo_to_activity(
+    client: Garmin, activity_id: int, content: bytes, index: int
+) -> None:
+    url = f"{client.garmin_connect_activity}/{activity_id}/photos"
+    client.client.post(
+        "connectapi",
+        url,
+        files={"file": (f"photo_{index}.jpg", io.BytesIO(content))},
+        api=True,
+    )
 
 
 def _set_activity_description(
@@ -94,6 +117,7 @@ async def _find_uploaded_id(
 
 class GarminConnector(ServiceConnector):
     _max_concurrent = 3
+    supports_media_upload = True
 
     def __init__(self, credentials: Credentials, tracker: TaskTracker) -> None:
         super().__init__(tracker)
@@ -180,25 +204,109 @@ class GarminConnector(ServiceConnector):
             for a in raw
         ]
 
+    async def _fetch_photos(self, client: Garmin, activity_id: int) -> list[MediaItem]:
+        log = self._tracker.sync_logger
+        account = self._credentials.login
+        try:
+            photos = await asyncio.to_thread(_list_activity_photos, client, activity_id)
+        except Exception as exc:
+            if log:
+                log.warning(
+                    f"[garmin] Download ({account}): {activity_id!r}"
+                    f" - failed to fetch photo list: {exc}"
+                )
+            return []
+        items: list[MediaItem] = []
+        for i, photo in enumerate(photos, 1):
+            url = photo.get("url") or photo.get("imageUrl") or photo.get("originalUrl")
+            if not url:
+                continue
+            try:
+                content = await asyncio.to_thread(_download_garmin_photo, client, url)
+            except Exception as exc:
+                if log:
+                    log.warning(
+                        f"[garmin] Download ({account}): {activity_id!r}"
+                        f" - failed to download photo #{i}: {exc}"
+                    )
+                continue
+            items.append(
+                MediaItem(
+                    content=content,
+                    media_type="photo",
+                    caption=photo.get("caption") or None,
+                    url=url,
+                )
+            )
+        return items
+
+    async def _upload_photos(
+        self,
+        client: Garmin,
+        activity_id: int,
+        activity_external_id: str,
+        media: tuple[MediaItem, ...],
+        task_name: str | None = None,
+    ) -> None:
+        if not media:
+            return
+        log = self._tracker.sync_logger
+        account = self._credentials.login
+        for i, photo in enumerate(media, 1):
+            if photo.media_type != "photo":
+                if log:
+                    log.warning(
+                        f"[garmin] Upload ({account}): {activity_external_id!r}"
+                        f" - skipped media #{i}"
+                        f" (unsupported type: {photo.media_type!r})"
+                    )
+                if task_name:
+                    await self._tracker.warn(
+                        task_name,
+                        f"{activity_external_id!r}: media #{i} skipped"
+                        f" (type {photo.media_type!r} not supported by Garmin)",
+                    )
+                continue
+            try:
+                await asyncio.to_thread(
+                    _upload_photo_to_activity, client, activity_id, photo.content, i
+                )
+            except Exception as exc:
+                if log:
+                    log.warning(
+                        f"[garmin] Upload ({account}): {activity_external_id!r}"
+                        f" - failed to upload photo #{i}: {exc}"
+                    )
+                if task_name:
+                    await self._tracker.warn(
+                        task_name,
+                        f"{activity_external_id!r}: photo #{i} not uploaded ({exc})",
+                    )
+
     async def download_activity(self, meta: ActivityMeta) -> Activity:
         client = self._require_client()
         log = self._tracker.sync_logger
         account = self._credentials.login
+        activity_id = int(meta.external_id)
         zip_task: asyncio.Task[bytes] = asyncio.create_task(
             asyncio.to_thread(
                 client.download_activity,
-                int(meta.external_id),
+                activity_id,
                 dl_fmt=Garmin.ActivityDownloadFormat.ORIGINAL,
             )
         )
         detail_task: asyncio.Task[Any] = asyncio.create_task(
-            asyncio.to_thread(client.get_activity_details, int(meta.external_id))
+            asyncio.to_thread(client.get_activity_details, activity_id)
+        )
+        photos_task: asyncio.Task[list[MediaItem]] = asyncio.create_task(
+            self._fetch_photos(client, activity_id)
         )
         try:
             zip_bytes = await zip_task
         except Exception:
             detail_task.cancel()
-            await asyncio.gather(detail_task, return_exceptions=True)
+            photos_task.cancel()
+            await asyncio.gather(detail_task, photos_task, return_exceptions=True)
             raise
         description: str | None = None
         try:
@@ -215,6 +323,7 @@ class GarminConnector(ServiceConnector):
                     f"[garmin] Download ({account}): {meta.external_id!r}"
                     f" - description unavailable: {exc}"
                 )
+        media = await photos_task
         with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
             names = zf.namelist()
             entry = next(
@@ -242,9 +351,12 @@ class GarminConnector(ServiceConnector):
             format=fmt,
             elapsed_s=meta.elapsed_s,
             description=description,
+            media=tuple(media),
         )
 
-    async def upload_activity(self, activity: Activity) -> str | None:
+    async def upload_activity(
+        self, activity: Activity, *, task_name: str | None = None
+    ) -> str | None:
         log = self._tracker.sync_logger
         client = self._require_client()
         account = self._credentials.login
@@ -291,6 +403,9 @@ class GarminConnector(ServiceConnector):
             await asyncio.to_thread(
                 _set_activity_description, client, activity_id, activity.description
             )
+        await self._upload_photos(
+            client, activity_id, activity.external_id, activity.media, task_name
+        )
         if log:
             log.info(
                 f"[garmin] Upload ({account}): {activity.external_id!r}"

@@ -184,7 +184,9 @@ class LocalFolderConnector(ServiceConnector):
             if f.is_file() and f.suffix.lower() in self._parsers
         )
 
-    async def upload_activity(self, activity: Activity) -> str | None:
+    async def upload_activity(
+        self, activity: Activity, *, task_name: str | None = None
+    ) -> str | None:
         stem = Path(activity.external_id).stem
         filename = (
             f"{activity.start_time.strftime('%Y%m%dT%H%M%S')}_{stem}.{activity.format}"

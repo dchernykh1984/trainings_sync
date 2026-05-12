@@ -75,7 +75,9 @@ class _FakeConnector(ServiceConnector):
             format="fit",
         )
 
-    async def upload_activity(self, activity: Activity) -> None:
+    async def upload_activity(
+        self, activity: Activity, *, task_name: str | None = None
+    ) -> None:
         self.uploaded.append(activity)
 
 

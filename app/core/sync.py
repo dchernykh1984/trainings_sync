@@ -429,7 +429,10 @@ class SyncExecutor:
                     description=description,
                     media=tuple(media),
                 )
-                local_path = await connector.upload_activity(activity)
+                local_path = await connector.upload_activity(
+                    activity,
+                    task_name=tracking[1] if tracking is not None else None,
+                )
                 if activity.media and not connector.supports_media_upload:
                     await self._warn_media_not_uploaded(
                         entry.external_id, dest_id, len(activity.media), tracking

@@ -632,6 +632,38 @@ class TestSyncExecutorUpload:
         await executor.run(_START, _END)
         dest.upload_activity.assert_called_once()
 
+    async def test_upload_activity_receives_task_name_when_tracker_present(
+        self, cache: ActivityCache
+    ) -> None:
+        cache.put(_entry(source_id="garmin"), b"fit-content")
+        dest = _dest_conn()
+        tracker = _make_tracker()
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), _source_conn())],
+            destinations=[("strava", dest)],
+            cache=cache,
+            tracker=tracker,
+        )
+        await executor.run(_START, _END)
+
+        kwargs = dest.upload_activity.call_args[1]
+        assert kwargs.get("task_name") == "Upload to strava"
+
+    async def test_upload_activity_receives_none_task_name_when_no_tracker(
+        self, cache: ActivityCache
+    ) -> None:
+        cache.put(_entry(source_id="garmin"), b"fit-content")
+        dest = _dest_conn()
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), _source_conn())],
+            destinations=[("strava", dest)],
+            cache=cache,
+        )
+        await executor.run(_START, _END)
+
+        kwargs = dest.upload_activity.call_args[1]
+        assert kwargs.get("task_name") is None
+
 
 class TestSyncExecutorTracking:
     async def test_download_task_created_with_activity_count(

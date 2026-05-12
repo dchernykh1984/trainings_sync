@@ -357,7 +357,9 @@ class StravaConnector(ServiceConnector):
             media=tuple(media),
         )
 
-    async def upload_activity(self, activity: Activity) -> str | None:
+    async def upload_activity(
+        self, activity: Activity, *, task_name: str | None = None
+    ) -> str | None:
         client = self._require_client()
         log = self._tracker.sync_logger
         uploader = await asyncio.to_thread(

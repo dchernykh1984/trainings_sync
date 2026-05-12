@@ -91,7 +91,9 @@ class ServiceConnector(ABC):
     async def download_activity(self, meta: ActivityMeta) -> Activity: ...
 
     @abstractmethod
-    async def upload_activity(self, activity: Activity) -> str | None: ...
+    async def upload_activity(
+        self, activity: Activity, *, task_name: str | None = None
+    ) -> str | None: ...
 
     def has_activity(self, external_id: str, source_id: str) -> bool:
         """Return True if the activity is known to exist at this destination.
@@ -137,7 +139,7 @@ class ServiceConnector(ABC):
 
         async def _upload(activity: Activity) -> None:
             async with sem:
-                await self.upload_activity(activity)
+                await self.upload_activity(activity, task_name=task_name)
             if activity.media and not self.supports_media_upload:
                 n = len(activity.media)
                 await self._tracker.warn(

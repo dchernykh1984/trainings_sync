@@ -68,6 +68,7 @@ class Activity(ActivityMeta):
 
 class ServiceConnector(ABC):
     _max_concurrent: int = 5
+    supports_media_upload: bool = False
 
     def __init__(self, tracker: TaskTracker) -> None:
         self._tracker = tracker
@@ -137,6 +138,13 @@ class ServiceConnector(ABC):
         async def _upload(activity: Activity) -> None:
             async with sem:
                 await self.upload_activity(activity)
+            if activity.media and not self.supports_media_upload:
+                n = len(activity.media)
+                await self._tracker.warn(
+                    task_name,
+                    f"{activity.external_id!r}: {n} media item(s) not uploaded"
+                    " (not supported)",
+                )
             await self._tracker.advance(task_name)
 
         try:

@@ -290,6 +290,37 @@ class TestUploadAll:
 
         assert len(tracker.tasks) == 2
 
+    async def test_warns_via_tracker_when_media_upload_not_supported(
+        self, connector: _FakeConnector, tracker: TaskTracker
+    ) -> None:
+        connector.supports_media_upload = False
+        activity = Activity(
+            external_id="1",
+            name="Morning Run",
+            sport_type="running",
+            start_time=_DT,
+            content=b"fit-data",
+            format="fit",
+            media=(MediaItem(content=b"photo", media_type="photo"),),
+        )
+
+        await connector.upload_all([activity])
+
+        task = _first_task(tracker)
+        assert len(task.warnings) == 1
+        assert "'1'" in task.warnings[0]
+        assert "not uploaded" in task.warnings[0]
+
+    async def test_no_warning_when_activity_has_no_media(
+        self, connector: _FakeConnector, tracker: TaskTracker
+    ) -> None:
+        connector.supports_media_upload = False
+
+        await connector.upload_all([_make_activity("1")])
+
+        task = _first_task(tracker)
+        assert task.warnings == []
+
 
 class TestMediaItem:
     def test_valid_photo(self) -> None:

@@ -23,6 +23,7 @@ def _make_tracker() -> MagicMock:
     tracker.advance = AsyncMock()
     tracker.finish = AsyncMock()
     tracker.fail = AsyncMock()
+    tracker.warn = AsyncMock()
     return tracker
 
 
@@ -590,6 +591,46 @@ class TestSyncExecutorUpload:
 
         uploaded: Activity = dest.upload_activity.call_args[0][0]
         assert uploaded.media == ()
+
+    async def test_warns_via_tracker_when_dest_does_not_support_media(
+        self, cache: ActivityCache
+    ) -> None:
+        stored = cache.put(_entry(source_id="garmin"), b"fit-content")
+        cache.put_media(stored, [MediaItem(content=b"p", media_type="photo")])
+        dest = _dest_conn()
+        dest.supports_media_upload = False
+        tracker = _make_tracker()
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), _source_conn())],
+            destinations=[("strava", dest)],
+            cache=cache,
+            tracker=tracker,
+        )
+        await executor.run(_START, _END)
+
+        tracker.warn.assert_called_once()
+        warn_args = tracker.warn.call_args
+        msg = warn_args.args[1]
+        assert "act-1" in msg
+        assert "not uploaded" in msg
+        assert "strava" in msg
+
+    async def test_no_warn_when_no_tracking_and_dest_does_not_support_media(
+        self, cache: ActivityCache
+    ) -> None:
+        stored = cache.put(_entry(source_id="garmin"), b"fit-content")
+        cache.put_media(stored, [MediaItem(content=b"p", media_type="photo")])
+        dest = _dest_conn()
+        dest.supports_media_upload = False
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), _source_conn())],
+            destinations=[("strava", dest)],
+            cache=cache,
+            # no tracker, so tracking=None
+        )
+        # Should complete without error, warning silently dropped
+        await executor.run(_START, _END)
+        dest.upload_activity.assert_called_once()
 
 
 class TestSyncExecutorTracking:

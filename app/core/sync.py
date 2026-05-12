@@ -113,6 +113,22 @@ class SyncExecutor:
         await self._download(start, end, force=force)
         await self._upload(start, end)
 
+    def _cache_activity(self, source_id: str, activity: Activity) -> CacheEntry:
+        entry = CacheEntry(
+            external_id=activity.external_id,
+            source_id=source_id,
+            format=activity.format,
+            start_time=activity.start_time,
+            elapsed_s=activity.elapsed_s,
+            name=activity.name,
+            sport_type=activity.sport_type,
+            description=activity.description,
+        )
+        stored = self._cache.put(entry, activity.content)
+        if activity.media:
+            self._cache.put_media(stored, list(activity.media))
+        return stored
+
     async def _download_source(
         self,
         source_id: str,
@@ -136,17 +152,7 @@ class SyncExecutor:
                     if tracking is not None:
                         await tracking[0].advance(tracking[1])
                     continue
-                entry = CacheEntry(
-                    external_id=activity.external_id,
-                    source_id=source_id,
-                    format=activity.format,
-                    start_time=activity.start_time,
-                    elapsed_s=activity.elapsed_s,
-                    name=activity.name,
-                    sport_type=activity.sport_type,
-                    description=activity.description,
-                )
-                stored = self._cache.put(entry, activity.content)
+                stored = self._cache_activity(source_id, activity)
                 if log:
                     log.info(
                         f"[download] {source_id}{account}: {activity.external_id!r}"
@@ -396,6 +402,7 @@ class SyncExecutor:
                     description = borrowed_descriptions.get(
                         (entry.external_id, entry.source_id)
                     )
+                media = self._cache.read_media(entry)
                 activity = Activity(
                     external_id=entry.external_id,
                     name=entry.name,
@@ -405,6 +412,7 @@ class SyncExecutor:
                     content=content,
                     format=entry.format,
                     description=description,
+                    media=tuple(media),
                 )
                 local_path = await connector.upload_activity(activity)
                 self._cache.mark_uploaded(entry, dest_id, local_path=local_path)

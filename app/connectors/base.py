@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
+from typing import Literal
 
 from app.tracking.tracker import TaskTracker
 
@@ -44,10 +45,25 @@ class ActivityMeta:
 
 
 @dataclass(frozen=True)
+class MediaItem:
+    content: bytes
+    media_type: Literal["photo", "video"]
+    caption: str | None = field(default=None, kw_only=True)
+    url: str = field(default="", kw_only=True)
+
+    def __post_init__(self) -> None:
+        if self.media_type not in ("photo", "video"):
+            raise ValueError(
+                f"media_type must be 'photo' or 'video', got: {self.media_type!r}"
+            )
+
+
+@dataclass(frozen=True)
 class Activity(ActivityMeta):
     content: bytes
     format: str
     description: str | None = field(default=None, kw_only=True)
+    media: tuple[MediaItem, ...] = field(default_factory=tuple, kw_only=True)
 
 
 class ServiceConnector(ABC):

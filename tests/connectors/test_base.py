@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.connectors.base import Activity, ActivityMeta, ServiceConnector
+from app.connectors.base import Activity, ActivityMeta, MediaItem, ServiceConnector
 from app.tracking.tracker import ProgressRenderer, Task, TaskStatus, TaskTracker
 
 _START = date(2026, 1, 1)
@@ -289,3 +289,35 @@ class TestUploadAll:
         await connector.upload_all([_make_activity("1")])
 
         assert len(tracker.tasks) == 2
+
+
+class TestMediaItem:
+    def test_valid_photo(self) -> None:
+        item = MediaItem(content=b"img", media_type="photo")
+        assert item.media_type == "photo"
+
+    def test_valid_video(self) -> None:
+        item = MediaItem(content=b"vid", media_type="video")
+        assert item.media_type == "video"
+
+    def test_raises_on_invalid_media_type(self) -> None:
+        with pytest.raises(ValueError, match="media_type"):
+            MediaItem(content=b"x", media_type="music")  # type: ignore[arg-type]
+
+    def test_caption_defaults_to_none(self) -> None:
+        item = MediaItem(content=b"x", media_type="photo")
+        assert item.caption is None
+
+    def test_url_defaults_to_empty_string(self) -> None:
+        item = MediaItem(content=b"x", media_type="photo")
+        assert item.url == ""
+
+    def test_caption_and_url_stored(self) -> None:
+        item = MediaItem(
+            content=b"x",
+            media_type="photo",
+            caption="Great view",
+            url="https://example.com/photo.jpg",
+        )
+        assert item.caption == "Great view"
+        assert item.url == "https://example.com/photo.jpg"

@@ -11,7 +11,6 @@ import pytest
 from app.connectors.base import Activity, ActivityMeta, MediaItem
 from app.connectors.garmin import (
     _PAGE_SIZE,
-    _PHOTO_UPLOAD_RETRIES,
     GarminConnector,
     _download_garmin_photo,
     _list_activity_photos,
@@ -965,24 +964,22 @@ class TestListActivityPhotos:
         client.connectapi.return_value = []
         _list_activity_photos(client, 12345)
         client.connectapi.assert_called_once_with(
-            "/activity-service/activity/12345/photos"
+            "/activity-service/activity/12345/image"
         )
 
 
 class TestDownloadGarminPhoto:
     def test_returns_response_content(self) -> None:
-        client = MagicMock()
-        client.client.get.return_value.content = b"photo-bytes"
-        assert (
-            _download_garmin_photo(client, "https://example.com/p.jpg")
-            == b"photo-bytes"
-        )
+        with patch("app.connectors.garmin._requests.get") as mock_get:
+            mock_get.return_value.content = b"photo-bytes"
+            assert _download_garmin_photo("https://example.com/p.jpg") == b"photo-bytes"
+        mock_get.assert_called_once_with("https://example.com/p.jpg", timeout=30)
 
-    def test_calls_connectapi_get_with_correct_args(self) -> None:
-        client = MagicMock()
-        client.client.get.return_value.content = b"x"
-        _download_garmin_photo(client, "/some/path")
-        client.client.get.assert_called_once_with("connectapi", "/some/path", api=True)
+    def test_raises_on_http_error(self) -> None:
+        with patch("app.connectors.garmin._requests.get") as mock_get:
+            mock_get.return_value.raise_for_status.side_effect = OSError("HTTP 403")
+            with pytest.raises(OSError):
+                _download_garmin_photo("https://example.com/p.jpg")
 
 
 class TestUploadPhotoToActivity:
@@ -993,11 +990,12 @@ class TestUploadPhotoToActivity:
         client.client.post.assert_called_once()
         args, kwargs = client.client.post.call_args
         assert args[0] == "connectapi"
-        assert args[1] == "/activity-service/activity/99999/photos"
+        assert args[1] == "/activity-service/activity/99999/image"
         assert kwargs["api"] is True
-        name, file_obj = kwargs["files"]["file"]
+        name, file_obj, content_type = kwargs["files"]["file"]
         assert name == "photo_1.jpg"
         assert file_obj.read() == b"photo-data"
+        assert content_type == "image/jpeg"
 
 
 class TestDownloadActivityPhotos:
@@ -1017,11 +1015,14 @@ class TestDownloadActivityPhotos:
         self, logged_in: GarminConnector, mock_client: MagicMock
     ) -> None:
         mock_client.download_activity.return_value = _make_zip()
-        mock_client.client.get.return_value.content = b"photo-bytes"
         with (
             patch(
                 "app.connectors.garmin._list_activity_photos",
                 return_value=[_make_photo_dict()],
+            ),
+            patch(
+                "app.connectors.garmin._download_garmin_photo",
+                return_value=b"photo-bytes",
             ),
             patch(
                 "app.connectors.garmin.asyncio.to_thread",
@@ -1039,11 +1040,14 @@ class TestDownloadActivityPhotos:
         self, logged_in: GarminConnector, mock_client: MagicMock
     ) -> None:
         mock_client.download_activity.return_value = _make_zip()
-        mock_client.client.get.return_value.content = b"photo-bytes"
         with (
             patch(
                 "app.connectors.garmin._list_activity_photos",
                 return_value=[_make_photo_dict(caption="Nice view")],
+            ),
+            patch(
+                "app.connectors.garmin._download_garmin_photo",
+                return_value=b"photo-bytes",
             ),
             patch(
                 "app.connectors.garmin.asyncio.to_thread",
@@ -1076,6 +1080,29 @@ class TestDownloadActivityPhotos:
         msgs = [c.args[0] for c in log.warning.call_args_list]  # type: ignore[attr-defined]
         assert any("failed to fetch photo list" in m for m in msgs)
         assert any("api error" in m for m in msgs)
+
+    async def test_photo_fetch_404_is_silent_debug_not_warning(
+        self, logged_in_with_log: GarminConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.download_activity.return_value = _make_zip()
+        with (
+            patch(
+                "app.connectors.garmin._list_activity_photos",
+                side_effect=RuntimeError("HTTP Error 404 Not Found"),
+            ),
+            patch(
+                "app.connectors.garmin.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=_call_sync,
+            ),
+        ):
+            result = await logged_in_with_log.download_activity(_make_meta())
+        assert result.media == ()
+        log = logged_in_with_log._tracker.sync_logger
+        assert log is not None
+        assert log.warning.call_count == 0  # type: ignore[attr-defined]
+        debug_msgs = [c.args[0] for c in log.debug.call_args_list]  # type: ignore[attr-defined]
+        assert any("no photos" in m for m in debug_msgs)
 
     async def test_photo_download_exception_skips_photo_and_logs_warning(
         self, logged_in_with_log: GarminConnector, mock_client: MagicMock
@@ -1128,11 +1155,14 @@ class TestDownloadActivityPhotos:
         self, logged_in: GarminConnector, mock_client: MagicMock
     ) -> None:
         mock_client.download_activity.return_value = _make_zip()
-        mock_client.client.get.return_value.content = b"photo-bytes"
         with (
             patch(
                 "app.connectors.garmin._list_activity_photos",
                 return_value=[{"imageUrl": "https://example.com/image.jpg"}],
+            ),
+            patch(
+                "app.connectors.garmin._download_garmin_photo",
+                return_value=b"photo-bytes",
             ),
             patch(
                 "app.connectors.garmin.asyncio.to_thread",
@@ -1176,6 +1206,7 @@ class TestUploadActivityPhotos:
         )
         with (
             patch("app.connectors.garmin._UPLOAD_SETTLE_S", 0),
+            patch("app.connectors.garmin._PHOTO_SETTLE_S", 0),
             patch(
                 "app.connectors.garmin._upload_photo_to_activity"
             ) as mock_upload_photo,
@@ -1209,6 +1240,7 @@ class TestUploadActivityPhotos:
         task_name = await tracker.add_task("Upload to garmin", total=2)
         with (
             patch("app.connectors.garmin._UPLOAD_SETTLE_S", 0),
+            patch("app.connectors.garmin._PHOTO_SETTLE_S", 0),
             patch(
                 "app.connectors.garmin._upload_photo_to_activity",
                 side_effect=[OSError("upload failed"), None],
@@ -1288,6 +1320,7 @@ class TestUploadActivityPhotos:
         )
         with (
             patch("app.connectors.garmin._UPLOAD_SETTLE_S", 0),
+            patch("app.connectors.garmin._PHOTO_SETTLE_S", 0),
             patch(
                 "app.connectors.garmin._upload_photo_to_activity"
             ) as mock_upload_photo,
@@ -1328,6 +1361,7 @@ class TestUploadActivityPhotos:
         )
         with (
             patch("app.connectors.garmin._UPLOAD_SETTLE_S", 0),
+            patch("app.connectors.garmin._PHOTO_SETTLE_S", 0),
             patch(
                 "app.connectors.garmin._upload_photo_to_activity",
                 side_effect=OSError("endpoint unavailable"),
@@ -1347,7 +1381,7 @@ class TestUploadActivityPhotos:
         assert "photo #1" in warn_msg
         assert "endpoint unavailable" in warn_msg
 
-    async def test_photo_404_is_retried_and_succeeds(
+    async def test_photo_endpoint_unavailable_bails_on_first_404(
         self, logged_in: GarminConnector, mock_client: MagicMock
     ) -> None:
         post = {"activityId": 99999, "startTimeGMT": "2026-01-01 08:00:00"}
@@ -1359,14 +1393,17 @@ class TestUploadActivityPhotos:
             start_time=_DT,
             content=b"fit-content",
             format="fit",
-            media=(MediaItem(content=b"photo1", media_type="photo"),),
+            media=(
+                MediaItem(content=b"photo1", media_type="photo"),
+                MediaItem(content=b"photo2", media_type="photo"),
+            ),
         )
         with (
             patch("app.connectors.garmin._UPLOAD_SETTLE_S", 0),
-            patch("app.connectors.garmin._PHOTO_UPLOAD_RETRY_DELAY_S", 0),
+            patch("app.connectors.garmin._PHOTO_SETTLE_S", 0),
             patch(
                 "app.connectors.garmin._upload_photo_to_activity",
-                side_effect=[OSError("API Error 404 - Not Found"), None],
+                side_effect=OSError("API Error 404 - Not Found"),
             ) as mock_upload,
             patch(
                 "app.connectors.garmin.asyncio.to_thread",
@@ -1375,9 +1412,9 @@ class TestUploadActivityPhotos:
             ),
         ):
             await logged_in.upload_activity(activity)
-        assert mock_upload.call_count == 2
+        assert mock_upload.call_count == 1
 
-    async def test_photo_404_exhausted_logs_warning(
+    async def test_photo_endpoint_unavailable_warns_and_skips_remaining(
         self, logged_in_with_log: GarminConnector, mock_client: MagicMock
     ) -> None:
         post = {"activityId": 99999, "startTimeGMT": "2026-01-01 08:00:00"}
@@ -1389,11 +1426,14 @@ class TestUploadActivityPhotos:
             start_time=_DT,
             content=b"fit-content",
             format="fit",
-            media=(MediaItem(content=b"photo1", media_type="photo"),),
+            media=(
+                MediaItem(content=b"photo1", media_type="photo"),
+                MediaItem(content=b"photo2", media_type="photo"),
+            ),
         )
         with (
             patch("app.connectors.garmin._UPLOAD_SETTLE_S", 0),
-            patch("app.connectors.garmin._PHOTO_UPLOAD_RETRY_DELAY_S", 0),
+            patch("app.connectors.garmin._PHOTO_SETTLE_S", 0),
             patch(
                 "app.connectors.garmin._upload_photo_to_activity",
                 side_effect=OSError("API Error 404 - Not Found"),
@@ -1408,10 +1448,10 @@ class TestUploadActivityPhotos:
             ) as mock_warn,
         ):
             await logged_in_with_log.upload_activity(activity, task_name="upload #1")
-        assert mock_upload.call_count == _PHOTO_UPLOAD_RETRIES
+        assert mock_upload.call_count == 1
         mock_warn.assert_awaited_once()
         warn_msg = mock_warn.call_args.args[1]
-        assert "photo #1 not uploaded" in warn_msg
+        assert "endpoint unavailable" in warn_msg
 
 
 class TestGarminMediaUploadSupport:

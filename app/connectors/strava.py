@@ -11,6 +11,8 @@ from collections.abc import Callable
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
+import requests
+from requests.adapters import HTTPAdapter
 from stravalib import Client
 from stravalib.exc import ObjectNotFound
 
@@ -34,6 +36,26 @@ _AE_NS = "http://www.garmin.com/xmlschemas/ActivityExtension/v2"
 
 
 _PHOTO_DOWNLOAD_TIMEOUT_S: int = 30
+_REQUEST_TIMEOUT_S: float = 30.0
+
+
+class _TimeoutHTTPAdapter(HTTPAdapter):
+    """requests HTTPAdapter that injects a default timeout on every request."""
+
+    def send(self, request, **kwargs):  # type: ignore[override]
+        # requests passes timeout=None explicitly, so setdefault won't fire;
+        # replace None with our default.
+        if kwargs.get("timeout") is None:
+            kwargs["timeout"] = _REQUEST_TIMEOUT_S
+        return super().send(request, **kwargs)
+
+
+def _make_strava_session() -> requests.Session:
+    session = requests.Session()
+    adapter = _TimeoutHTTPAdapter()
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
 
 
 def _download_bytes(url: str) -> bytes:
@@ -174,7 +196,7 @@ class StravaConnector(ServiceConnector):
             log.info(f"[strava] Login: client_id={self._credentials.client_id}")
         try:
             token_info = await asyncio.to_thread(
-                Client().refresh_access_token,
+                Client(requests_session=_make_strava_session()).refresh_access_token,
                 client_id=self._credentials.client_id,
                 client_secret=self._credentials.client_secret,
                 refresh_token=self._credentials.refresh_token,
@@ -185,7 +207,10 @@ class StravaConnector(ServiceConnector):
                 refresh_token=token_info["refresh_token"],
             )
             self._credentials = new_credentials
-            self._client = Client(access_token=token_info["access_token"])
+            self._client = Client(
+                access_token=token_info["access_token"],
+                requests_session=_make_strava_session(),
+            )
             try:
                 athlete = await asyncio.to_thread(self._client.get_athlete)
                 self._athlete_id = str(athlete.id) if athlete.id is not None else ""
@@ -255,8 +280,8 @@ class StravaConnector(ServiceConnector):
         log = self._tracker.sync_logger
         account = f" ({self.user_label})" if self.user_label else ""
         try:
-            photos = await asyncio.to_thread(
-                client.get_activity_photos, activity_id, size=2048
+            photos: list = await asyncio.to_thread(
+                lambda: list(client.get_activity_photos(activity_id, size=2048))
             )
         except Exception as exc:
             if log:
@@ -293,34 +318,22 @@ class StravaConnector(ServiceConnector):
         client = self._require_client()
         log = self._tracker.sync_logger
         activity_id = int(meta.external_id)
-        streams_task = asyncio.create_task(
-            asyncio.to_thread(
-                client.get_activity_streams,
-                activity_id,
-                types=_STREAM_TYPES,
-            )
-        )
-        detail_task = asyncio.create_task(
-            asyncio.to_thread(client.get_activity, activity_id)
-        )
-        photos_task = asyncio.create_task(self._fetch_photos(client, activity_id))
-        try:
-            raw = await detail_task
-        except Exception:
-            streams_task.cancel()
-            photos_task.cancel()
-            await asyncio.gather(streams_task, photos_task, return_exceptions=True)
-            raise
+
+        raw = await asyncio.to_thread(client.get_activity, activity_id)
         description: str | None = getattr(raw, "description", None) or None
 
         no_streams = False
         try:
-            streams = await streams_task
+            streams = await asyncio.to_thread(
+                client.get_activity_streams,
+                activity_id,
+                types=_STREAM_TYPES,
+            )
         except ObjectNotFound:
             no_streams = True
             streams = None
 
-        media = await photos_task
+        media = await self._fetch_photos(client, activity_id)
 
         if no_streams or not _stream_data(streams, "time"):
             if log:

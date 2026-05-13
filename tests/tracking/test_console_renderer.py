@@ -108,6 +108,45 @@ class TestOnTaskDone:
         mock_progress.update.assert_called_with(5, total=1, completed=1)
         mock_progress.stop_task.assert_called_once_with(5)
 
+    def test_shows_warning_summary_in_description_when_warnings_present(
+        self, renderer: ConsoleRenderer, mock_progress: MagicMock
+    ) -> None:
+        mock_progress.add_task.return_value = 5
+        renderer.on_task_added(Task(name="sync", total=10))
+
+        task = Task(
+            name="sync",
+            total=10,
+            status=TaskStatus.DONE,
+            progress=10,
+            warnings=["item a failed", "item b failed"],
+        )
+        renderer.on_task_done(task)
+
+        mock_progress.update.assert_called_with(
+            5, description="[bold yellow]sync (2 warnings - see log)"
+        )
+        mock_progress.stop_task.assert_called_once_with(5)
+
+    def test_uses_singular_noun_for_single_warning(
+        self, renderer: ConsoleRenderer, mock_progress: MagicMock
+    ) -> None:
+        mock_progress.add_task.return_value = 5
+        renderer.on_task_added(Task(name="sync", total=10))
+
+        task = Task(
+            name="sync",
+            total=10,
+            status=TaskStatus.DONE,
+            progress=10,
+            warnings=["one thing failed"],
+        )
+        renderer.on_task_done(task)
+
+        mock_progress.update.assert_called_with(
+            5, description="[bold yellow]sync (1 warning - see log)"
+        )
+
 
 class TestOnTaskFailed:
     def test_updates_description_and_stops(
@@ -139,12 +178,10 @@ class TestOnTotalUpdated:
 
 
 class TestOnTaskWarning:
-    def test_prints_warning_message(
+    def test_does_not_print_to_console(
         self, renderer: ConsoleRenderer, mock_progress: MagicMock
     ) -> None:
         task = Task(name="sync", total=10)
         renderer.on_task_warning(task, "duplicate entry found")
 
-        mock_progress.print.assert_called_once_with(
-            "[bold yellow]WARNING [sync]: duplicate entry found"
-        )
+        mock_progress.print.assert_not_called()

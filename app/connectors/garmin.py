@@ -252,8 +252,6 @@ class GarminConnector(ServiceConnector):
         index: int,
         task_name: str | None,
     ) -> None:
-        log = self._tracker.sync_logger
-        account = self._credentials.login
         last_exc: Exception | None = None
         for attempt in range(1, _PHOTO_UPLOAD_RETRIES + 1):
             try:
@@ -268,11 +266,6 @@ class GarminConnector(ServiceConnector):
                 else:
                     break
         if last_exc is not None:
-            if log:
-                log.warning(
-                    f"[garmin] Upload ({account}): {activity_external_id!r}"
-                    f" - failed to upload photo #{index}: {last_exc}"
-                )
             if task_name:
                 await self._tracker.warn(
                     task_name,

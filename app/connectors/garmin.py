@@ -15,7 +15,13 @@ from garminconnect.exceptions import (
     GarminConnectConnectionError,  # type: ignore[import-untyped]
 )
 
-from app.connectors.base import Activity, ActivityMeta, MediaItem, ServiceConnector
+from app.connectors.base import (
+    Activity,
+    ActivityMeta,
+    MediaItem,
+    ServiceConnector,
+    TransientDownloadError,
+)
 from app.credentials.base import Credentials
 from app.tracking.tracker import TaskTracker
 
@@ -336,6 +342,15 @@ class GarminConnector(ServiceConnector):
         )
         try:
             zip_bytes = await zip_task
+        except (
+            OSError,
+            GarminConnectConnectionError,
+            _requests.RequestException,
+        ) as exc:
+            detail_task.cancel()
+            photos_task.cancel()
+            await asyncio.gather(detail_task, photos_task, return_exceptions=True)
+            raise TransientDownloadError(str(exc)) from exc
         except Exception:
             detail_task.cancel()
             photos_task.cancel()

@@ -21,6 +21,7 @@ from app.connectors.base import (
     ActivityMeta,
     MediaItem,
     ServiceConnector,
+    TransientDownloadError,
 )
 from app.credentials.base import StravaCredentials
 from app.tracking.tracker import TaskTracker
@@ -319,7 +320,10 @@ class StravaConnector(ServiceConnector):
         log = self._tracker.sync_logger
         activity_id = int(meta.external_id)
 
-        raw = await asyncio.to_thread(client.get_activity, activity_id)
+        try:
+            raw = await asyncio.to_thread(client.get_activity, activity_id)
+        except requests.RequestException as exc:
+            raise TransientDownloadError(str(exc)) from exc
         description: str | None = getattr(raw, "description", None) or None
 
         no_streams = False
@@ -332,6 +336,8 @@ class StravaConnector(ServiceConnector):
         except ObjectNotFound:
             no_streams = True
             streams = None
+        except requests.RequestException as exc:
+            raise TransientDownloadError(str(exc)) from exc
 
         media = await self._fetch_photos(client, activity_id)
 

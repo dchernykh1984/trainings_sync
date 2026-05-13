@@ -10,6 +10,7 @@ from app.connectors.base import (
     ActivityMeta,
     ActivityUnavailableError,
     ServiceConnector,
+    TransientDownloadError,
 )
 from app.core.cache import ActivityCache, CacheEntry
 from app.core.planner import DownloadItem, SourceSpec, SyncPlanner
@@ -213,7 +214,7 @@ class SyncExecutor:
                 activity, _ = await self._attempt_download(
                     connector, sem, item, pad=not advanced
                 )
-            except Exception as exc:
+            except TransientDownloadError as exc:
                 last_exc = exc
                 if not advanced:
                     if tracking is not None:

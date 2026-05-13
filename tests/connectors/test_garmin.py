@@ -544,6 +544,21 @@ class TestDownloadActivity:
             with pytest.raises(RuntimeError, match="network error"):
                 await logged_in.download_activity(_make_meta())
 
+    async def test_network_error_on_zip_raises_transient_download_error(
+        self, logged_in: GarminConnector, mock_client: MagicMock
+    ) -> None:
+        from app.connectors.base import TransientDownloadError
+
+        mock_client.download_activity.side_effect = OSError("connection reset")
+
+        with patch(
+            "app.connectors.garmin.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            with pytest.raises(TransientDownloadError, match="connection reset"):
+                await logged_in.download_activity(_make_meta())
+
     async def test_raises_when_not_logged_in(self, connector: GarminConnector) -> None:
         with pytest.raises(RuntimeError, match="login"):
             await connector.download_activity(_make_meta())

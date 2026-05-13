@@ -9,6 +9,7 @@ from app.connectors.base import (
     Activity,
     ActivityMeta,
     ActivityUnavailableError,
+    MediaItem,
     ServiceConnector,
     TransientDownloadError,
 )
@@ -452,6 +453,67 @@ class SyncExecutor:
                 await tracking[0].advance(tracking[1])
         return by_dest
 
+    def _compute_borrowed_media(
+        self, candidates: list[CacheEntry]
+    ) -> dict[tuple[str, str], list[MediaItem]]:
+        source_priority = {spec.source_id: spec.priority for spec, _ in self._sources}
+        source_order = {spec.source_id: i for i, (spec, _) in enumerate(self._sources)}
+        min_overlap_s = self._planner.min_overlap_s
+        fallback_s = self._planner.fallback_s
+        log = self._tracker.sync_logger if self._tracker is not None else None
+
+        result: dict[tuple[str, str], list[MediaItem]] = {}
+        for winner in candidates:
+            if self._cache.has_media(winner):
+                continue
+            winner_key = (
+                source_priority.get(winner.source_id, _UNKNOWN_PRIORITY),
+                source_order.get(winner.source_id, _UNKNOWN_ORDER),
+            )
+            donors = sorted(
+                (
+                    other
+                    for other in candidates
+                    if other.source_id != winner.source_id
+                    and self._cache.has_media(other)
+                    and (
+                        source_priority.get(other.source_id, _UNKNOWN_PRIORITY),
+                        source_order.get(other.source_id, _UNKNOWN_ORDER),
+                    )
+                    > winner_key
+                    and _entries_overlap(winner, other, min_overlap_s, fallback_s)
+                ),
+                key=lambda e: (
+                    source_priority.get(e.source_id, _UNKNOWN_PRIORITY),
+                    source_order.get(e.source_id, _UNKNOWN_ORDER),
+                    e.start_time,
+                    e.external_id,
+                ),
+            )
+            if not donors:
+                continue
+            seen_urls: set[str] = set()
+            collected: list[MediaItem] = []
+            for donor in donors:
+                donor_media = self._cache.read_media(donor)
+                before = len(collected)
+                for item in donor_media:
+                    if item.url and item.url in seen_urls:
+                        continue
+                    if item.url:
+                        seen_urls.add(item.url)
+                    collected.append(item)
+                added = len(collected) - before
+                if log and added:
+                    log.debug(
+                        f"[upload-plan] {winner.source_id}: {winner.external_id!r}"
+                        f" borrows {added} media item(s)"
+                        f" from {donor.source_id}: {donor.external_id!r}"
+                    )
+            if collected:
+                result[(winner.external_id, winner.source_id)] = collected
+        return result
+
     def _compute_borrowed_descriptions(
         self, candidates: list[CacheEntry]
     ) -> dict[tuple[str, str], str]:
@@ -506,6 +568,7 @@ class SyncExecutor:
         connector: ServiceConnector,
         tracking: tuple[TaskTracker, str] | None,
         borrowed_descriptions: dict[tuple[str, str], str] | None = None,
+        borrowed_media: dict[tuple[str, str], list[MediaItem]] | None = None,
     ) -> None:
         log = self._tracker.sync_logger if self._tracker is not None else None
         dest_label = connector.user_label
@@ -519,6 +582,8 @@ class SyncExecutor:
                         (entry.external_id, entry.source_id)
                     )
                 media = self._cache.read_media(entry)
+                if not media and borrowed_media is not None:
+                    media = borrowed_media.get((entry.external_id, entry.source_id), [])
                 activity = Activity(
                     external_id=entry.external_id,
                     name=entry.name,
@@ -581,6 +646,7 @@ class SyncExecutor:
             return
 
         borrowed_descriptions = self._compute_borrowed_descriptions(candidates)
+        borrowed_media = self._compute_borrowed_media(candidates)
 
         tracker = self._tracker
         dest_map = {dest_id: conn for dest_id, conn in self._destinations}
@@ -599,5 +665,10 @@ class SyncExecutor:
                 (tracker, task_name) if tracker is not None and task_name else None
             )
             await self._upload_to_dest(
-                dest_id, entries, dest_map[dest_id], tracking, borrowed_descriptions
+                dest_id,
+                entries,
+                dest_map[dest_id],
+                tracking,
+                borrowed_descriptions,
+                borrowed_media,
             )

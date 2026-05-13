@@ -1451,3 +1451,275 @@ class TestBorrowedDescriptions:
         dest.upload_activity.assert_called_once()
         uploaded: Activity = dest.upload_activity.call_args[0][0]
         assert uploaded.description == "Great walk in the park"
+
+
+_PHOTO = MediaItem(
+    content=b"img", media_type="photo", url="https://cdn.example.com/p1.jpg"
+)
+_PHOTO2 = MediaItem(
+    content=b"img2", media_type="photo", url="https://cdn.example.com/p2.jpg"
+)
+_PHOTO_NO_URL = MediaItem(content=b"img3", media_type="photo")
+
+
+class TestComputeBorrowedMedia:
+    def _executor(
+        self,
+        cache: ActivityCache,
+        sources: list[tuple[str, int]] | None = None,
+    ) -> SyncExecutor:
+        if sources is None:
+            sources = [("garmin", 1), ("strava", 2)]
+        return SyncExecutor(
+            sources=[(_spec(sid, priority=p), _source_conn()) for sid, p in sources],
+            destinations=[],
+            cache=cache,
+        )
+
+    def test_borrows_media_from_lower_priority_overlapping_source(
+        self, cache: ActivityCache
+    ) -> None:
+        garmin = cache.put(_entry("g-1", "garmin"), b"fit")
+        strava = cache.put(_entry("s-1", "strava"), b"gpx")
+        cache.put_media(strava, [_PHOTO])
+
+        executor = self._executor(cache)
+        result = executor._compute_borrowed_media([garmin, strava])
+
+        assert result == {("g-1", "garmin"): [_PHOTO]}
+
+    def test_no_borrow_when_winner_has_media(self, cache: ActivityCache) -> None:
+        garmin = cache.put(_entry("g-1", "garmin"), b"fit")
+        strava = cache.put(_entry("s-1", "strava"), b"gpx")
+        cache.put_media(garmin, [_PHOTO])
+        cache.put_media(strava, [_PHOTO2])
+
+        executor = self._executor(cache)
+        result = executor._compute_borrowed_media([garmin, strava])
+
+        assert result == {}
+
+    def test_aggregates_media_from_multiple_overlapping_donors(
+        self, cache: ActivityCache
+    ) -> None:
+        # G1 (priority 1, no media) overlaps both S1 and S2 (priority 2)
+        # S1 and S2 are non-overlapping with each other but both overlap G1
+        t_g1 = datetime(2026, 1, 1, 8, 0, tzinfo=_UTC)
+        t_s1 = datetime(2026, 1, 1, 8, 0, tzinfo=_UTC)
+        t_s2 = datetime(2026, 1, 1, 8, 30, tzinfo=_UTC)
+        garmin = cache.put(
+            _entry("g-1", "garmin", start_time=t_g1, elapsed_s=7200), b"fit"
+        )
+        s1 = cache.put(_entry("s-1", "strava", start_time=t_s1, elapsed_s=1800), b"gpx")
+        s2 = cache.put(_entry("s-2", "strava", start_time=t_s2, elapsed_s=1800), b"gpx")
+        cache.put_media(s1, [_PHOTO])
+        cache.put_media(s2, [_PHOTO2])
+
+        executor = self._executor(cache)
+        result = executor._compute_borrowed_media([garmin, s1, s2])
+
+        assert ("g-1", "garmin") in result
+        assert _PHOTO in result[("g-1", "garmin")]
+        assert _PHOTO2 in result[("g-1", "garmin")]
+
+    def test_deduplicates_by_non_empty_url(self, cache: ActivityCache) -> None:
+        garmin = cache.put(_entry("g-1", "garmin"), b"fit")
+        s1 = cache.put(_entry("s-1", "strava", elapsed_s=1800), b"gpx")
+        t_s2 = datetime(2026, 1, 1, 8, 30, tzinfo=_UTC)
+        s2 = cache.put(_entry("s-2", "strava", start_time=t_s2, elapsed_s=1800), b"gpx")
+        cache.put_media(s1, [_PHOTO])
+        cache.put_media(s2, [_PHOTO])  # same URL as s1
+
+        executor = self._executor(cache)
+        result = executor._compute_borrowed_media([garmin, s1, s2])
+
+        borrowed = result.get(("g-1", "garmin"), [])
+        assert borrowed.count(_PHOTO) == 1
+
+    def test_items_without_url_are_not_deduplicated(self, cache: ActivityCache) -> None:
+        garmin = cache.put(_entry("g-1", "garmin"), b"fit")
+        s1 = cache.put(_entry("s-1", "strava", elapsed_s=1800), b"gpx")
+        t_s2 = datetime(2026, 1, 1, 8, 30, tzinfo=_UTC)
+        s2 = cache.put(_entry("s-2", "strava", start_time=t_s2, elapsed_s=1800), b"gpx")
+        cache.put_media(s1, [_PHOTO_NO_URL])
+        cache.put_media(s2, [_PHOTO_NO_URL])
+
+        executor = self._executor(cache)
+        result = executor._compute_borrowed_media([garmin, s1, s2])
+
+        borrowed = result.get(("g-1", "garmin"), [])
+        assert len(borrowed) == 2  # both kept - no URL-based dedup
+
+    def test_no_borrow_from_non_overlapping_source(self, cache: ActivityCache) -> None:
+        t_distant = datetime(2026, 1, 1, 20, 0, tzinfo=_UTC)
+        garmin = cache.put(_entry("g-1", "garmin"), b"fit")
+        strava = cache.put(
+            _entry("s-1", "strava", start_time=t_distant, elapsed_s=3600), b"gpx"
+        )
+        cache.put_media(strava, [_PHOTO])
+
+        executor = self._executor(cache)
+        result = executor._compute_borrowed_media([garmin, strava])
+
+        assert result == {}
+
+    def test_no_borrow_from_higher_priority_source(self, cache: ActivityCache) -> None:
+        # Strava priority=1 (higher), garmin priority=2 (lower).
+        # Garmin has no media; strava has media but garmin must NOT borrow from
+        # a higher-priority source.
+        garmin = cache.put(_entry("g-1", "garmin"), b"fit")
+        strava = cache.put(_entry("s-1", "strava"), b"gpx")
+        cache.put_media(strava, [_PHOTO])
+
+        executor = SyncExecutor(
+            sources=[
+                (_spec("strava", priority=1), _source_conn()),
+                (_spec("garmin", priority=2), _source_conn()),
+            ],
+            destinations=[],
+            cache=cache,
+        )
+        result = executor._compute_borrowed_media([garmin, strava])
+
+        assert result == {}
+
+    def test_only_overlapping_donor_contributes(self, cache: ActivityCache) -> None:
+        # winner A (garmin), unrelated B (strava, no overlap), overlapping C (local)
+        t_distant = datetime(2026, 1, 1, 20, 0, tzinfo=_UTC)
+        garmin = cache.put(_entry("g-1", "garmin"), b"fit")
+        b_entry = cache.put(
+            _entry("s-1", "strava", start_time=t_distant, elapsed_s=3600), b"gpx"
+        )
+        c_entry = cache.put(_entry("l-1", "local"), b"fit")
+        cache.put_media(b_entry, [_PHOTO])
+        cache.put_media(c_entry, [_PHOTO2])
+
+        executor = SyncExecutor(
+            sources=[
+                (_spec("garmin", priority=1), _source_conn()),
+                (_spec("strava", priority=2), _source_conn()),
+                (_spec("local", priority=3), _source_conn()),
+            ],
+            destinations=[],
+            cache=cache,
+        )
+        result = executor._compute_borrowed_media([garmin, b_entry, c_entry])
+
+        assert result == {("g-1", "garmin"): [_PHOTO2]}
+
+    async def test_media_propagated_end_to_end(self, cache: ActivityCache) -> None:
+        # Garmin (priority 1, no media) wins; Strava (priority 2) has media.
+        # Destination upload should carry Strava's photo.
+        cache.put(_entry("g-1", "garmin"), b"fit-content")
+        strava_entry = cache.put(_entry("s-1", "strava"), b"<gpx/>")
+        cache.put_media(strava_entry, [_PHOTO])
+        cache.mark_uploaded(strava_entry, "local")
+
+        dest = _dest_conn()
+        dest.supports_media_upload = True
+        executor = SyncExecutor(
+            sources=[
+                (_spec("garmin", priority=1), _source_conn(metas=[_meta("g-1")])),
+                (_spec("strava", priority=2), _source_conn(metas=[_meta("s-1")])),
+            ],
+            destinations=[("local", dest)],
+            cache=cache,
+        )
+        await executor.run(_START, _END)
+
+        dest.upload_activity.assert_called_once()
+        uploaded: Activity = dest.upload_activity.call_args[0][0]
+        assert uploaded.media == (_PHOTO,)
+
+    async def test_winner_own_media_not_overridden_by_lower_priority(
+        self, cache: ActivityCache
+    ) -> None:
+        garmin_entry = cache.put(_entry("g-1", "garmin"), b"fit-content")
+        cache.put_media(garmin_entry, [_PHOTO])
+        strava_entry = cache.put(_entry("s-1", "strava"), b"<gpx/>")
+        cache.put_media(strava_entry, [_PHOTO2])
+        cache.mark_uploaded(strava_entry, "local")
+
+        dest = _dest_conn()
+        dest.supports_media_upload = True
+        executor = SyncExecutor(
+            sources=[
+                (_spec("garmin", priority=1), _source_conn(metas=[_meta("g-1")])),
+                (_spec("strava", priority=2), _source_conn(metas=[_meta("s-1")])),
+            ],
+            destinations=[("local", dest)],
+            cache=cache,
+        )
+        await executor.run(_START, _END)
+
+        uploaded: Activity = dest.upload_activity.call_args[0][0]
+        assert uploaded.media == (_PHOTO,)
+
+    async def test_split_case_both_winners_get_lower_priority_media(
+        self, cache: ActivityCache
+    ) -> None:
+        # Garmin G1 08:00-09:00 and G2 09:00-10:00 (priority 1, no media).
+        # Strava S 08:00-10:00 (priority 2, has media).
+        # Both G1 and G2 should be uploaded with Strava's media.
+        t_g1 = datetime(2026, 1, 1, 8, 0, tzinfo=_UTC)
+        t_g2 = datetime(2026, 1, 1, 9, 0, tzinfo=_UTC)
+        t_s = datetime(2026, 1, 1, 8, 0, tzinfo=_UTC)
+
+        cache.put(_entry("g-1", "garmin", start_time=t_g1, elapsed_s=3600), b"fit")
+        cache.put(_entry("g-2", "garmin", start_time=t_g2, elapsed_s=3600), b"fit")
+        strava = cache.put(
+            _entry("s-1", "strava", start_time=t_s, elapsed_s=7200), b"gpx"
+        )
+        cache.put_media(strava, [_PHOTO])
+        cache.mark_uploaded(strava, "local")
+
+        dest = _dest_conn()
+        dest.supports_media_upload = True
+        executor = SyncExecutor(
+            sources=[
+                (
+                    _spec("garmin", priority=1),
+                    _source_conn(metas=[_meta("g-1", t_g1), _meta("g-2", t_g2)]),
+                ),
+                (
+                    _spec("strava", priority=2),
+                    _source_conn(metas=[_meta("s-1", t_s, elapsed_s=7200)]),
+                ),
+            ],
+            destinations=[("local", dest)],
+            cache=cache,
+        )
+        await executor.run(_START, _END)
+
+        assert dest.upload_activity.call_count == 2
+        for call in dest.upload_activity.call_args_list:
+            uploaded: Activity = call[0][0]
+            assert uploaded.media == (_PHOTO,), f"{uploaded.external_id} missing media"
+
+    def test_debug_log_emitted_when_sync_logger_present(
+        self, cache: ActivityCache
+    ) -> None:
+        garmin = cache.put(_entry("g-1", "garmin"), b"fit")
+        strava = cache.put(_entry("s-1", "strava"), b"gpx")
+        cache.put_media(strava, [_PHOTO])
+
+        sync_logger = MagicMock()
+        tracker = _make_tracker()
+        tracker.sync_logger = sync_logger
+
+        executor = SyncExecutor(
+            sources=[
+                (_spec("garmin", priority=1), _source_conn()),
+                (_spec("strava", priority=2), _source_conn()),
+            ],
+            destinations=[],
+            cache=cache,
+            tracker=tracker,
+        )
+        executor._compute_borrowed_media([garmin, strava])
+
+        sync_logger.debug.assert_called_once()
+        msg = sync_logger.debug.call_args[0][0]
+        assert "g-1" in msg
+        assert "s-1" in msg
+        assert "borrows" in msg

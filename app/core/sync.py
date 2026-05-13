@@ -159,11 +159,13 @@ class SyncExecutor:
                 return await connector.download_activity(item.meta), False
             except ActivityUnavailableError:
                 return None, True
-            except Exception:
+            except TransientDownloadError:
                 if pad:
                     remaining = _MIN_ATTEMPT_DURATION_S - (loop.time() - t0)
                     if remaining > 0:
                         await asyncio.sleep(remaining)
+                raise
+            except Exception:
                 raise
 
     async def _on_download_success(

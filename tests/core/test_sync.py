@@ -887,6 +887,25 @@ class TestSyncExecutorTracking:
             await executor.run(_START, _END)
         assert conn.download_activity.call_count == 1
 
+    async def test_non_transient_error_does_not_trigger_padding(
+        self, cache: ActivityCache
+    ) -> None:
+        conn = _make_conn()
+        conn.list_activities = AsyncMock(return_value=[_meta("a1")])
+        conn.download_activity = AsyncMock(side_effect=ValueError("bad zip"))
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), conn)],
+            destinations=[],
+            cache=cache,
+        )
+        sleep_calls: list = []
+        with patch(
+            "asyncio.sleep", new=AsyncMock(side_effect=lambda s: sleep_calls.append(s))
+        ):
+            with pytest.raises(ValueError):
+                await executor.run(_START, _END)
+        assert sleep_calls == []
+
     async def test_cache_write_error_fails_task_and_raises(
         self, cache: ActivityCache
     ) -> None:

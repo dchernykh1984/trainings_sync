@@ -523,6 +523,36 @@ class TestDownloadActivity:
             with pytest.raises(RuntimeError, match="network error"):
                 await logged_in.download_activity(_make_meta())
 
+    async def test_get_activity_request_error_raises_transient_download_error(
+        self, logged_in: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        from app.connectors.base import TransientDownloadError
+
+        mock_client.get_activity.side_effect = requests.ConnectionError("timeout")
+        with patch(
+            "app.connectors.strava.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            with pytest.raises(TransientDownloadError, match="timeout"):
+                await logged_in.download_activity(_make_meta())
+
+    async def test_get_activity_streams_request_error_raises_transient_download_error(
+        self, logged_in: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        from app.connectors.base import TransientDownloadError
+
+        mock_client.get_activity_streams.side_effect = requests.ConnectionError(
+            "connection reset"
+        )
+        with patch(
+            "app.connectors.strava.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            with pytest.raises(TransientDownloadError, match="connection reset"):
+                await logged_in.download_activity(_make_meta())
+
     async def test_returns_minimal_tcx_when_time_stream_absent(
         self, logged_in: StravaConnector, mock_client: MagicMock
     ) -> None:

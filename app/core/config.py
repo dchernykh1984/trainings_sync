@@ -9,61 +9,47 @@ from app.credentials.base import CredentialRequest
 
 
 @dataclass(frozen=True)
-class GarminSourceConfig:
-    id: str
-    priority: int
-    credential: CredentialRequest
-
-
-@dataclass(frozen=True)
-class StravaSourceConfig:
-    id: str
-    priority: int
-    client_id: int
-    # get_credentials -> Credentials(login=client_secret, password=refresh_token)
-    credential: CredentialRequest
-
-
-@dataclass(frozen=True)
-class LocalFolderSourceConfig:
-    id: str
-    priority: int
-    folder: Path
-
-
-SourceConfig = GarminSourceConfig | StravaSourceConfig | LocalFolderSourceConfig
-
-
-@dataclass(frozen=True)
-class GarminDestinationConfig:
+class GarminConnectorConfig:
     id: str
     credential: CredentialRequest
 
 
 @dataclass(frozen=True)
-class StravaDestinationConfig:
+class StravaConnectorConfig:
     id: str
     client_id: int
-    # get_credentials -> Credentials(login=client_secret, password=refresh_token)
     credential: CredentialRequest
 
 
 @dataclass(frozen=True)
-class LocalFolderDestinationConfig:
+class LocalFolderConnectorConfig:
     id: str
     folder: Path
 
 
-DestinationConfig = (
-    GarminDestinationConfig | StravaDestinationConfig | LocalFolderDestinationConfig
+ConnectorConfig = (
+    GarminConnectorConfig | StravaConnectorConfig | LocalFolderConnectorConfig
 )
+
+
+@dataclass(frozen=True)
+class GroupSourceConfig:
+    id: str
+    priority: int
+
+
+@dataclass(frozen=True)
+class SyncGroupConfig:
+    id: str
+    sources: tuple[GroupSourceConfig, ...]
+    destinations: tuple[str, ...]
 
 
 @dataclass(frozen=True)
 class AppConfig:
     cache_dir: Path
-    sources: tuple[SourceConfig, ...]
-    destinations: tuple[DestinationConfig, ...]
+    connectors: tuple[ConnectorConfig, ...]
+    sync_groups: tuple[SyncGroupConfig, ...]
     start: date | None = None
     end: date | None = None
 
@@ -117,70 +103,116 @@ def _parse_date_optional(d: dict, key: str, where: str) -> date | None:
         raise ConfigError(f"{where}: field {key!r} is not a valid date: {exc}") from exc
 
 
-def _parse_source(raw: object, index: int, base_dir: Path) -> SourceConfig:
-    where = f"sources[{index}]"
+def _parse_connector(raw: object, index: int, base_dir: Path) -> ConnectorConfig:
+    where = f"connectors[{index}]"
     if not isinstance(raw, dict):
         raise ConfigError(f"{where}: must be an object")
 
-    source_id = _require_str(raw, "id", where)
-    if not source_id:
+    connector_id = _require_str(raw, "id", where)
+    if not connector_id:
         raise ConfigError(f"{where}: 'id' must not be empty")
 
-    source_type = _require_str(raw, "type", where)
-    priority = _require_int(raw, "priority", where)
+    connector_type = _require_str(raw, "type", where)
 
-    if source_type == "garmin":
-        return GarminSourceConfig(
-            id=source_id,
-            priority=priority,
+    if connector_type == "garmin":
+        return GarminConnectorConfig(
+            id=connector_id,
             credential=_parse_credential(raw, where),
         )
-    if source_type == "strava":
-        return StravaSourceConfig(
-            id=source_id,
-            priority=priority,
+    if connector_type == "strava":
+        return StravaConnectorConfig(
+            id=connector_id,
             client_id=_require_int(raw, "client_id", where),
             credential=_parse_credential(raw, where),
         )
-    if source_type == "local_folder":
+    if connector_type == "local_folder":
         folder_str = _require_str(raw, "folder", where)
-        return LocalFolderSourceConfig(
-            id=source_id,
-            priority=priority,
+        return LocalFolderConnectorConfig(
+            id=connector_id,
             folder=_resolve_path(folder_str, base_dir),
         )
-    raise ConfigError(f"{where}: unknown source type {source_type!r}")
+    raise ConfigError(f"{where}: unknown connector type {connector_type!r}")
 
 
-def _parse_destination(raw: object, index: int, base_dir: Path) -> DestinationConfig:
-    where = f"destinations[{index}]"
+def _parse_group_sources(
+    raw_sources: object, where: str, connector_ids: set[str]
+) -> list[GroupSourceConfig]:
+    if not isinstance(raw_sources, list):
+        raise ConfigError(f"{where}: 'sources' must be a list")
+    if not raw_sources:
+        raise ConfigError(f"{where}: 'sources' must not be empty")
+    sources: list[GroupSourceConfig] = []
+    seen: set[str] = set()
+    for i, raw_src in enumerate(raw_sources):
+        src_where = f"{where}.sources[{i}]"
+        if not isinstance(raw_src, dict):
+            raise ConfigError(f"{src_where}: must be an object")
+        src_id = _require_str(raw_src, "id", src_where)
+        if not src_id:
+            raise ConfigError(f"{src_where}: 'id' must not be empty")
+        if src_id not in connector_ids:
+            raise ConfigError(f"{src_where}: unknown connector id {src_id!r}")
+        if src_id in seen:
+            raise ConfigError(f"{where}: duplicate source id {src_id!r}")
+        seen.add(src_id)
+        sources.append(
+            GroupSourceConfig(
+                id=src_id, priority=_require_int(raw_src, "priority", src_where)
+            )
+        )
+    return sources
+
+
+def _parse_group_destinations(
+    raw_destinations: object, where: str, connector_ids: set[str]
+) -> list[str]:
+    if not isinstance(raw_destinations, list):
+        raise ConfigError(f"{where}: 'destinations' must be a list")
+    destinations: list[str] = []
+    seen: set[str] = set()
+    for i, raw_dest in enumerate(raw_destinations):
+        dest_where = f"{where}.destinations[{i}]"
+        if not isinstance(raw_dest, str):
+            raise ConfigError(f"{dest_where}: must be a string")
+        if not raw_dest:
+            raise ConfigError(f"{dest_where}: must not be empty")
+        if raw_dest not in connector_ids:
+            raise ConfigError(f"{dest_where}: unknown connector id {raw_dest!r}")
+        if raw_dest in seen:
+            raise ConfigError(f"{where}: duplicate destination id {raw_dest!r}")
+        seen.add(raw_dest)
+        destinations.append(raw_dest)
+    return destinations
+
+
+def _parse_group(raw: object, index: int, connector_ids: set[str]) -> SyncGroupConfig:
+    where = f"sync_groups[{index}]"
     if not isinstance(raw, dict):
         raise ConfigError(f"{where}: must be an object")
 
-    dest_id = _require_str(raw, "id", where)
-    if not dest_id:
+    group_id = _require_str(raw, "id", where)
+    if not group_id:
         raise ConfigError(f"{where}: 'id' must not be empty")
 
-    dest_type = _require_str(raw, "type", where)
+    sources = _parse_group_sources(raw.get("sources", []), where, connector_ids)
+    source_ids = {s.id for s in sources}
+    destinations = _parse_group_destinations(
+        raw.get("destinations", []), where, connector_ids
+    )
+    dest_ids = set(destinations)
 
-    if dest_type == "garmin":
-        return GarminDestinationConfig(
-            id=dest_id,
-            credential=_parse_credential(raw, where),
+    conflicts = source_ids & dest_ids
+    if conflicts:
+        names = ", ".join(sorted(conflicts))
+        raise ConfigError(
+            f"{where}: connector(s) appear as both source and destination: {names}"
         )
-    if dest_type == "strava":
-        return StravaDestinationConfig(
-            id=dest_id,
-            client_id=_require_int(raw, "client_id", where),
-            credential=_parse_credential(raw, where),
-        )
-    if dest_type == "local_folder":
-        folder_str = _require_str(raw, "folder", where)
-        return LocalFolderDestinationConfig(
-            id=dest_id,
-            folder=_resolve_path(folder_str, base_dir),
-        )
-    raise ConfigError(f"{where}: unknown destination type {dest_type!r}")
+
+    return SyncGroupConfig(
+        id=group_id,
+        sources=tuple(sources),
+        destinations=tuple(destinations),
+    )
 
 
 def _check_unique_ids(ids: list[str], label: str) -> None:
@@ -189,6 +221,21 @@ def _check_unique_ids(ids: list[str], label: str) -> None:
         if sid in seen:
             raise ConfigError(f"duplicate {label} id: {sid!r}")
         seen.add(sid)
+
+
+def _check_strava_credential_uniqueness(
+    connectors: tuple[ConnectorConfig, ...],
+) -> None:
+    seen: set[CredentialRequest] = set()
+    for c in connectors:
+        if isinstance(c, StravaConnectorConfig):
+            if c.credential in seen:
+                raise ConfigError(
+                    f"connector {c.id!r}: duplicate Strava credential ref -"
+                    " each Strava account must appear at most once"
+                    " (sharing a refresh token causes rotation races)"
+                )
+            seen.add(c.credential)
 
 
 def load_config(path: Path) -> AppConfig:
@@ -210,23 +257,29 @@ def load_config(path: Path) -> AppConfig:
     base_dir = path.parent
     cache_dir = _resolve_path(_require_str(raw, "cache_dir", "root"), base_dir)
 
-    raw_sources = raw.get("sources", [])
-    if not isinstance(raw_sources, list):
-        raise ConfigError("root: 'sources' must be a list")
-    if not raw_sources:
-        raise ConfigError("root: 'sources' must not be empty")
+    raw_connectors = raw.get("connectors", [])
+    if not isinstance(raw_connectors, list):
+        raise ConfigError("root: 'connectors' must be a list")
+    if not raw_connectors:
+        raise ConfigError("root: 'connectors' must not be empty")
 
-    sources = tuple(_parse_source(s, i, base_dir) for i, s in enumerate(raw_sources))
-    _check_unique_ids([s.id for s in sources], "source")
-
-    raw_dests = raw.get("destinations", [])
-    if not isinstance(raw_dests, list):
-        raise ConfigError("root: 'destinations' must be a list")
-
-    destinations = tuple(
-        _parse_destination(d, i, base_dir) for i, d in enumerate(raw_dests)
+    connectors = tuple(
+        _parse_connector(c, i, base_dir) for i, c in enumerate(raw_connectors)
     )
-    _check_unique_ids([d.id for d in destinations], "destination")
+    _check_unique_ids([c.id for c in connectors], "connector")
+    _check_strava_credential_uniqueness(connectors)
+
+    raw_groups = raw.get("sync_groups", [])
+    if not isinstance(raw_groups, list):
+        raise ConfigError("root: 'sync_groups' must be a list")
+    if not raw_groups:
+        raise ConfigError("root: 'sync_groups' must not be empty")
+
+    connector_ids = {c.id for c in connectors}
+    sync_groups = tuple(
+        _parse_group(g, i, connector_ids) for i, g in enumerate(raw_groups)
+    )
+    _check_unique_ids([g.id for g in sync_groups], "sync group")
 
     start = _parse_date_optional(raw, "start", "root")
     end = _parse_date_optional(raw, "end", "root")
@@ -236,8 +289,8 @@ def load_config(path: Path) -> AppConfig:
 
     return AppConfig(
         cache_dir=cache_dir,
-        sources=sources,
-        destinations=destinations,
+        connectors=connectors,
+        sync_groups=sync_groups,
         start=start,
         end=end,
     )

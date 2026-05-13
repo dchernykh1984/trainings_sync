@@ -275,6 +275,15 @@ class LocalFolderConnector(ServiceConnector):
             if f.is_file() and f.suffix.lower() in self._parsers
         )
 
+    def as_destination(self, cache: object, dest_id: str) -> LocalFolderConnector:
+        return LocalFolderConnector(
+            folder=self._folder,
+            tracker=self._tracker,
+            parsers=self._parsers,
+            cache=cache,
+            dest_id=dest_id,
+        )
+
     async def upload_activity(
         self, activity: Activity, *, task_name: str | None = None
     ) -> str | None:

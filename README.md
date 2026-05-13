@@ -47,6 +47,12 @@ poetry run pre-commit run --all-files
 ## Usage
 
 Example config and credentials files are in [config_templates/](config_templates/).
+Two templates are provided:
+
+- **`config.garmin-to-local.json`** — sync from Garmin Connect to a local folder (simple, no Strava).
+- **`config.strava-and-garmin.json`** — full setup with two sync groups running in a single pass:
+  1. Strava → Garmin Connect (upload Strava activities to Garmin)
+  2. Garmin + Strava → local folder (save to disk, Garmin has priority)
 
 First copy the templates to the ignored `config/` directory:
 
@@ -56,30 +62,30 @@ cp config_templates/*.json config/
 ```
 
 Then edit files in `config/` and replace placeholder values such as Garmin
-email, local folders, JSON credentials, and KeePass database path. Run the CLI
+email, local folders, and Strava `client_id`. Run the CLI
 with the local `config/` files, not the templates.
 
-Run with KeePass credentials:
+### Garmin → local folder (simple)
 
-> Before running: in `config/config.keepass.json` set `credential_login` to your Garmin email and `folder` to your local trainings directory. Replace the `--creds-keepass` path with the path to your KeePass database.
+Edit `config/config.garmin-to-local.json`: set `credential_login` to your Garmin email and `folder` to your local trainings directory.
 
-```bash
-poetry install
-poetry run trainings-sync \
-  --config config/config.keepass.json \
-  --creds-keepass /path/to/keepass.kdbx
-```
-
-Run with a local JSON credentials file:
+Run with a JSON credentials file:
 
 ```bash
-poetry install
 poetry run trainings-sync \
-  --config config/config.local-json.json \
+  --config config/config.garmin-to-local.json \
   --creds-json config/creds.json
 ```
 
-Run with Strava as a fallback source (activities missing from Garmin are pulled from Strava):
+Run with KeePass credentials (replace the path with your `.kdbx` file):
+
+```bash
+poetry run trainings-sync \
+  --config config/config.garmin-to-local.json \
+  --creds-keepass /path/to/keepass.kdbx
+```
+
+### Strava + Garmin (full setup)
 
 #### Getting Strava credentials
 
@@ -101,30 +107,16 @@ Run with Strava as a fallback source (activities missing from Garmin are pulled 
    ```
    Copy `refresh_token` from the response.
 
-4. In `config/config.strava-source.json` set `client_id` to your Client ID.
+4. In `config/config.strava-and-garmin.json` set `client_id` to your Strava Client ID,
+   `credential_login` to your Garmin email, and `folder` to your local trainings directory.
    In `config/creds.strava-source.json` fill in:
    - Garmin `password` — your Garmin password
    - Strava `login` — your Client Secret
    - Strava `password` — the refresh token from step 3
 
 ```bash
-poetry install
 poetry run trainings-sync \
-  --config config/config.strava-source.json \
-  --creds-json config/creds.strava-source.json
-```
-
-Run with Strava as source and Garmin as destination (activities from Strava are uploaded to Garmin Connect):
-
-> Uses the same credentials file as the Strava fallback source scenario. See [Getting Strava credentials](#getting-strava-credentials) above.
-
-1. In `config/config.strava-to-garmin.json` set `client_id` to your Strava Client ID and `credential_login` to your Garmin email.
-   In `config/creds.strava-source.json` fill in Garmin and Strava credentials as described above.
-
-```bash
-poetry install
-poetry run trainings-sync \
-  --config config/config.strava-to-garmin.json \
+  --config config/config.strava-and-garmin.json \
   --creds-json config/creds.strava-source.json
 ```
 

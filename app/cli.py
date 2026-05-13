@@ -12,14 +12,12 @@ from app.core.cache import ActivityCache
 from app.core.config import (
     AppConfig,
     ConfigError,
-    GarminDestinationConfig,
-    GarminSourceConfig,
-    StravaDestinationConfig,
-    StravaSourceConfig,
+    GarminConnectorConfig,
+    StravaConnectorConfig,
     load_config,
 )
-from app.core.connector_factory import build_destinations, build_sources
-from app.core.sync import SyncExecutor
+from app.core.connector_factory import build_connectors
+from app.core.orchestrator import SyncOrchestrator
 from app.credentials.base import (
     CredentialProvider,
     CredentialRequest,
@@ -45,10 +43,8 @@ class _NullProvider(CredentialProvider):
 
 def _credentials_needed(config: AppConfig) -> bool:
     return any(
-        isinstance(s, (GarminSourceConfig, StravaSourceConfig)) for s in config.sources
-    ) or any(
-        isinstance(d, (GarminDestinationConfig, StravaDestinationConfig))
-        for d in config.destinations
+        isinstance(c, (GarminConnectorConfig, StravaConnectorConfig))
+        for c in config.connectors
     )
 
 
@@ -144,39 +140,7 @@ def _validate(
             file=sys.stderr,
         )
         sys.exit(1)
-    strava_src_ids = {
-        src.id for src in config.sources if isinstance(src, StravaSourceConfig)
-    }
-    strava_dest_ids = {
-        dest.id
-        for dest in config.destinations
-        if isinstance(dest, StravaDestinationConfig)
-    }
-    conflicts = strava_src_ids & strava_dest_ids
-    if conflicts:
-        names = ", ".join(sorted(conflicts))
-        print(
-            f"error: Strava source and destination share the same id(s): {names} -"
-            " ids must be unique across sources and destinations",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    strava_src_creds = {
-        src.credential for src in config.sources if isinstance(src, StravaSourceConfig)
-    }
-    strava_dest_creds = {
-        dest.credential
-        for dest in config.destinations
-        if isinstance(dest, StravaDestinationConfig)
-    }
-    if strava_src_creds & strava_dest_creds:
-        print(
-            "error: the same Strava credential appears in both sources and destinations"
-            " - this would cause a token rotation race on login",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    has_strava = bool(strava_src_ids or strava_dest_ids)
+    has_strava = any(isinstance(c, StravaConnectorConfig) for c in config.connectors)
     if args.creds_keepass and has_strava:
         print(
             "error: --creds-keepass does not support Strava -"
@@ -201,16 +165,9 @@ async def _run_sync(
         )
 
     strava_cred_map = {
-        **{
-            src.id: src.credential
-            for src in config.sources
-            if isinstance(src, StravaSourceConfig)
-        },
-        **{
-            dest.id: dest.credential
-            for dest in config.destinations
-            if isinstance(dest, StravaDestinationConfig)
-        },
+        c.id: c.credential
+        for c in config.connectors
+        if isinstance(c, StravaConnectorConfig)
     }
 
     download_failures = 0
@@ -223,11 +180,11 @@ async def _run_sync(
         )
 
         def _on_token_refresh(
-            dest_id: str, new_creds: StravaCredentials, user_label: str
+            connector_id: str, new_creds: StravaCredentials, user_label: str
         ) -> None:
             if isinstance(provider, JsonFileProvider):
                 provider.update_refresh_token(
-                    strava_cred_map[dest_id], new_creds.refresh_token
+                    strava_cred_map[connector_id], new_creds.refresh_token
                 )
                 sync_logger.info(
                     f"[strava] Token refresh ({user_label}): saved to {args.creds_json}"
@@ -237,17 +194,10 @@ async def _run_sync(
         cache.load()
 
         try:
-            sources = await build_sources(
+            connectors = await build_connectors(
                 config,
                 provider,
                 tracker,
-                on_strava_token_refresh=_on_token_refresh,
-            )
-            destinations = await build_destinations(
-                config,
-                provider,
-                tracker,
-                cache=cache,
                 on_strava_token_refresh=_on_token_refresh,
             )
         except CredentialsNotFoundError:
@@ -256,16 +206,16 @@ async def _run_sync(
             print(f"error: {exc}", file=sys.stderr)
             sys.exit(1)
 
-        for _, connector in sources:
-            await connector.login()
-        for _, connector in destinations:
+        for connector in connectors.values():
             await connector.login()
 
-        executor = SyncExecutor(
-            sources=sources, destinations=destinations, cache=cache, tracker=tracker
+        orchestrator = SyncOrchestrator(
+            groups=config.sync_groups,
+            connectors=connectors,
+            cache=cache,
+            tracker=tracker,
         )
-        await executor.run(start, end, force=args.force)
-        download_failures = executor.download_failures
+        download_failures = await orchestrator.run(start, end, force=args.force)
 
     if download_failures:
         n = download_failures

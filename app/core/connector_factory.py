@@ -6,14 +6,11 @@ from app.connectors.base import ServiceConnector
 from app.connectors.garmin import GarminConnector
 from app.connectors.local_folder import LocalFolderConnector
 from app.connectors.strava import StravaConnector
-from app.core.cache import ActivityCache
 from app.core.config import (
     AppConfig,
-    GarminDestinationConfig,
-    GarminSourceConfig,
-    LocalFolderSourceConfig,
-    StravaDestinationConfig,
-    StravaSourceConfig,
+    GarminConnectorConfig,
+    StravaConnectorConfig,
+    SyncGroupConfig,
 )
 from app.core.planner import SourceSpec
 from app.credentials.base import CredentialProvider, StravaCredentials
@@ -35,97 +32,61 @@ def _strava_callback(
     return _cb
 
 
-async def build_sources(
+async def build_connectors(
     config: AppConfig,
     provider: CredentialProvider,
     tracker: TaskTracker,
     on_strava_token_refresh: OnStravaTokenRefresh | None = None,
-) -> list[tuple[SourceSpec, ServiceConnector]]:
+) -> dict[str, ServiceConnector]:
     cred_requests = [
-        src.credential
-        for src in config.sources
-        if isinstance(src, (GarminSourceConfig, StravaSourceConfig))
+        cfg.credential
+        for cfg in config.connectors
+        if isinstance(cfg, (GarminConnectorConfig, StravaConnectorConfig))
     ]
-    creds = iter(await provider.get_many(cred_requests, context="sources"))
+    creds = iter(await provider.get_many(cred_requests, context="connectors"))
 
-    result: list[tuple[SourceSpec, ServiceConnector]] = []
-    for src_cfg in config.sources:
+    result: dict[str, ServiceConnector] = {}
+    for cfg in config.connectors:
         connector: ServiceConnector
-        if isinstance(src_cfg, GarminSourceConfig):
+        if isinstance(cfg, GarminConnectorConfig):
             connector = GarminConnector(credentials=next(creds), tracker=tracker)
-        elif isinstance(src_cfg, StravaSourceConfig):
+        elif isinstance(cfg, StravaConnectorConfig):
             raw = next(creds)
             strava_creds = StravaCredentials(
-                client_id=src_cfg.client_id,
+                client_id=cfg.client_id,
                 client_secret=raw.login,
                 refresh_token=raw.password,
             )
             connector = StravaConnector(
                 credentials=strava_creds,
                 tracker=tracker,
-                on_token_refresh=_strava_callback(src_cfg.id, on_strava_token_refresh),
+                on_token_refresh=_strava_callback(cfg.id, on_strava_token_refresh),
             )
-        elif isinstance(src_cfg, LocalFolderSourceConfig):
-            connector = LocalFolderConnector(folder=src_cfg.folder, tracker=tracker)
-        else:
-            raise AssertionError(  # pragma: no cover
-                f"unexpected source type: {type(src_cfg).__name__}"
-            )
+        else:  # LocalFolderConnectorConfig - source mode (no cache/dest_id)
+            connector = LocalFolderConnector(folder=cfg.folder, tracker=tracker)
+        result[cfg.id] = connector
 
-        spec = SourceSpec(source_id=src_cfg.id, priority=src_cfg.priority)
-        result.append((spec, connector))
     return result
 
 
-async def build_destinations(
-    config: AppConfig,
-    provider: CredentialProvider,
-    tracker: TaskTracker,
-    cache: ActivityCache | None = None,
-    on_strava_token_refresh: OnStravaTokenRefresh | None = None,
-) -> list[tuple[str, ServiceConnector]]:
-    seen_strava_creds: set = set()
-    for dest in config.destinations:
-        if isinstance(dest, StravaDestinationConfig):
-            if dest.credential in seen_strava_creds:
-                raise ValueError(
-                    f"destination {dest.id!r}: duplicate Strava credential ref -"
-                    " each Strava account must appear at most once"
-                    " (sharing a refresh token causes rotation races)"
-                )
-            seen_strava_creds.add(dest.credential)
-
-    cred_requests = [
-        dest.credential
-        for dest in config.destinations
-        if isinstance(dest, (GarminDestinationConfig, StravaDestinationConfig))
+def resolve_group_sources(
+    group: SyncGroupConfig, connectors: dict[str, ServiceConnector]
+) -> list[tuple[SourceSpec, ServiceConnector]]:
+    return [
+        (SourceSpec(source_id=src.id, priority=src.priority), connectors[src.id])
+        for src in group.sources
     ]
-    creds = iter(await provider.get_many(cred_requests, context="destinations"))
 
+
+def resolve_group_destinations(
+    group: SyncGroupConfig,
+    connectors: dict[str, ServiceConnector],
+    cache: object,
+) -> list[tuple[str, ServiceConnector]]:
     result: list[tuple[str, ServiceConnector]] = []
-    for dest_cfg in config.destinations:
-        connector: ServiceConnector
-        if isinstance(dest_cfg, GarminDestinationConfig):
-            connector = GarminConnector(credentials=next(creds), tracker=tracker)
-        elif isinstance(dest_cfg, StravaDestinationConfig):
-            raw = next(creds)
-            strava_creds = StravaCredentials(
-                client_id=dest_cfg.client_id,
-                client_secret=raw.login,
-                refresh_token=raw.password,
-            )
-            connector = StravaConnector(
-                credentials=strava_creds,
-                tracker=tracker,
-                on_token_refresh=_strava_callback(dest_cfg.id, on_strava_token_refresh),
-            )
-        else:  # LocalFolderDestinationConfig
-            connector = LocalFolderConnector(
-                folder=dest_cfg.folder,
-                tracker=tracker,
-                cache=cache,
-                dest_id=dest_cfg.id,
-            )
-
-        result.append((dest_cfg.id, connector))
+    for dest_id in group.destinations:
+        connector = connectors[dest_id]
+        if isinstance(connector, LocalFolderConnector):
+            connector = connector.as_destination(cache, dest_id)
+        result.append((dest_id, connector))
     return result

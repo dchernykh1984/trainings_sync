@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+import asyncio
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1723,3 +1724,195 @@ class TestComputeBorrowedMedia:
         assert "g-1" in msg
         assert "s-1" in msg
         assert "borrows" in msg
+
+
+# ---------------------------------------------------------------------------
+# Cancellation cleanup
+# ---------------------------------------------------------------------------
+
+
+class TestCancellationCleanup:
+    """Tracker tasks must be failed (not left dangling) on BaseException."""
+
+    async def test_download_source_fails_tracker_on_cancelled_error(
+        self, cache: ActivityCache
+    ) -> None:
+        tracker = _make_tracker()
+
+        async def _raise_cancelled(meta: ActivityMeta) -> Activity:
+            raise asyncio.CancelledError()
+
+        conn = _source_conn(metas=[_meta()])
+        conn.download_activity = _raise_cancelled
+
+        executor = SyncExecutor(
+            sources=[(_spec("a", priority=1), conn)],
+            destinations=[],
+            cache=cache,
+            tracker=tracker,
+        )
+        with pytest.raises(asyncio.CancelledError):
+            await executor.run(_START, _END)
+
+        assert tracker.fail.called
+
+    async def test_upload_to_dest_fails_tracker_on_cancelled_error(
+        self, cache: ActivityCache
+    ) -> None:
+        cache.put(_entry("act-1", "garmin"), b"content")
+        tracker = _make_tracker()
+
+        async def _raise_cancelled(
+            activity: Activity, *, task_name: str | None = None
+        ) -> None:
+            raise asyncio.CancelledError()
+
+        dest = _dest_conn()
+        dest.upload_activity = _raise_cancelled
+
+        executor = SyncExecutor(
+            sources=[(_spec("garmin", priority=1), _source_conn())],
+            destinations=[("d1", dest)],
+            cache=cache,
+            tracker=tracker,
+        )
+        with pytest.raises(asyncio.CancelledError):
+            await executor.run(_START, _END)
+
+        assert tracker.fail.called
+
+
+# ---------------------------------------------------------------------------
+# Parallelism
+# ---------------------------------------------------------------------------
+
+
+class TestParallelism:
+    async def test_sources_listed_in_parallel(self, cache: ActivityCache) -> None:
+        call_log: list[str] = []
+
+        async def _list_a(start: date, end: date) -> list[ActivityMeta]:
+            call_log.append("a-start")
+            await asyncio.sleep(0)
+            call_log.append("a-done")
+            return []
+
+        async def _list_b(start: date, end: date) -> list[ActivityMeta]:
+            call_log.append("b-start")
+            await asyncio.sleep(0)
+            call_log.append("b-done")
+            return []
+
+        conn_a, conn_b = _make_conn(), _make_conn()
+        conn_a.list_activities = _list_a
+        conn_b.list_activities = _list_b
+
+        executor = SyncExecutor(
+            sources=[
+                (_spec("a", priority=1), conn_a),
+                (_spec("b", priority=2), conn_b),
+            ],
+            destinations=[],
+            cache=cache,
+        )
+        await executor.run(_START, _END)
+
+        assert call_log == ["a-start", "b-start", "a-done", "b-done"]
+
+    async def test_source_downloads_run_in_parallel(self, cache: ActivityCache) -> None:
+        call_log: list[str] = []
+
+        async def _download_a(meta: ActivityMeta) -> Activity:
+            call_log.append("a-start")
+            await asyncio.sleep(0)
+            call_log.append("a-done")
+            return _activity(meta.external_id, meta.start_time, meta.elapsed_s)
+
+        async def _download_b(meta: ActivityMeta) -> Activity:
+            call_log.append("b-start")
+            await asyncio.sleep(0)
+            call_log.append("b-done")
+            return _activity(meta.external_id, meta.start_time, meta.elapsed_s)
+
+        t_a = _T0
+        t_b = _T0 + timedelta(hours=2)
+        conn_a = _source_conn(metas=[_meta("a-1", t_a)])
+        conn_a.download_activity = _download_a
+        conn_b = _source_conn(metas=[_meta("b-1", t_b)])
+        conn_b.download_activity = _download_b
+
+        executor = SyncExecutor(
+            sources=[
+                (_spec("a", priority=1), conn_a),
+                (_spec("b", priority=2), conn_b),
+            ],
+            destinations=[],
+            cache=cache,
+        )
+        await executor.run(_START, _END)
+
+        assert call_log == ["a-start", "b-start", "a-done", "b-done"]
+
+    async def test_destinations_listed_in_parallel(self, cache: ActivityCache) -> None:
+        call_log: list[str] = []
+
+        async def _list_d1(start: date, end: date) -> list[ActivityMeta]:
+            call_log.append("d1-start")
+            await asyncio.sleep(0)
+            call_log.append("d1-done")
+            return []
+
+        async def _list_d2(start: date, end: date) -> list[ActivityMeta]:
+            call_log.append("d2-start")
+            await asyncio.sleep(0)
+            call_log.append("d2-done")
+            return []
+
+        cache.put(_entry("act-1", "garmin"), b"content")
+
+        d1, d2 = _dest_conn(), _dest_conn()
+        d1.list_activities = _list_d1
+        d2.list_activities = _list_d2
+
+        executor = SyncExecutor(
+            sources=[(_spec("garmin", priority=1), _source_conn())],
+            destinations=[("d1", d1), ("d2", d2)],
+            cache=cache,
+        )
+        await executor.run(_START, _END)
+
+        assert call_log == ["d1-start", "d2-start", "d1-done", "d2-done"]
+
+    async def test_uploads_to_destinations_run_in_parallel(
+        self, cache: ActivityCache
+    ) -> None:
+        call_log: list[str] = []
+
+        async def _upload_d1(
+            activity: Activity, *, task_name: str | None = None
+        ) -> None:
+            call_log.append("d1-start")
+            await asyncio.sleep(0)
+            call_log.append("d1-done")
+
+        async def _upload_d2(
+            activity: Activity, *, task_name: str | None = None
+        ) -> None:
+            call_log.append("d2-start")
+            await asyncio.sleep(0)
+            call_log.append("d2-done")
+
+        cache.put(_entry("act-1", "garmin"), b"content")
+
+        d1, d2 = _dest_conn(), _dest_conn()
+        d1.upload_activity = _upload_d1
+        d2.upload_activity = _upload_d2
+
+        executor = SyncExecutor(
+            sources=[(_spec("garmin", priority=1), _source_conn())],
+            destinations=[("d1", d1), ("d2", d2)],
+            cache=cache,
+        )
+        await executor.run(_START, _END)
+
+        assert call_log == ["d1-start", "d2-start", "d1-done", "d2-done"]

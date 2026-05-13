@@ -220,7 +220,7 @@ class StravaConnector(ServiceConnector):
             finally:
                 if self._on_token_refresh is not None:
                     self._on_token_refresh(new_credentials, self.user_label)
-        except Exception as exc:
+        except BaseException as exc:
             await self._tracker.fail(task_name, error=f"Login failed: {exc}")
             raise
         if log:

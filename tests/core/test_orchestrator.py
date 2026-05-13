@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import date, timezone
 from pathlib import Path
 from typing import cast
@@ -48,7 +49,7 @@ def cache(tmp_path: Path) -> ActivityCache:
 # ---------------------------------------------------------------------------
 
 
-async def test_runs_all_groups_sequentially(cache: ActivityCache) -> None:
+async def test_runs_all_groups(cache: ActivityCache) -> None:
     g1 = _group("g1", ["strava"], ["garmin"])
     g2 = _group("g2", ["garmin"], ["local"])
     connectors = {
@@ -56,17 +57,34 @@ async def test_runs_all_groups_sequentially(cache: ActivityCache) -> None:
         "garmin": _mock_connector(),
         "local": _mock_connector(),
     }
-    run_order: list[str] = []
+    ran: set[str] = set()
 
     async def _fake_run(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
-        # identify which group by task_prefix
-        run_order.append(executor_self._task_prefix)
+        ran.add(executor_self._task_prefix)
 
     orchestrator = SyncOrchestrator(groups=(g1, g2), connectors=connectors, cache=cache)
     with patch("app.core.orchestrator.SyncExecutor.run", new=_fake_run):
         await orchestrator.run(_START, _END)
 
-    assert run_order == ["g1: ", "g2: "]
+    assert ran == {"g1: ", "g2: "}
+
+
+async def test_groups_run_in_parallel(cache: ActivityCache) -> None:
+    g1 = _group("g1", ["strava"], [])
+    g2 = _group("g2", ["garmin"], [])
+    connectors = {"strava": _mock_connector(), "garmin": _mock_connector()}
+    run_log: list[str] = []
+
+    async def _fake_run(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
+        run_log.append(f"{executor_self._task_prefix}start")
+        await asyncio.sleep(0)
+        run_log.append(f"{executor_self._task_prefix}done")
+
+    orchestrator = SyncOrchestrator(groups=(g1, g2), connectors=connectors, cache=cache)
+    with patch("app.core.orchestrator.SyncExecutor.run", new=_fake_run):
+        await orchestrator.run(_START, _END)
+
+    assert run_log == ["g1: start", "g2: start", "g1: done", "g2: done"]
 
 
 async def test_returns_total_download_failures_across_groups(
@@ -202,3 +220,63 @@ async def test_force_forwarded_to_executor(cache: ActivityCache) -> None:
         await orchestrator.run(_START, _END, force=True)
 
     assert received_force == [True]
+
+
+# ---------------------------------------------------------------------------
+# Conflict-aware scheduling
+# ---------------------------------------------------------------------------
+
+
+async def test_groups_sharing_connector_run_sequentially(cache: ActivityCache) -> None:
+    # g1 and g2 both use "strava"; they must be serialized via the strava lock.
+    g1 = _group("g1", ["strava"], [])
+    g2 = _group("g2", ["strava"], [])
+    connectors = {"strava": _mock_connector()}
+    run_log: list[str] = []
+
+    async def _fake_run(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
+        run_log.append(f"{executor_self._task_prefix}start")
+        await asyncio.sleep(0)  # yield; g2 must not interleave because lock is held
+        run_log.append(f"{executor_self._task_prefix}done")
+
+    orchestrator = SyncOrchestrator(groups=(g1, g2), connectors=connectors, cache=cache)
+    with patch("app.core.orchestrator.SyncExecutor.run", new=_fake_run):
+        await orchestrator.run(_START, _END)
+
+    assert run_log == ["g1: start", "g1: done", "g2: start", "g2: done"]
+
+
+# ---------------------------------------------------------------------------
+# Cancellation cleanup
+# ---------------------------------------------------------------------------
+
+
+async def test_externally_cancelled_run_logs_group_as_failed(
+    cache: ActivityCache,
+) -> None:
+    # When orchestrator.run() is externally cancelled, asyncio.gather propagates
+    # CancelledError to all running groups. The except BaseException in _run_group
+    # must catch it and log "failed" (not leave the group logged only as "started").
+    g = _group("g", ["src"], [])
+    connectors = {"src": _mock_connector()}
+
+    sync_logger = MagicMock()
+    tracker = MagicMock()
+    tracker.sync_logger = sync_logger
+
+    async def _hanging_run(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        await asyncio.sleep(100)
+
+    with patch("app.core.orchestrator.SyncExecutor.run", new=_hanging_run):
+        orchestrator = SyncOrchestrator(
+            groups=(g,), connectors=connectors, cache=cache, tracker=tracker
+        )
+        task = asyncio.create_task(orchestrator.run(_START, _END))
+        await asyncio.sleep(0)  # let outer task create child tasks via asyncio.gather
+        await asyncio.sleep(0)  # let child task run until it awaits _hanging_run
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    error_calls = [c[0][0] for c in sync_logger.error.call_args_list]
+    assert any("g" in m and "failed" in m for m in error_calls)

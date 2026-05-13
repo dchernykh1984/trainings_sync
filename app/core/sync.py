@@ -259,7 +259,7 @@ class SyncExecutor:
         ]
         try:
             results = await asyncio.gather(*tasks)
-        except Exception as exc:
+        except BaseException as exc:
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
@@ -322,10 +322,13 @@ class SyncExecutor:
             )
 
     async def _download(self, start: date, end: date, *, force: bool) -> int:
-        source_metas: list[tuple[SourceSpec, list[ActivityMeta]]] = []
-        for spec, connector in self._sources:
-            metas = await connector.list_activities(start, end)
-            source_metas.append((spec, metas))
+        metas_list = await asyncio.gather(
+            *(connector.list_activities(start, end) for _, connector in self._sources)
+        )
+        source_metas = [
+            (spec, list(metas))
+            for (spec, _), metas in zip(self._sources, metas_list, strict=True)
+        ]
 
         to_download = await self._plan(source_metas, force=force)
 
@@ -345,16 +348,17 @@ class SyncExecutor:
                     total=len(items),
                 )
 
-        total_failures = 0
+        download_coros = []
         for source_id, items in by_source.items():
             task_name = source_task_names.get(source_id)
             tracking = (
                 (tracker, task_name) if tracker is not None and task_name else None
             )
-            total_failures += await self._download_source(
-                source_id, items, source_map[source_id], tracking
+            download_coros.append(
+                self._download_source(source_id, items, source_map[source_id], tracking)
             )
-        return total_failures
+        results = await asyncio.gather(*download_coros)
+        return sum(results)
 
     def _get_candidates(self, start: date, end: date) -> list[CacheEntry]:
         return [
@@ -413,9 +417,16 @@ class SyncExecutor:
         min_overlap_s = self._planner.min_overlap_s
         fallback_s = self._planner.fallback_s
 
-        dest_existing: dict[str, list[ActivityMeta]] = {}
-        for dest_id, connector in self._destinations:
-            dest_existing[dest_id] = await connector.list_activities(start, end)
+        dest_metas = await asyncio.gather(
+            *(
+                connector.list_activities(start, end)
+                for _, connector in self._destinations
+            )
+        )
+        dest_existing: dict[str, list[ActivityMeta]] = {
+            dest_id: list(metas)
+            for (dest_id, _), metas in zip(self._destinations, dest_metas, strict=True)
+        }
 
         by_dest: dict[str, list[CacheEntry]] = {}
         for entry in candidates:
@@ -620,7 +631,7 @@ class SyncExecutor:
                     )
                 if tracking is not None:
                     await tracking[0].advance(tracking[1])
-        except Exception as exc:
+        except BaseException as exc:
             if tracking is not None:
                 await tracking[0].fail(tracking[1], error=str(exc))
             raise
@@ -665,16 +676,20 @@ class SyncExecutor:
                     total=len(entries),
                 )
 
+        upload_coros = []
         for dest_id, entries in by_dest.items():
             task_name = dest_task_names.get(dest_id)
             tracking = (
                 (tracker, task_name) if tracker is not None and task_name else None
             )
-            await self._upload_to_dest(
-                dest_id,
-                entries,
-                dest_map[dest_id],
-                tracking,
-                borrowed_descriptions,
-                borrowed_media,
+            upload_coros.append(
+                self._upload_to_dest(
+                    dest_id,
+                    entries,
+                    dest_map[dest_id],
+                    tracking,
+                    borrowed_descriptions,
+                    borrowed_media,
+                )
             )
+        await asyncio.gather(*upload_coros)

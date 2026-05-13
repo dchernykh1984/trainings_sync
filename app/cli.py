@@ -206,8 +206,14 @@ async def _run_sync(
             print(f"error: {exc}", file=sys.stderr)
             sys.exit(1)
 
-        for connector in connectors.values():
-            await connector.login()
+        login_tasks = [asyncio.create_task(c.login()) for c in connectors.values()]
+        try:
+            await asyncio.gather(*login_tasks)
+        except BaseException:
+            for t in login_tasks:
+                t.cancel()
+            await asyncio.gather(*login_tasks, return_exceptions=True)
+            raise
 
         orchestrator = SyncOrchestrator(
             groups=config.sync_groups,

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import date, datetime, timezone
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -136,6 +137,22 @@ class TestLogin:
         connector = _make_connector(tmp_path / "nonexistent", tracker)
 
         with pytest.raises(FileNotFoundError):
+            await connector.login()
+
+        task = next(iter(tracker.tasks.values()))
+        assert task.status == TaskStatus.FAILED
+
+    async def test_task_fails_on_cancelled_error(
+        self, connector: LocalFolderConnector, tracker: TaskTracker
+    ) -> None:
+        with (
+            patch.object(
+                tracker,
+                "advance",
+                new=AsyncMock(side_effect=asyncio.CancelledError()),
+            ),
+            pytest.raises(asyncio.CancelledError),
+        ):
             await connector.login()
 
         task = next(iter(tracker.tasks.values()))

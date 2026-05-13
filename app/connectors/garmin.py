@@ -156,7 +156,7 @@ class GarminConnector(ServiceConnector):
         )
         try:
             await asyncio.to_thread(client.login)
-        except Exception as exc:
+        except BaseException as exc:
             await self._tracker.fail(task_name, error=f"Login failed: {exc}")
             raise
         if log:

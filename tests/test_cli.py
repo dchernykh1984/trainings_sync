@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 from datetime import date
 from pathlib import Path
@@ -711,6 +712,95 @@ class TestRunSyncKeepassPassword:
         assert call_order.index("env_get") < call_order.index("renderer_enter")
         kw = mock_make_provider.call_args.kwargs
         assert kw.get("keepass_password") == "env-password"
+
+
+class TestParallelLogin:
+    async def test_connectors_are_logged_in_parallel(self, tmp_path: Path) -> None:
+        config = AppConfig(cache_dir=tmp_path, connectors=(), sync_groups=())
+        args = argparse.Namespace(
+            config=tmp_path / "unused.json",
+            start=_START,
+            end=_END,
+            force=False,
+            creds_json=None,
+            creds_keepass=None,
+        )
+        call_log: list[str] = []
+
+        async def _fake_build_connectors(
+            _cfg, _provider, _tracker, on_strava_token_refresh=None
+        ):
+            class _ConnA:
+                async def login(self) -> None:
+                    call_log.append("a-start")
+                    await asyncio.sleep(0)
+                    call_log.append("a-done")
+
+            class _ConnB:
+                async def login(self) -> None:
+                    call_log.append("b-start")
+                    await asyncio.sleep(0)
+                    call_log.append("b-done")
+
+            return {"a": _ConnA(), "b": _ConnB()}
+
+        with (
+            patch("app.cli.load_config", return_value=config),
+            patch("app.cli.build_connectors", new=_fake_build_connectors),
+            patch("app.cli.SyncOrchestrator") as mock_orch,
+            patch("app.cli.ActivityCache") as mock_cache,
+            patch("app.cli.ConsoleRenderer"),
+        ):
+            mock_cache.return_value.load = MagicMock()
+            mock_orch.return_value.run = AsyncMock(return_value=0)
+            await _run(args)
+
+        assert call_log == ["a-start", "b-start", "a-done", "b-done"]
+
+    async def test_login_failure_cancels_sibling_login(self, tmp_path: Path) -> None:
+        config = AppConfig(cache_dir=tmp_path, connectors=(), sync_groups=())
+        args = argparse.Namespace(
+            config=tmp_path / "unused.json",
+            start=_START,
+            end=_END,
+            force=False,
+            creds_json=None,
+            creds_keepass=None,
+        )
+        call_log: list[str] = []
+
+        async def _fake_build_connectors(
+            _cfg, _provider, _tracker, on_strava_token_refresh=None
+        ):
+            class _ConnFails:
+                async def login(self) -> None:
+                    call_log.append("fail-start")
+                    await asyncio.sleep(0)  # let sibling reach its await point
+                    raise RuntimeError("boom")
+
+            class _ConnSlow:
+                async def login(self) -> None:
+                    call_log.append("slow-start")
+                    try:
+                        await asyncio.sleep(100)
+                        call_log.append("slow-done")
+                    except asyncio.CancelledError:
+                        call_log.append("slow-cancelled")
+                        raise
+
+            return {"fail": _ConnFails(), "slow": _ConnSlow()}
+
+        with (
+            patch("app.cli.load_config", return_value=config),
+            patch("app.cli.build_connectors", new=_fake_build_connectors),
+            patch("app.cli.ActivityCache") as mock_cache,
+            patch("app.cli.ConsoleRenderer"),
+        ):
+            mock_cache.return_value.load = MagicMock()
+            with pytest.raises(SystemExit):
+                await _run(args)
+
+        assert "slow-cancelled" in call_log
 
 
 class TestMainIfNameMain:

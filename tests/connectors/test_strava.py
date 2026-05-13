@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import xml.etree.ElementTree as ET
 from datetime import date, datetime, timezone
@@ -260,6 +261,22 @@ class TestLogin:
                 side_effect=OSError("network error"),
             ),
             pytest.raises(OSError),
+        ):
+            await connector.login()
+
+        assert _first_task(tracker).status == TaskStatus.FAILED
+
+    async def test_task_fails_on_cancelled_error(
+        self, connector: StravaConnector, tracker: TaskTracker
+    ) -> None:
+        with (
+            patch("app.connectors.strava.Client"),
+            patch(
+                "app.connectors.strava.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=asyncio.CancelledError(),
+            ),
+            pytest.raises(asyncio.CancelledError),
         ):
             await connector.login()
 

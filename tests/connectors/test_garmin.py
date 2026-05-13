@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import zipfile
 from datetime import date, datetime, timezone
@@ -184,6 +185,22 @@ class TestLogin:
                 side_effect=OSError("network error"),
             ),
             pytest.raises(OSError),
+        ):
+            await connector.login()
+
+        assert _first_task(tracker).status == TaskStatus.FAILED
+
+    async def test_task_fails_on_cancelled_error(
+        self, connector: GarminConnector, tracker: TaskTracker
+    ) -> None:
+        with (
+            patch("app.connectors.garmin.Garmin"),
+            patch(
+                "app.connectors.garmin.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=asyncio.CancelledError(),
+            ),
+            pytest.raises(asyncio.CancelledError),
         ):
             await connector.login()
 

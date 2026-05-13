@@ -129,12 +129,14 @@ class LocalFolderConnector(ServiceConnector):
         log = self._tracker.sync_logger
         if log:
             log.info(f"[local-folder] Connect: folder={self._folder}")
-        if not self._folder.is_dir():
-            error = f"Folder not found: {self._folder}"
-            await self._tracker.fail(task_name, error=error)
-            raise FileNotFoundError(error)
-        await self._tracker.advance(task_name)
-        await self._tracker.finish(task_name)
+        try:
+            if not self._folder.is_dir():
+                raise FileNotFoundError(f"Folder not found: {self._folder}")
+            await self._tracker.advance(task_name)
+            await self._tracker.finish(task_name)
+        except BaseException as exc:
+            await self._tracker.fail(task_name, error=str(exc))
+            raise
 
     def _list_from_cache(self, start: date, end: date) -> list[ActivityMeta]:
         from app.core.cache import ActivityCache

@@ -32,6 +32,7 @@ _PAGE_SIZE = 20
 # Garmin processes uploads asynchronously; wait before querying for the new activity ID.
 _UPLOAD_SETTLE_S: float = 2.0
 _PHOTO_SETTLE_S: float = 0.0
+_GARMIN_MAX_MEDIA: int = 10
 
 # Maps Strava sport_type strings to Garmin Connect typeKey values.
 _STRAVA_TO_GARMIN_TYPE: dict[str, str] = {
@@ -276,6 +277,32 @@ class GarminConnector(ServiceConnector):
                     f"{activity_external_id!r}: photo #{index} not uploaded ({exc})",
                 )
 
+    async def _cap_to_garmin_limit(
+        self,
+        media: tuple[MediaItem, ...],
+        activity_external_id: str,
+        task_name: str | None,
+    ) -> tuple[MediaItem, ...]:
+        if len(media) <= _GARMIN_MAX_MEDIA:
+            return media
+        n_dropped = len(media) - _GARMIN_MAX_MEDIA
+        log = self._tracker.sync_logger
+        account = self._credentials.login
+        if log:
+            log.warning(
+                f"[garmin] Upload ({account}): {activity_external_id!r}"
+                f" - {len(media)} media files exceed Garmin's {_GARMIN_MAX_MEDIA}-file"
+                f" limit; uploading first {_GARMIN_MAX_MEDIA}, {n_dropped} skipped"
+            )
+        if task_name:
+            await self._tracker.warn(
+                task_name,
+                f"{activity_external_id!r}: {len(media)} media files exceed Garmin's"
+                f" {_GARMIN_MAX_MEDIA}-file limit;"
+                f" uploading first {_GARMIN_MAX_MEDIA}, {n_dropped} skipped",
+            )
+        return media[:_GARMIN_MAX_MEDIA]
+
     async def _upload_photos(
         self,
         client: Garmin,
@@ -287,6 +314,7 @@ class GarminConnector(ServiceConnector):
         if not media:
             return
         await asyncio.sleep(_PHOTO_SETTLE_S)
+        media = await self._cap_to_garmin_limit(media, activity_external_id, task_name)
         log = self._tracker.sync_logger
         account = self._credentials.login
         for i, photo in enumerate(media, 1):

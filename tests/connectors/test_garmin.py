@@ -1453,6 +1453,119 @@ class TestUploadActivityPhotos:
         warn_msg = mock_warn.call_args.args[1]
         assert "endpoint unavailable" in warn_msg
 
+    async def test_excess_media_truncated_to_max(
+        self, logged_in: GarminConnector, mock_client: MagicMock
+    ) -> None:
+        post = {"activityId": 99999, "startTimeGMT": "2026-01-01 08:00:00"}
+        mock_client.get_activities_by_date.side_effect = [[], [post]]
+        media = tuple(
+            MediaItem(content=f"p{i}".encode(), media_type="photo") for i in range(5)
+        )
+        activity = Activity(
+            external_id="12345",
+            name="Morning Run",
+            sport_type="running",
+            start_time=_DT,
+            content=b"fit-content",
+            format="fit",
+            media=media,
+        )
+        with (
+            patch("app.connectors.garmin._UPLOAD_SETTLE_S", 0),
+            patch("app.connectors.garmin._PHOTO_SETTLE_S", 0),
+            patch("app.connectors.garmin._GARMIN_MAX_MEDIA", 3),
+            patch(
+                "app.connectors.garmin._upload_photo_to_activity"
+            ) as mock_upload_photo,
+            patch(
+                "app.connectors.garmin.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=_call_sync,
+            ),
+        ):
+            await logged_in.upload_activity(activity)
+        assert mock_upload_photo.call_count == 3
+
+    async def test_excess_media_warn_via_log_and_tracker(
+        self, logged_in_with_log: GarminConnector, mock_client: MagicMock
+    ) -> None:
+        post = {"activityId": 99999, "startTimeGMT": "2026-01-01 08:00:00"}
+        mock_client.get_activities_by_date.side_effect = [[], [post]]
+        media = tuple(
+            MediaItem(content=f"p{i}".encode(), media_type="photo") for i in range(5)
+        )
+        activity = Activity(
+            external_id="12345",
+            name="Morning Run",
+            sport_type="running",
+            start_time=_DT,
+            content=b"fit-content",
+            format="fit",
+            media=media,
+        )
+        with (
+            patch("app.connectors.garmin._UPLOAD_SETTLE_S", 0),
+            patch("app.connectors.garmin._PHOTO_SETTLE_S", 0),
+            patch("app.connectors.garmin._GARMIN_MAX_MEDIA", 3),
+            patch("app.connectors.garmin._upload_photo_to_activity"),
+            patch(
+                "app.connectors.garmin.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=_call_sync,
+            ),
+            patch.object(
+                logged_in_with_log._tracker, "warn", new_callable=AsyncMock
+            ) as mock_warn,
+        ):
+            await logged_in_with_log.upload_activity(activity, task_name="upload #1")
+        log = logged_in_with_log._tracker.sync_logger
+        assert log is not None
+        msgs = [c.args[0] for c in log.warning.call_args_list]  # type: ignore[attr-defined]
+        assert any("5 media files" in m for m in msgs)
+        assert any("3" in m for m in msgs)
+        mock_warn.assert_awaited_once()
+        warn_msg = mock_warn.call_args.args[1]
+        assert "5" in warn_msg
+        assert "3" in warn_msg
+
+    async def test_mixed_media_limit_applies_to_total_count(
+        self, logged_in: GarminConnector, mock_client: MagicMock
+    ) -> None:
+        post = {"activityId": 99999, "startTimeGMT": "2026-01-01 08:00:00"}
+        mock_client.get_activities_by_date.side_effect = [[], [post]]
+        # 2 photos + 2 videos = 4 total; limit is 3 -> only first 3 passed to loop
+        mixed = (
+            MediaItem(content=b"p1", media_type="photo"),
+            MediaItem(content=b"v1", media_type="video"),
+            MediaItem(content=b"p2", media_type="photo"),
+            MediaItem(content=b"v2", media_type="video"),
+        )
+        activity = Activity(
+            external_id="12345",
+            name="Morning Run",
+            sport_type="running",
+            start_time=_DT,
+            content=b"fit-content",
+            format="fit",
+            media=mixed,
+        )
+        with (
+            patch("app.connectors.garmin._UPLOAD_SETTLE_S", 0),
+            patch("app.connectors.garmin._PHOTO_SETTLE_S", 0),
+            patch("app.connectors.garmin._GARMIN_MAX_MEDIA", 3),
+            patch(
+                "app.connectors.garmin._upload_photo_to_activity"
+            ) as mock_upload_photo,
+            patch(
+                "app.connectors.garmin.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=_call_sync,
+            ),
+        ):
+            await logged_in.upload_activity(activity)
+        # Only photos from the first 3 items are uploaded (v1 is skipped as video)
+        assert mock_upload_photo.call_count == 2
+
 
 class TestGarminMediaUploadSupport:
     def test_supports_media_upload_is_true(self, connector: GarminConnector) -> None:

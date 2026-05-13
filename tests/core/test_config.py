@@ -8,12 +8,11 @@ import pytest
 
 from app.core.config import (
     ConfigError,
-    GarminDestinationConfig,
-    GarminSourceConfig,
-    LocalFolderDestinationConfig,
-    LocalFolderSourceConfig,
-    StravaDestinationConfig,
-    StravaSourceConfig,
+    GarminConnectorConfig,
+    GroupSourceConfig,
+    LocalFolderConnectorConfig,
+    StravaConnectorConfig,
+    SyncGroupConfig,
     load_config,
 )
 from app.credentials.base import CredentialRequest
@@ -22,50 +21,32 @@ from app.credentials.base import CredentialRequest
 # Helpers
 # ---------------------------------------------------------------------------
 
-_GARMIN_SOURCE: dict = {
-    "id": "garmin-main",
+_GARMIN_CONNECTOR: dict = {
+    "id": "garmin",
     "type": "garmin",
-    "priority": 1,
     "credential_service": "Garmin Connect",
     "credential_url": "https://connect.garmin.com",
     "credential_login": "user@example.com",
 }
 
-_STRAVA_SOURCE: dict = {
-    "id": "strava-main",
+_STRAVA_CONNECTOR: dict = {
+    "id": "strava",
     "type": "strava",
-    "priority": 2,
     "client_id": 99999,
     "credential_service": "Strava",
     "credential_url": "https://www.strava.com",
 }
 
-_LOCAL_SOURCE: dict = {
-    "id": "local-main",
+_LOCAL_CONNECTOR: dict = {
+    "id": "local",
     "type": "local_folder",
-    "priority": 3,
     "folder": "./activities",
 }
 
-_GARMIN_DEST: dict = {
-    "id": "garmin-upload",
-    "type": "garmin",
-    "credential_service": "Garmin Connect",
-    "credential_url": "https://connect.garmin.com",
-}
-
-_STRAVA_DEST: dict = {
-    "id": "strava-upload",
-    "type": "strava",
-    "client_id": 99999,
-    "credential_service": "Strava",
-    "credential_url": "https://www.strava.com",
-}
-
-_LOCAL_DEST: dict = {
-    "id": "local-backup",
-    "type": "local_folder",
-    "folder": "./backup",
+_SYNC_GROUP: dict = {
+    "id": "garmin-to-local",
+    "sources": [{"id": "garmin", "priority": 1}],
+    "destinations": ["local"],
 }
 
 
@@ -76,84 +57,147 @@ def _write(tmp_path: Path, data: object, name: str = "sync.json") -> Path:
 
 
 def _minimal(extra: dict | None = None) -> dict:
-    base: dict = {"cache_dir": "./cache", "sources": [_GARMIN_SOURCE]}
+    base: dict = {
+        "cache_dir": "./cache",
+        "connectors": [_GARMIN_CONNECTOR, _LOCAL_CONNECTOR],
+        "sync_groups": [_SYNC_GROUP],
+    }
     if extra:
         base.update(extra)
     return base
 
 
 # ---------------------------------------------------------------------------
-# Happy path - source types
+# Happy path - connector types
 # ---------------------------------------------------------------------------
 
 
-def test_garmin_source(tmp_path: Path) -> None:
+def test_garmin_connector(tmp_path: Path) -> None:
     cfg = load_config(_write(tmp_path, _minimal()))
-    assert len(cfg.sources) == 1
-    src = cfg.sources[0]
-    assert isinstance(src, GarminSourceConfig)
-    assert src.id == "garmin-main"
-    assert src.priority == 1
-    assert src.credential == CredentialRequest(
+    assert len(cfg.connectors) == 2
+    c = cfg.connectors[0]
+    assert isinstance(c, GarminConnectorConfig)
+    assert c.id == "garmin"
+    assert c.credential == CredentialRequest(
         service="Garmin Connect",
         url="https://connect.garmin.com",
         login="user@example.com",
     )
 
 
-def test_strava_source(tmp_path: Path) -> None:
-    cfg = load_config(_write(tmp_path, {**_minimal(), "sources": [_STRAVA_SOURCE]}))
-    src = cfg.sources[0]
-    assert isinstance(src, StravaSourceConfig)
-    assert src.client_id == 99999
-    assert src.credential == CredentialRequest(
+def test_strava_connector(tmp_path: Path) -> None:
+    data = {**_minimal(), "connectors": [_STRAVA_CONNECTOR, _LOCAL_CONNECTOR]}
+    data["sync_groups"] = [
+        {
+            "id": "g",
+            "sources": [{"id": "strava", "priority": 1}],
+            "destinations": ["local"],
+        }
+    ]
+    cfg = load_config(_write(tmp_path, data))
+    c = cfg.connectors[0]
+    assert isinstance(c, StravaConnectorConfig)
+    assert c.client_id == 99999
+    assert c.credential == CredentialRequest(
         service="Strava", url="https://www.strava.com", login=None
     )
 
 
-def test_local_folder_source(tmp_path: Path) -> None:
-    cfg = load_config(_write(tmp_path, {**_minimal(), "sources": [_LOCAL_SOURCE]}))
-    src = cfg.sources[0]
-    assert isinstance(src, LocalFolderSourceConfig)
-    assert src.folder == tmp_path / "activities"
+def test_local_folder_connector(tmp_path: Path) -> None:
+    cfg = load_config(_write(tmp_path, _minimal()))
+    c = cfg.connectors[1]
+    assert isinstance(c, LocalFolderConnectorConfig)
+    assert c.folder == tmp_path / "activities"
 
 
-# ---------------------------------------------------------------------------
-# Happy path - destination types
-# ---------------------------------------------------------------------------
-
-
-def test_garmin_destination(tmp_path: Path) -> None:
-    cfg = load_config(_write(tmp_path, {**_minimal(), "destinations": [_GARMIN_DEST]}))
-    dest = cfg.destinations[0]
-    assert isinstance(dest, GarminDestinationConfig)
-    assert dest.id == "garmin-upload"
-    assert dest.credential.service == "Garmin Connect"
-
-
-def test_strava_destination(tmp_path: Path) -> None:
-    cfg = load_config(_write(tmp_path, {**_minimal(), "destinations": [_STRAVA_DEST]}))
-    dest = cfg.destinations[0]
-    assert isinstance(dest, StravaDestinationConfig)
-    assert dest.client_id == 99999
-
-
-def test_local_folder_destination(tmp_path: Path) -> None:
-    cfg = load_config(_write(tmp_path, {**_minimal(), "destinations": [_LOCAL_DEST]}))
-    dest = cfg.destinations[0]
-    assert isinstance(dest, LocalFolderDestinationConfig)
-    assert dest.folder == tmp_path / "backup"
-
-
-def test_all_types_together(tmp_path: Path) -> None:
+def test_all_connector_types_together(tmp_path: Path) -> None:
     data = {
         "cache_dir": "./cache",
-        "sources": [_GARMIN_SOURCE, _STRAVA_SOURCE, _LOCAL_SOURCE],
-        "destinations": [_GARMIN_DEST, _STRAVA_DEST, _LOCAL_DEST],
+        "connectors": [_GARMIN_CONNECTOR, _STRAVA_CONNECTOR, _LOCAL_CONNECTOR],
+        "sync_groups": [
+            {
+                "id": "g1",
+                "sources": [
+                    {"id": "garmin", "priority": 1},
+                    {"id": "strava", "priority": 2},
+                ],
+                "destinations": ["local"],
+            }
+        ],
     }
     cfg = load_config(_write(tmp_path, data))
-    assert len(cfg.sources) == 3
-    assert len(cfg.destinations) == 3
+    assert len(cfg.connectors) == 3
+
+
+# ---------------------------------------------------------------------------
+# Happy path - sync group parsing
+# ---------------------------------------------------------------------------
+
+
+def test_sync_group_parsed(tmp_path: Path) -> None:
+    cfg = load_config(_write(tmp_path, _minimal()))
+    assert len(cfg.sync_groups) == 1
+    g = cfg.sync_groups[0]
+    assert isinstance(g, SyncGroupConfig)
+    assert g.id == "garmin-to-local"
+    assert g.sources == (GroupSourceConfig(id="garmin", priority=1),)
+    assert g.destinations == ("local",)
+
+
+def test_multiple_groups_parsed(tmp_path: Path) -> None:
+    data = {
+        "cache_dir": "./cache",
+        "connectors": [_GARMIN_CONNECTOR, _STRAVA_CONNECTOR, _LOCAL_CONNECTOR],
+        "sync_groups": [
+            {
+                "id": "strava-to-garmin",
+                "sources": [{"id": "strava", "priority": 1}],
+                "destinations": ["garmin"],
+            },
+            {
+                "id": "services-to-local",
+                "sources": [
+                    {"id": "garmin", "priority": 1},
+                    {"id": "strava", "priority": 2},
+                ],
+                "destinations": ["local"],
+            },
+        ],
+    }
+    cfg = load_config(_write(tmp_path, data))
+    assert len(cfg.sync_groups) == 2
+    assert cfg.sync_groups[0].id == "strava-to-garmin"
+    assert cfg.sync_groups[1].id == "services-to-local"
+
+
+def test_connector_reuse_across_groups_allowed(tmp_path: Path) -> None:
+    data = {
+        "cache_dir": "./cache",
+        "connectors": [_GARMIN_CONNECTOR, _STRAVA_CONNECTOR, _LOCAL_CONNECTOR],
+        "sync_groups": [
+            {
+                "id": "g1",
+                "sources": [{"id": "strava", "priority": 1}],
+                "destinations": ["garmin"],
+            },
+            {
+                "id": "g2",
+                "sources": [{"id": "garmin", "priority": 1}],
+                "destinations": ["local"],
+            },
+        ],
+    }
+    cfg = load_config(_write(tmp_path, data))
+    assert len(cfg.sync_groups) == 2
+
+
+def test_empty_destinations_in_group_allowed(tmp_path: Path) -> None:
+    data = {**_minimal()}
+    data["sync_groups"] = [
+        {"id": "g", "sources": [{"id": "garmin", "priority": 1}], "destinations": []}
+    ]
+    cfg = load_config(_write(tmp_path, data))
+    assert cfg.sync_groups[0].destinations == ()
 
 
 # ---------------------------------------------------------------------------
@@ -206,16 +250,11 @@ def test_no_dates(tmp_path: Path) -> None:
     assert cfg.end is None
 
 
-def test_empty_destinations_allowed(tmp_path: Path) -> None:
-    cfg = load_config(_write(tmp_path, {**_minimal(), "destinations": []}))
-    assert cfg.destinations == ()
-
-
 def test_credential_login_optional(tmp_path: Path) -> None:
-    src = {**_GARMIN_SOURCE}
-    del src["credential_login"]
-    cfg = load_config(_write(tmp_path, {**_minimal(), "sources": [src]}))
-    assert cfg.sources[0].credential.login is None  # type: ignore[union-attr]
+    connector = {k: v for k, v in _GARMIN_CONNECTOR.items() if k != "credential_login"}
+    data = {**_minimal(), "connectors": [connector, _LOCAL_CONNECTOR]}
+    cfg = load_config(_write(tmp_path, data))
+    assert cfg.connectors[0].credential.login is None  # type: ignore[union-attr]
 
 
 # ---------------------------------------------------------------------------
@@ -227,24 +266,27 @@ def test_relative_folder_resolved_against_config_dir(tmp_path: Path) -> None:
     subdir = tmp_path / "configs"
     subdir.mkdir()
     p = subdir / "sync.json"
+    local = {**_LOCAL_CONNECTOR, "folder": "../acts"}
     p.write_text(
         json.dumps(
             {
                 "cache_dir": "../cache",
-                "sources": [{**_LOCAL_SOURCE, "folder": "../acts"}],
+                "connectors": [_GARMIN_CONNECTOR, local],
+                "sync_groups": [_SYNC_GROUP],
             }
         ),
         encoding="utf-8",
     )
     cfg = load_config(p)
     assert cfg.cache_dir == tmp_path / "cache"
-    assert cfg.sources[0].folder == tmp_path / "acts"  # type: ignore[union-attr]
+    assert cfg.connectors[1].folder == tmp_path / "acts"  # type: ignore[union-attr]
 
 
 def test_tilde_expansion_in_folder(tmp_path: Path) -> None:
-    src = {**_LOCAL_SOURCE, "folder": "~/my_activities"}
-    cfg = load_config(_write(tmp_path, {**_minimal(), "sources": [src]}))
-    folder = cfg.sources[0].folder  # type: ignore[union-attr]
+    local = {**_LOCAL_CONNECTOR, "folder": "~/my_activities"}
+    data = {**_minimal(), "connectors": [_GARMIN_CONNECTOR, local]}
+    cfg = load_config(_write(tmp_path, data))
+    folder = cfg.connectors[1].folder  # type: ignore[union-attr]
     assert folder.is_absolute()
     assert not str(folder).startswith("~")
 
@@ -286,29 +328,74 @@ def test_root_not_object(tmp_path: Path) -> None:
 
 
 def test_missing_cache_dir(tmp_path: Path) -> None:
-    data = {"sources": [_GARMIN_SOURCE]}
+    data = {
+        "connectors": [_GARMIN_CONNECTOR, _LOCAL_CONNECTOR],
+        "sync_groups": [_SYNC_GROUP],
+    }
     with pytest.raises(ConfigError, match="'cache_dir'"):
         load_config(_write(tmp_path, data))
 
 
-def test_sources_missing_defaults_to_empty_error(tmp_path: Path) -> None:
-    with pytest.raises(ConfigError, match="'sources' must not be empty"):
-        load_config(_write(tmp_path, {"cache_dir": "./cache"}))
+def test_connectors_missing_raises(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="'connectors' must not be empty"):
+        load_config(
+            _write(tmp_path, {"cache_dir": "./cache", "sync_groups": [_SYNC_GROUP]})
+        )
 
 
-def test_sources_not_a_list(tmp_path: Path) -> None:
-    with pytest.raises(ConfigError, match="'sources' must be a list"):
-        load_config(_write(tmp_path, {"cache_dir": "./cache", "sources": {}}))
+def test_connectors_not_a_list(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="'connectors' must be a list"):
+        load_config(_write(tmp_path, {"cache_dir": "./cache", "connectors": {}}))
 
 
-def test_empty_sources(tmp_path: Path) -> None:
-    with pytest.raises(ConfigError, match="must not be empty"):
-        load_config(_write(tmp_path, {"cache_dir": "./cache", "sources": []}))
+def test_connectors_empty_raises(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="'connectors' must not be empty"):
+        load_config(
+            _write(
+                tmp_path, {"cache_dir": "./cache", "connectors": [], "sync_groups": []}
+            )
+        )
 
 
-def test_destinations_not_a_list(tmp_path: Path) -> None:
-    with pytest.raises(ConfigError, match="'destinations' must be a list"):
-        load_config(_write(tmp_path, {**_minimal(), "destinations": "bad"}))
+def test_sync_groups_missing_raises(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="'sync_groups' must not be empty"):
+        load_config(
+            _write(
+                tmp_path,
+                {
+                    "cache_dir": "./cache",
+                    "connectors": [_GARMIN_CONNECTOR, _LOCAL_CONNECTOR],
+                },
+            )
+        )
+
+
+def test_sync_groups_not_a_list(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="'sync_groups' must be a list"):
+        load_config(
+            _write(
+                tmp_path,
+                {
+                    "cache_dir": "./cache",
+                    "connectors": [_GARMIN_CONNECTOR, _LOCAL_CONNECTOR],
+                    "sync_groups": "bad",
+                },
+            )
+        )
+
+
+def test_sync_groups_empty_raises(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="'sync_groups' must not be empty"):
+        load_config(
+            _write(
+                tmp_path,
+                {
+                    "cache_dir": "./cache",
+                    "connectors": [_GARMIN_CONNECTOR, _LOCAL_CONNECTOR],
+                    "sync_groups": [],
+                },
+            )
+        )
 
 
 def test_start_after_end(tmp_path: Path) -> None:
@@ -329,140 +416,277 @@ def test_date_not_a_string(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# ConfigError - source validation
+# ConfigError - connector validation
 # ---------------------------------------------------------------------------
 
 
-def test_source_not_a_dict(tmp_path: Path) -> None:
-    with pytest.raises(ConfigError, match=r"sources\[0\].*must be an object"):
-        load_config(_write(tmp_path, {**_minimal(), "sources": ["not-a-dict"]}))
+def test_connector_not_a_dict(tmp_path: Path) -> None:
+    data = {**_minimal(), "connectors": ["not-a-dict", _LOCAL_CONNECTOR]}
+    with pytest.raises(ConfigError, match=r"connectors\[0\].*must be an object"):
+        load_config(_write(tmp_path, data))
 
 
-def test_source_missing_id(tmp_path: Path) -> None:
-    src = {k: v for k, v in _GARMIN_SOURCE.items() if k != "id"}
+def test_connector_missing_id(tmp_path: Path) -> None:
+    c = {k: v for k, v in _GARMIN_CONNECTOR.items() if k != "id"}
+    data = {**_minimal(), "connectors": [c, _LOCAL_CONNECTOR]}
     with pytest.raises(ConfigError, match="'id'"):
-        load_config(_write(tmp_path, {**_minimal(), "sources": [src]}))
+        load_config(_write(tmp_path, data))
 
 
-def test_source_empty_id(tmp_path: Path) -> None:
-    src = {**_GARMIN_SOURCE, "id": ""}
+def test_connector_empty_id(tmp_path: Path) -> None:
+    c = {**_GARMIN_CONNECTOR, "id": ""}
+    data = {**_minimal(), "connectors": [c, _LOCAL_CONNECTOR]}
     with pytest.raises(ConfigError, match="'id' must not be empty"):
-        load_config(_write(tmp_path, {**_minimal(), "sources": [src]}))
+        load_config(_write(tmp_path, data))
 
 
-def test_source_missing_type(tmp_path: Path) -> None:
-    src = {k: v for k, v in _GARMIN_SOURCE.items() if k != "type"}
+def test_connector_missing_type(tmp_path: Path) -> None:
+    c = {k: v for k, v in _GARMIN_CONNECTOR.items() if k != "type"}
+    data = {**_minimal(), "connectors": [c, _LOCAL_CONNECTOR]}
     with pytest.raises(ConfigError, match="'type'"):
-        load_config(_write(tmp_path, {**_minimal(), "sources": [src]}))
+        load_config(_write(tmp_path, data))
 
 
-def test_source_unknown_type(tmp_path: Path) -> None:
-    src = {**_GARMIN_SOURCE, "type": "polar"}
-    with pytest.raises(ConfigError, match="unknown source type"):
-        load_config(_write(tmp_path, {**_minimal(), "sources": [src]}))
+def test_connector_unknown_type(tmp_path: Path) -> None:
+    c = {**_GARMIN_CONNECTOR, "type": "polar"}
+    data = {**_minimal(), "connectors": [c, _LOCAL_CONNECTOR]}
+    with pytest.raises(ConfigError, match="unknown connector type"):
+        load_config(_write(tmp_path, data))
 
 
-def test_source_missing_priority(tmp_path: Path) -> None:
-    src = {k: v for k, v in _GARMIN_SOURCE.items() if k != "priority"}
-    with pytest.raises(ConfigError, match="'priority'"):
-        load_config(_write(tmp_path, {**_minimal(), "sources": [src]}))
-
-
-def test_source_bool_priority_rejected(tmp_path: Path) -> None:
-    src = {**_GARMIN_SOURCE, "priority": True}
-    with pytest.raises(ConfigError, match="must be an integer"):
-        load_config(_write(tmp_path, {**_minimal(), "sources": [src]}))
-
-
-def test_source_missing_credential_service(tmp_path: Path) -> None:
-    src = {k: v for k, v in _GARMIN_SOURCE.items() if k != "credential_service"}
+def test_connector_missing_credential_service(tmp_path: Path) -> None:
+    c = {k: v for k, v in _GARMIN_CONNECTOR.items() if k != "credential_service"}
+    data = {**_minimal(), "connectors": [c, _LOCAL_CONNECTOR]}
     with pytest.raises(ConfigError, match="'credential_service'"):
-        load_config(_write(tmp_path, {**_minimal(), "sources": [src]}))
+        load_config(_write(tmp_path, data))
 
 
-def test_source_missing_credential_url(tmp_path: Path) -> None:
-    src = {k: v for k, v in _GARMIN_SOURCE.items() if k != "credential_url"}
+def test_connector_missing_credential_url(tmp_path: Path) -> None:
+    c = {k: v for k, v in _GARMIN_CONNECTOR.items() if k != "credential_url"}
+    data = {**_minimal(), "connectors": [c, _LOCAL_CONNECTOR]}
     with pytest.raises(ConfigError, match="'credential_url'"):
-        load_config(_write(tmp_path, {**_minimal(), "sources": [src]}))
+        load_config(_write(tmp_path, data))
 
 
-def test_strava_source_missing_client_id(tmp_path: Path) -> None:
-    src = {k: v for k, v in _STRAVA_SOURCE.items() if k != "client_id"}
+def test_strava_connector_missing_client_id(tmp_path: Path) -> None:
+    c = {k: v for k, v in _STRAVA_CONNECTOR.items() if k != "client_id"}
+    data = {
+        "cache_dir": "./cache",
+        "connectors": [c, _LOCAL_CONNECTOR],
+        "sync_groups": [
+            {
+                "id": "g",
+                "sources": [{"id": "strava", "priority": 1}],
+                "destinations": ["local"],
+            }
+        ],
+    }
     with pytest.raises(ConfigError, match="'client_id'"):
-        load_config(_write(tmp_path, {**_minimal(), "sources": [src]}))
+        load_config(_write(tmp_path, data))
 
 
-def test_source_non_string_field(tmp_path: Path) -> None:
-    src = {**_GARMIN_SOURCE, "credential_service": 42}
+def test_connector_non_string_field(tmp_path: Path) -> None:
+    c = {**_GARMIN_CONNECTOR, "credential_service": 42}
+    data = {**_minimal(), "connectors": [c, _LOCAL_CONNECTOR]}
     with pytest.raises(ConfigError, match="must be a string"):
-        load_config(_write(tmp_path, {**_minimal(), "sources": [src]}))
+        load_config(_write(tmp_path, data))
 
 
-def test_source_non_string_credential_login(tmp_path: Path) -> None:
-    src = {**_GARMIN_SOURCE, "credential_login": 123}
+def test_connector_non_string_credential_login(tmp_path: Path) -> None:
+    c = {**_GARMIN_CONNECTOR, "credential_login": 123}
+    data = {**_minimal(), "connectors": [c, _LOCAL_CONNECTOR]}
     with pytest.raises(ConfigError, match="'credential_login' must be a string"):
-        load_config(_write(tmp_path, {**_minimal(), "sources": [src]}))
+        load_config(_write(tmp_path, data))
 
 
-def test_local_source_missing_folder(tmp_path: Path) -> None:
-    src = {k: v for k, v in _LOCAL_SOURCE.items() if k != "folder"}
+def test_local_connector_missing_folder(tmp_path: Path) -> None:
+    c = {k: v for k, v in _LOCAL_CONNECTOR.items() if k != "folder"}
+    data = {**_minimal(), "connectors": [_GARMIN_CONNECTOR, c]}
     with pytest.raises(ConfigError, match="'folder'"):
-        load_config(_write(tmp_path, {**_minimal(), "sources": [src]}))
+        load_config(_write(tmp_path, data))
 
 
-def test_duplicate_source_ids(tmp_path: Path) -> None:
-    src2 = {**_GARMIN_SOURCE, "id": "garmin-main", "priority": 5}
-    with pytest.raises(ConfigError, match="duplicate source id"):
-        load_config(_write(tmp_path, {**_minimal(), "sources": [_GARMIN_SOURCE, src2]}))
+def test_duplicate_connector_ids(tmp_path: Path) -> None:
+    c2 = {**_GARMIN_CONNECTOR, "id": "garmin"}
+    data = {**_minimal(), "connectors": [_GARMIN_CONNECTOR, c2, _LOCAL_CONNECTOR]}
+    with pytest.raises(ConfigError, match="duplicate connector id"):
+        load_config(_write(tmp_path, data))
+
+
+def test_strava_duplicate_credential_ref_rejected(tmp_path: Path) -> None:
+    strava2 = {**_STRAVA_CONNECTOR, "id": "strava2"}
+    data = {
+        "cache_dir": "./cache",
+        "connectors": [_STRAVA_CONNECTOR, strava2, _LOCAL_CONNECTOR],
+        "sync_groups": [
+            {
+                "id": "g",
+                "sources": [{"id": "strava", "priority": 1}],
+                "destinations": ["local"],
+            }
+        ],
+    }
+    with pytest.raises(ConfigError, match="duplicate Strava credential ref"):
+        load_config(_write(tmp_path, data))
+
+
+def test_strava_different_credential_refs_allowed(tmp_path: Path) -> None:
+    strava2 = {
+        **_STRAVA_CONNECTOR,
+        "id": "strava2",
+        "credential_url": "https://other.strava.com",
+    }
+    data = {
+        "cache_dir": "./cache",
+        "connectors": [_STRAVA_CONNECTOR, strava2, _LOCAL_CONNECTOR],
+        "sync_groups": [
+            {
+                "id": "g",
+                "sources": [
+                    {"id": "strava", "priority": 1},
+                    {"id": "strava2", "priority": 2},
+                ],
+                "destinations": ["local"],
+            }
+        ],
+    }
+    cfg = load_config(_write(tmp_path, data))
+    assert len(cfg.connectors) == 3
 
 
 # ---------------------------------------------------------------------------
-# ConfigError - destination validation
+# ConfigError - sync group validation
 # ---------------------------------------------------------------------------
 
 
-def test_destination_not_a_dict(tmp_path: Path) -> None:
-    with pytest.raises(ConfigError, match=r"destinations\[0\].*must be an object"):
-        load_config(_write(tmp_path, {**_minimal(), "destinations": [42]}))
+def test_group_not_a_dict(tmp_path: Path) -> None:
+    data = {**_minimal(), "sync_groups": ["not-a-dict"]}
+    with pytest.raises(ConfigError, match=r"sync_groups\[0\].*must be an object"):
+        load_config(_write(tmp_path, data))
 
 
-def test_destination_missing_id(tmp_path: Path) -> None:
-    dest = {k: v for k, v in _GARMIN_DEST.items() if k != "id"}
+def test_group_missing_id(tmp_path: Path) -> None:
+    g = {k: v for k, v in _SYNC_GROUP.items() if k != "id"}
+    data = {**_minimal(), "sync_groups": [g]}
     with pytest.raises(ConfigError, match="'id'"):
-        load_config(_write(tmp_path, {**_minimal(), "destinations": [dest]}))
+        load_config(_write(tmp_path, data))
 
 
-def test_destination_empty_id(tmp_path: Path) -> None:
-    dest = {**_GARMIN_DEST, "id": ""}
+def test_group_empty_id(tmp_path: Path) -> None:
+    g = {**_SYNC_GROUP, "id": ""}
+    data = {**_minimal(), "sync_groups": [g]}
     with pytest.raises(ConfigError, match="'id' must not be empty"):
-        load_config(_write(tmp_path, {**_minimal(), "destinations": [dest]}))
+        load_config(_write(tmp_path, data))
 
 
-def test_destination_unknown_type(tmp_path: Path) -> None:
-    with pytest.raises(ConfigError, match="unknown destination type"):
-        load_config(
-            _write(
-                tmp_path,
-                {**_minimal(), "destinations": [{**_GARMIN_DEST, "type": "polar"}]},
-            )
-        )
+def test_group_sources_not_a_list(tmp_path: Path) -> None:
+    g = {**_SYNC_GROUP, "sources": "bad"}
+    data = {**_minimal(), "sync_groups": [g]}
+    with pytest.raises(ConfigError, match="'sources' must be a list"):
+        load_config(_write(tmp_path, data))
 
 
-def test_strava_destination_missing_client_id(tmp_path: Path) -> None:
-    dest = {k: v for k, v in _STRAVA_DEST.items() if k != "client_id"}
-    with pytest.raises(ConfigError, match="'client_id'"):
-        load_config(_write(tmp_path, {**_minimal(), "destinations": [dest]}))
+def test_group_sources_empty_raises(tmp_path: Path) -> None:
+    g = {**_SYNC_GROUP, "sources": []}
+    data = {**_minimal(), "sync_groups": [g]}
+    with pytest.raises(ConfigError, match="'sources' must not be empty"):
+        load_config(_write(tmp_path, data))
 
 
-def test_local_destination_missing_folder(tmp_path: Path) -> None:
-    dest = {k: v for k, v in _LOCAL_DEST.items() if k != "folder"}
-    with pytest.raises(ConfigError, match="'folder'"):
-        load_config(_write(tmp_path, {**_minimal(), "destinations": [dest]}))
+def test_group_source_not_a_dict(tmp_path: Path) -> None:
+    g = {**_SYNC_GROUP, "sources": ["not-a-dict"]}
+    data = {**_minimal(), "sync_groups": [g]}
+    with pytest.raises(ConfigError, match="must be an object"):
+        load_config(_write(tmp_path, data))
 
 
-def test_duplicate_destination_ids(tmp_path: Path) -> None:
-    dest2 = {**_LOCAL_DEST, "id": "local-backup"}
+def test_group_source_unknown_connector_id(tmp_path: Path) -> None:
+    g = {**_SYNC_GROUP, "sources": [{"id": "unknown", "priority": 1}]}
+    data = {**_minimal(), "sync_groups": [g]}
+    with pytest.raises(ConfigError, match="unknown connector id"):
+        load_config(_write(tmp_path, data))
+
+
+def test_group_source_empty_id(tmp_path: Path) -> None:
+    g = {**_SYNC_GROUP, "sources": [{"id": "", "priority": 1}]}
+    data = {**_minimal(), "sync_groups": [g]}
+    with pytest.raises(ConfigError, match="'id' must not be empty"):
+        load_config(_write(tmp_path, data))
+
+
+def test_group_source_missing_priority(tmp_path: Path) -> None:
+    g = {**_SYNC_GROUP, "sources": [{"id": "garmin"}]}
+    data = {**_minimal(), "sync_groups": [g]}
+    with pytest.raises(ConfigError, match="'priority'"):
+        load_config(_write(tmp_path, data))
+
+
+def test_group_source_bool_priority_rejected(tmp_path: Path) -> None:
+    g = {**_SYNC_GROUP, "sources": [{"id": "garmin", "priority": True}]}
+    data = {**_minimal(), "sync_groups": [g]}
+    with pytest.raises(ConfigError, match="must be an integer"):
+        load_config(_write(tmp_path, data))
+
+
+def test_duplicate_source_in_group(tmp_path: Path) -> None:
+    g = {
+        **_SYNC_GROUP,
+        "sources": [{"id": "garmin", "priority": 1}, {"id": "garmin", "priority": 2}],
+    }
+    data = {**_minimal(), "sync_groups": [g]}
+    with pytest.raises(ConfigError, match="duplicate source id"):
+        load_config(_write(tmp_path, data))
+
+
+def test_group_destinations_not_a_list(tmp_path: Path) -> None:
+    g = {**_SYNC_GROUP, "destinations": "bad"}
+    data = {**_minimal(), "sync_groups": [g]}
+    with pytest.raises(ConfigError, match="'destinations' must be a list"):
+        load_config(_write(tmp_path, data))
+
+
+def test_group_destination_not_a_string(tmp_path: Path) -> None:
+    g = {**_SYNC_GROUP, "destinations": [42]}
+    data = {**_minimal(), "sync_groups": [g]}
+    with pytest.raises(ConfigError, match="must be a string"):
+        load_config(_write(tmp_path, data))
+
+
+def test_group_destination_empty_string_rejected(tmp_path: Path) -> None:
+    g = {**_SYNC_GROUP, "destinations": [""]}
+    data = {**_minimal(), "sync_groups": [g]}
+    with pytest.raises(ConfigError, match="must not be empty"):
+        load_config(_write(tmp_path, data))
+
+
+def test_group_destination_unknown_connector_id(tmp_path: Path) -> None:
+    g = {**_SYNC_GROUP, "destinations": ["unknown"]}
+    data = {**_minimal(), "sync_groups": [g]}
+    with pytest.raises(ConfigError, match="unknown connector id"):
+        load_config(_write(tmp_path, data))
+
+
+def test_duplicate_destination_in_group(tmp_path: Path) -> None:
+    g = {**_SYNC_GROUP, "destinations": ["local", "local"]}
+    data = {**_minimal(), "sync_groups": [g]}
     with pytest.raises(ConfigError, match="duplicate destination id"):
-        load_config(
-            _write(tmp_path, {**_minimal(), "destinations": [_LOCAL_DEST, dest2]})
-        )
+        load_config(_write(tmp_path, data))
+
+
+def test_connector_both_source_and_destination_in_group_rejected(
+    tmp_path: Path,
+) -> None:
+    g = {
+        "id": "g",
+        "sources": [{"id": "garmin", "priority": 1}],
+        "destinations": ["garmin"],
+    }
+    data = {**_minimal(), "sync_groups": [g]}
+    with pytest.raises(ConfigError, match="both source and destination"):
+        load_config(_write(tmp_path, data))
+
+
+def test_duplicate_sync_group_ids(tmp_path: Path) -> None:
+    data = {**_minimal(), "sync_groups": [_SYNC_GROUP, _SYNC_GROUP]}
+    with pytest.raises(ConfigError, match="duplicate sync group id"):
+        load_config(_write(tmp_path, data))

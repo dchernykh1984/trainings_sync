@@ -18,9 +18,10 @@ from app.cli import (
 )
 from app.core.config import (
     AppConfig,
-    GarminSourceConfig,
-    StravaDestinationConfig,
-    StravaSourceConfig,
+    GarminConnectorConfig,
+    GroupSourceConfig,
+    StravaConnectorConfig,
+    SyncGroupConfig,
 )
 from app.credentials.base import (
     CredentialRequest,
@@ -34,11 +35,13 @@ _GARMIN_CRED = CredentialRequest(
     login="user@example.com",
 )
 _STRAVA_CRED = CredentialRequest(service="Strava", url="https://www.strava.com")
-_STRAVA_DEST = StravaDestinationConfig(
-    id="strava-upload", client_id=99999, credential=_STRAVA_CRED
+_STRAVA_CONNECTOR = StravaConnectorConfig(
+    id="strava", client_id=99999, credential=_STRAVA_CRED
 )
-_STRAVA_SRC = StravaSourceConfig(
-    id="strava-source", priority=2, client_id=99999, credential=_STRAVA_CRED
+_DEFAULT_GROUP = SyncGroupConfig(
+    id="default",
+    sources=(GroupSourceConfig(id="strava", priority=1),),
+    destinations=(),
 )
 _START = date(2024, 1, 1)
 _END = date(2024, 12, 31)
@@ -50,9 +53,11 @@ def _args(
     return argparse.Namespace(creds_json=creds_json, creds_keepass=creds_keepass)
 
 
-def _cfg(sources: tuple = (), destinations: tuple = ()) -> AppConfig:
+def _cfg(connectors: tuple = (), sync_groups: tuple = ()) -> AppConfig:
     return AppConfig(
-        cache_dir=Path("/nonexistent/cache"), sources=sources, destinations=destinations
+        cache_dir=Path("/nonexistent/cache"),
+        connectors=connectors,
+        sync_groups=sync_groups,
     )
 
 
@@ -67,78 +72,54 @@ class TestValidate:
         self, capsys: pytest.CaptureFixture
     ) -> None:
         with pytest.raises(SystemExit) as exc:
-            _validate(_args(), _cfg(destinations=(_STRAVA_DEST,)), _START, _END)
-        assert exc.value.code == 1
-        assert "credentials" in capsys.readouterr().err
-
-    def test_keepass_with_strava_destination_is_rejected(
-        self, capsys: pytest.CaptureFixture
-    ) -> None:
-        args = _args(creds_keepass=Path("vault.kdbx"))
-        with pytest.raises(SystemExit) as exc:
-            _validate(args, _cfg(destinations=(_STRAVA_DEST,)), _START, _END)
-        assert exc.value.code == 1
-        assert "--creds-keepass" in capsys.readouterr().err
-
-    def test_keepass_with_strava_source_is_rejected(
-        self, capsys: pytest.CaptureFixture
-    ) -> None:
-        args = _args(creds_keepass=Path("vault.kdbx"))
-        with pytest.raises(SystemExit) as exc:
-            _validate(args, _cfg(sources=(_STRAVA_SRC,)), _START, _END)
-        assert exc.value.code == 1
-        assert "--creds-keepass" in capsys.readouterr().err
-
-    def test_strava_source_requires_credentials(
-        self, capsys: pytest.CaptureFixture
-    ) -> None:
-        with pytest.raises(SystemExit) as exc:
-            _validate(_args(), _cfg(sources=(_STRAVA_SRC,)), _START, _END)
-        assert exc.value.code == 1
-        assert "credentials" in capsys.readouterr().err
-
-    def test_strava_source_and_destination_with_same_id_is_rejected(
-        self, capsys: pytest.CaptureFixture
-    ) -> None:
-        conflicting_src = StravaSourceConfig(
-            id="strava-upload",  # same id as _STRAVA_DEST
-            priority=2,
-            client_id=99999,
-            credential=_STRAVA_CRED,
-        )
-        args = _args(creds_json=Path("creds.json"))
-        with pytest.raises(SystemExit) as exc:
             _validate(
-                args,
-                _cfg(sources=(conflicting_src,), destinations=(_STRAVA_DEST,)),
+                _args(),
+                _cfg(connectors=(_STRAVA_CONNECTOR,), sync_groups=(_DEFAULT_GROUP,)),
                 _START,
                 _END,
             )
         assert exc.value.code == 1
-        assert "strava-upload" in capsys.readouterr().err
+        assert "credentials" in capsys.readouterr().err
 
-    def test_same_strava_credential_in_source_and_destination_is_rejected(
+    def test_keepass_with_strava_connector_is_rejected(
         self, capsys: pytest.CaptureFixture
     ) -> None:
-        src = StravaSourceConfig(
-            id="strava-src", priority=1, client_id=11111, credential=_STRAVA_CRED
-        )
-        dest = StravaDestinationConfig(
-            id="strava-dst", client_id=22222, credential=_STRAVA_CRED
-        )
-        args = _args(creds_json=Path("creds.json"))
+        args = _args(creds_keepass=Path("vault.kdbx"))
         with pytest.raises(SystemExit) as exc:
-            _validate(args, _cfg(sources=(src,), destinations=(dest,)), _START, _END)
+            _validate(
+                args,
+                _cfg(connectors=(_STRAVA_CONNECTOR,), sync_groups=(_DEFAULT_GROUP,)),
+                _START,
+                _END,
+            )
         assert exc.value.code == 1
-        assert "token rotation" in capsys.readouterr().err
+        assert "--creds-keepass" in capsys.readouterr().err
+
+    def test_strava_connector_requires_credentials(
+        self, capsys: pytest.CaptureFixture
+    ) -> None:
+        with pytest.raises(SystemExit) as exc:
+            _validate(
+                _args(),
+                _cfg(connectors=(_STRAVA_CONNECTOR,), sync_groups=(_DEFAULT_GROUP,)),
+                _START,
+                _END,
+            )
+        assert exc.value.code == 1
+        assert "credentials" in capsys.readouterr().err
 
     def test_valid_args_pass_without_exception(self) -> None:
         args = _args(creds_json=Path("creds.json"))
-        _validate(args, _cfg(destinations=(_STRAVA_DEST,)), _START, _END)
+        _validate(
+            args,
+            _cfg(connectors=(_STRAVA_CONNECTOR,), sync_groups=(_DEFAULT_GROUP,)),
+            _START,
+            _END,
+        )
 
 
-class TestBuildSourcesCallback:
-    async def test_on_strava_token_refresh_passed_to_build_sources(
+class TestBuildConnectorsCallback:
+    async def test_on_strava_token_refresh_passed_to_build_connectors(
         self, tmp_path: Path
     ) -> None:
         creds_file = tmp_path / "creds.json"
@@ -155,10 +136,11 @@ class TestBuildSourcesCallback:
             ),
             encoding="utf-8",
         )
-        strava_src = StravaSourceConfig(
-            id="strava-src", priority=2, client_id=99, credential=_STRAVA_CRED
+        config = AppConfig(
+            cache_dir=tmp_path,
+            connectors=(_STRAVA_CONNECTOR,),
+            sync_groups=(_DEFAULT_GROUP,),
         )
-        config = AppConfig(cache_dir=tmp_path, sources=(strava_src,), destinations=())
         args = argparse.Namespace(
             config=tmp_path / "unused.json",
             start=_START,
@@ -169,28 +151,27 @@ class TestBuildSourcesCallback:
         )
         received_callback: list = []
 
-        async def _fake_build_sources(
+        async def _fake_build_connectors(
             _cfg, _provider, _tracker, on_strava_token_refresh=None
         ):
             received_callback.append(on_strava_token_refresh)
-            return []
+            return {}
 
         with (
             patch("app.cli.load_config", return_value=config),
-            patch("app.cli.build_sources", new=_fake_build_sources),
-            patch("app.cli.build_destinations", new=AsyncMock(return_value=[])),
+            patch("app.cli.build_connectors", new=_fake_build_connectors),
+            patch("app.cli.SyncOrchestrator") as mock_orch,
             patch("app.cli.ActivityCache") as mock_cache,
-            patch("app.cli.SyncExecutor") as mock_executor,
             patch("app.cli.ConsoleRenderer"),
         ):
             mock_cache.return_value.load = MagicMock()
-            mock_executor.return_value.run = AsyncMock()
+            mock_orch.return_value.run = AsyncMock(return_value=0)
             await _run(args)
 
         assert len(received_callback) == 1
         assert callable(received_callback[0])
 
-    async def test_strava_source_token_refresh_updates_json_file(
+    async def test_strava_connector_token_refresh_updates_json_file(
         self, tmp_path: Path
     ) -> None:
         creds_file = tmp_path / "creds.json"
@@ -207,10 +188,11 @@ class TestBuildSourcesCallback:
             ),
             encoding="utf-8",
         )
-        strava_src = StravaSourceConfig(
-            id="strava-src", priority=2, client_id=99, credential=_STRAVA_CRED
+        config = AppConfig(
+            cache_dir=tmp_path,
+            connectors=(_STRAVA_CONNECTOR,),
+            sync_groups=(_DEFAULT_GROUP,),
         )
-        config = AppConfig(cache_dir=tmp_path, sources=(strava_src,), destinations=())
         args = argparse.Namespace(
             config=tmp_path / "unused.json",
             start=_START,
@@ -221,34 +203,33 @@ class TestBuildSourcesCallback:
         )
         new_rt = "new-refresh-token"
 
-        async def _fake_build_sources(
+        async def _fake_build_connectors(
             _cfg, _provider, _tracker, on_strava_token_refresh=None
         ):
             class _FakeConnector:
-                async def login(self):
+                async def login(self) -> None:
                     if on_strava_token_refresh:
                         on_strava_token_refresh(
-                            "strava-src",
+                            "strava",
                             StravaCredentials(
-                                client_id=99,
+                                client_id=99999,
                                 client_secret="secret",
                                 refresh_token=new_rt,
                             ),
                             "John Doe",
                         )
 
-            return [((None, None), _FakeConnector())]
+            return {"strava": _FakeConnector()}
 
         with (
             patch("app.cli.load_config", return_value=config),
-            patch("app.cli.build_sources", new=_fake_build_sources),
-            patch("app.cli.build_destinations", new=AsyncMock(return_value=[])),
+            patch("app.cli.build_connectors", new=_fake_build_connectors),
+            patch("app.cli.SyncOrchestrator") as mock_orch,
             patch("app.cli.ActivityCache") as mock_cache,
-            patch("app.cli.SyncExecutor") as mock_executor,
             patch("app.cli.ConsoleRenderer"),
         ):
             mock_cache.return_value.load = MagicMock()
-            mock_executor.return_value.run = AsyncMock()
+            mock_orch.return_value.run = AsyncMock(return_value=0)
             await _run(args)
 
         data = json.loads(creds_file.read_text(encoding="utf-8"))
@@ -256,7 +237,7 @@ class TestBuildSourcesCallback:
 
 
 class TestTokenRefreshCallback:
-    async def test_json_file_updated_on_strava_token_refresh(
+    async def test_json_file_updated_on_strava_connector_token_refresh(
         self, tmp_path: Path
     ) -> None:
         creds_file = tmp_path / "creds.json"
@@ -273,12 +254,11 @@ class TestTokenRefreshCallback:
             ),
             encoding="utf-8",
         )
-
-        strava_cred = CredentialRequest("Strava", "https://www.strava.com")
-        strava_dest = StravaDestinationConfig(
-            id="strava-dest", client_id=99, credential=strava_cred
+        config = AppConfig(
+            cache_dir=tmp_path,
+            connectors=(_STRAVA_CONNECTOR,),
+            sync_groups=(_DEFAULT_GROUP,),
         )
-        config = AppConfig(cache_dir=tmp_path, sources=(), destinations=(strava_dest,))
         args = argparse.Namespace(
             config=tmp_path / "unused.json",
             start=_START,
@@ -289,34 +269,33 @@ class TestTokenRefreshCallback:
         )
         new_rt = "new-refresh-token"
 
-        async def _fake_build_destinations(
-            _cfg, _provider, _tracker, cache=None, on_strava_token_refresh=None
+        async def _fake_build_connectors(
+            _cfg, _provider, _tracker, on_strava_token_refresh=None
         ):
             class _FakeConnector:
-                async def login(self):
+                async def login(self) -> None:
                     if on_strava_token_refresh:
                         on_strava_token_refresh(
-                            "strava-dest",
+                            "strava",
                             StravaCredentials(
-                                client_id=99,
+                                client_id=99999,
                                 client_secret="client-secret",
                                 refresh_token=new_rt,
                             ),
                             "John Doe",
                         )
 
-            return [("strava-dest", _FakeConnector())]
+            return {"strava": _FakeConnector()}
 
         with (
             patch("app.cli.load_config", return_value=config),
-            patch("app.cli.build_sources", new=AsyncMock(return_value=[])),
-            patch("app.cli.build_destinations", new=_fake_build_destinations),
+            patch("app.cli.build_connectors", new=_fake_build_connectors),
+            patch("app.cli.SyncOrchestrator") as mock_orch,
             patch("app.cli.ActivityCache") as mock_cache,
-            patch("app.cli.SyncExecutor") as mock_executor,
             patch("app.cli.ConsoleRenderer"),
         ):
             mock_cache.return_value.load = MagicMock()
-            mock_executor.return_value.run = AsyncMock()
+            mock_orch.return_value.run = AsyncMock(return_value=0)
             await _run(args)
 
         data = json.loads(creds_file.read_text(encoding="utf-8"))
@@ -425,7 +404,6 @@ class TestMakeProvider:
     ) -> None:
         from app.credentials.keepass import KeePassProvider
 
-        # We don't need a real kdbx file - KeePassProvider.__init__ doesn't open it.
         kdbx = tmp_path / "vault.kdbx"
         kdbx.write_bytes(b"fake")
         args = argparse.Namespace(creds_json=None, creds_keepass=kdbx)
@@ -476,7 +454,7 @@ class TestRunConfigError:
     async def test_unexpected_exception_logs_and_exits(
         self, capsys: pytest.CaptureFixture, tmp_path: Path
     ) -> None:
-        config = AppConfig(cache_dir=tmp_path, sources=(), destinations=())
+        config = AppConfig(cache_dir=tmp_path, connectors=(), sync_groups=())
         args = argparse.Namespace(
             config=tmp_path / "unused.json",
             start=_START,
@@ -500,7 +478,7 @@ class TestRunConfigError:
     async def test_unexpected_exception_with_no_sync_logger_prints_error(
         self, capsys: pytest.CaptureFixture, tmp_path: Path
     ) -> None:
-        config = AppConfig(cache_dir=tmp_path, sources=(), destinations=())
+        config = AppConfig(cache_dir=tmp_path, connectors=(), sync_groups=())
         args = argparse.Namespace(
             config=tmp_path / "unused.json",
             start=_START,
@@ -522,10 +500,17 @@ class TestRunConfigError:
 
 class TestRunKeepassLogging:
     async def test_keepass_credential_logged_when_used(self, tmp_path: Path) -> None:
-        garmin_src = GarminSourceConfig(
-            id="garmin-src", priority=1, credential=_GARMIN_CRED
+        garmin_connector = GarminConnectorConfig(id="garmin", credential=_GARMIN_CRED)
+        group = SyncGroupConfig(
+            id="g",
+            sources=(GroupSourceConfig(id="garmin", priority=1),),
+            destinations=(),
         )
-        config = AppConfig(cache_dir=tmp_path, sources=(garmin_src,), destinations=())
+        config = AppConfig(
+            cache_dir=tmp_path,
+            connectors=(garmin_connector,),
+            sync_groups=(group,),
+        )
         kdbx = tmp_path / "vault.kdbx"
         kdbx.write_bytes(b"fake")
         args = argparse.Namespace(
@@ -561,10 +546,11 @@ class TestRunKeepassLogging:
 
 class TestRunSyncErrors:
     async def test_credentials_not_found_exits_1(self, tmp_path: Path) -> None:
-        strava_src = StravaSourceConfig(
-            id="strava-src", priority=2, client_id=99, credential=_STRAVA_CRED
+        config = AppConfig(
+            cache_dir=tmp_path,
+            connectors=(_STRAVA_CONNECTOR,),
+            sync_groups=(_DEFAULT_GROUP,),
         )
-        config = AppConfig(cache_dir=tmp_path, sources=(strava_src,), destinations=())
         creds_file = tmp_path / "creds.json"
         creds_file.write_text("[]", encoding="utf-8")
         args = argparse.Namespace(
@@ -576,14 +562,14 @@ class TestRunSyncErrors:
             creds_keepass=None,
         )
 
-        async def _fake_build_sources(
+        async def _fake_build_connectors(
             _cfg, _provider, _tracker, on_strava_token_refresh=None
         ):
             raise CredentialsNotFoundError(_STRAVA_CRED)
 
         with (
             patch("app.cli.load_config", return_value=config),
-            patch("app.cli.build_sources", new=_fake_build_sources),
+            patch("app.cli.build_connectors", new=_fake_build_connectors),
             patch("app.cli.ActivityCache") as mock_cache,
             patch("app.cli.ConsoleRenderer"),
             pytest.raises(SystemExit) as exc,
@@ -593,13 +579,43 @@ class TestRunSyncErrors:
 
         assert exc.value.code == 1
 
+    async def test_download_failures_warning_printed(
+        self, capsys: pytest.CaptureFixture, tmp_path: Path
+    ) -> None:
+        config = AppConfig(cache_dir=tmp_path, connectors=(), sync_groups=())
+        creds_file = tmp_path / "creds.json"
+        creds_file.write_text("[]", encoding="utf-8")
+        args = argparse.Namespace(
+            config=tmp_path / "unused.json",
+            start=_START,
+            end=_END,
+            force=False,
+            creds_json=None,
+            creds_keepass=None,
+        )
+
+        with (
+            patch("app.cli.load_config", return_value=config),
+            patch("app.cli.build_connectors", new=AsyncMock(return_value={})),
+            patch("app.cli.SyncOrchestrator") as mock_orch,
+            patch("app.cli.ActivityCache") as mock_cache,
+            patch("app.cli.ConsoleRenderer"),
+        ):
+            mock_cache.return_value.load = MagicMock()
+            mock_orch.return_value.run = AsyncMock(return_value=3)
+            await _run(args)
+
+        err = capsys.readouterr().err
+        assert "3 activities failed to download" in err
+
     async def test_value_error_in_build_exits_1(
         self, capsys: pytest.CaptureFixture, tmp_path: Path
     ) -> None:
-        strava_src = StravaSourceConfig(
-            id="strava-src", priority=2, client_id=99, credential=_STRAVA_CRED
+        config = AppConfig(
+            cache_dir=tmp_path,
+            connectors=(_STRAVA_CONNECTOR,),
+            sync_groups=(_DEFAULT_GROUP,),
         )
-        config = AppConfig(cache_dir=tmp_path, sources=(strava_src,), destinations=())
         creds_file = tmp_path / "creds.json"
         creds_file.write_text("[]", encoding="utf-8")
         args = argparse.Namespace(
@@ -611,14 +627,14 @@ class TestRunSyncErrors:
             creds_keepass=None,
         )
 
-        async def _fake_build_sources(
+        async def _fake_build_connectors(
             _cfg, _provider, _tracker, on_strava_token_refresh=None
         ):
             raise ValueError("bad config value")
 
         with (
             patch("app.cli.load_config", return_value=config),
-            patch("app.cli.build_sources", new=_fake_build_sources),
+            patch("app.cli.build_connectors", new=_fake_build_connectors),
             patch("app.cli.ActivityCache") as mock_cache,
             patch("app.cli.ConsoleRenderer"),
             pytest.raises(SystemExit) as exc,
@@ -635,10 +651,19 @@ class TestRunSyncKeepassPassword:
         self, tmp_path: Path
     ) -> None:
         """KeePass password must be prompted before ConsoleRenderer starts."""
-        strava_src = StravaSourceConfig(
-            id="strava-src", priority=2, client_id=99, credential=_STRAVA_CRED
+        strava_connector = StravaConnectorConfig(
+            id="strava", client_id=99, credential=_STRAVA_CRED
         )
-        config = AppConfig(cache_dir=tmp_path, sources=(strava_src,), destinations=())
+        group = SyncGroupConfig(
+            id="g",
+            sources=(GroupSourceConfig(id="strava", priority=1),),
+            destinations=(),
+        )
+        config = AppConfig(
+            cache_dir=tmp_path,
+            connectors=(strava_connector,),
+            sync_groups=(group,),
+        )
         kdbx = tmp_path / "vault.kdbx"
         kdbx.write_bytes(b"fake")
         args = argparse.Namespace(
@@ -668,21 +693,19 @@ class TestRunSyncKeepassPassword:
 
         with (
             patch("app.cli.os.environ.get", side_effect=_env_get),
-            patch("app.cli.build_sources", new=AsyncMock(return_value=[])),
-            patch("app.cli.build_destinations", new=AsyncMock(return_value=[])),
+            patch("app.cli.build_connectors", new=AsyncMock(return_value={})),
+            patch("app.cli.SyncOrchestrator") as mock_orch,
             patch("app.cli.ActivityCache") as mock_cache,
-            patch("app.cli.SyncExecutor") as mock_executor,
             patch("app.cli.ConsoleRenderer", return_value=renderer_mock),
             patch("app.cli._make_provider") as mock_make_provider,
         ):
             mock_cache.return_value.load = MagicMock()
-            mock_executor.return_value.run = AsyncMock()
+            mock_orch.return_value.run = AsyncMock(return_value=0)
             mock_make_provider.return_value = MagicMock()
             from app.cli import _run_sync
 
             await _run_sync(args, config, sync_logger, _START, _END)
 
-        # env var is read before ConsoleRenderer starts
         assert "env_get" in call_order
         assert "renderer_enter" in call_order
         assert call_order.index("env_get") < call_order.index("renderer_enter")
@@ -692,11 +715,7 @@ class TestRunSyncKeepassPassword:
 
 class TestMainIfNameMain:
     def test_if_name_main_block_is_covered(self) -> None:
-        """Execute app/cli.py as __main__ so line 324 (main() call) is covered.
-
-        runpy.run_path executes the source file at its path, so coverage correctly
-        tracks the if __name__ == '__main__': main() guard.
-        """
+        """Cover the if __name__ == '__main__' guard in app/cli.py."""
         import runpy
 
         with (

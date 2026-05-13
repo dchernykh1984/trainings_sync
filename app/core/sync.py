@@ -99,6 +99,7 @@ class SyncExecutor:
         destinations: list[tuple[str, ServiceConnector]],
         cache: ActivityCache,
         tracker: TaskTracker | None = None,
+        task_prefix: str = "",
     ) -> None:
         source_ids = [spec.source_id for spec, _ in sources]
         if len(source_ids) != len(set(source_ids)):
@@ -112,6 +113,7 @@ class SyncExecutor:
         self._cache = cache
         self._planner = SyncPlanner()
         self._tracker = tracker
+        self._task_prefix = task_prefix
         self._download_failures: int = 0
 
     @property
@@ -278,7 +280,9 @@ class SyncExecutor:
         total_metas = sum(len(metas) for _, metas in source_metas)
         plan_task: str | None = None
         if tracker is not None and total_metas > 0:
-            plan_task = await tracker.add_task("Sync: plan", total=total_metas)
+            plan_task = await tracker.add_task(
+                f"{self._task_prefix}Sync: plan", total=total_metas
+            )
         to_download: list[DownloadItem] = []
         try:
             for maybe_item in self._planner.plan_items(
@@ -337,7 +341,8 @@ class SyncExecutor:
                 label = source_map[source_id].user_label
                 suffix = f" ({label})" if label else ""
                 source_task_names[source_id] = await tracker.add_task(
-                    f"Download {source_id}{suffix} activities", total=len(items)
+                    f"{self._task_prefix}Download {source_id}{suffix} activities",
+                    total=len(items),
                 )
 
         total_failures = 0
@@ -629,7 +634,7 @@ class SyncExecutor:
         collect_tracking: tuple[TaskTracker, str] | None = None
         if tracker is not None and candidates:
             collect_task = await tracker.add_task(
-                "Sync: collect uploads", total=len(candidates)
+                f"{self._task_prefix}Sync: collect uploads", total=len(candidates)
             )
             collect_tracking = (tracker, collect_task)
         try:
@@ -656,7 +661,8 @@ class SyncExecutor:
                 label = dest_map[dest_id].user_label
                 suffix = f" ({label})" if label else ""
                 dest_task_names[dest_id] = await tracker.add_task(
-                    f"Upload to {dest_id}{suffix}", total=len(entries)
+                    f"{self._task_prefix}Upload to {dest_id}{suffix}",
+                    total=len(entries),
                 )
 
         for dest_id, entries in by_dest.items():

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import sys
 from datetime import date, timedelta
+from typing import TYPE_CHECKING
 
 from app.connectors.base import (
     Activity,
@@ -13,8 +15,14 @@ from app.core.cache import ActivityCache, CacheEntry
 from app.core.planner import DownloadItem, SourceSpec, SyncPlanner
 from app.tracking.tracker import TaskTracker
 
+if TYPE_CHECKING:
+    from app.tracking.sync_logger import SyncLogger
+
 _UNKNOWN_PRIORITY: int = sys.maxsize
 _UNKNOWN_ORDER: int = sys.maxsize
+_DOWNLOAD_ATTEMPTS: int = 3
+_DOWNLOAD_RETRY_DELAY_S: float = 15.0
+_MIN_ATTEMPT_DURATION_S: float = 30.0
 
 
 def _entries_overlap(
@@ -102,6 +110,11 @@ class SyncExecutor:
         self._cache = cache
         self._planner = SyncPlanner()
         self._tracker = tracker
+        self._download_failures: int = 0
+
+    @property
+    def download_failures(self) -> int:
+        return self._download_failures
 
     async def run(
         self,
@@ -110,7 +123,7 @@ class SyncExecutor:
         *,
         force: bool = False,
     ) -> None:
-        await self._download(start, end, force=force)
+        self._download_failures = await self._download(start, end, force=force)
         await self._upload(start, end)
 
     def _cache_activity(self, source_id: str, activity: Activity) -> CacheEntry:
@@ -129,44 +142,127 @@ class SyncExecutor:
             self._cache.put_media(stored, list(activity.media))
         return stored
 
+    async def _attempt_download(
+        self,
+        connector: ServiceConnector,
+        sem: asyncio.Semaphore,
+        item: DownloadItem,
+        *,
+        pad: bool,
+    ) -> tuple[Activity | None, bool]:
+        """Download inside semaphore. Returns (activity, skipped); raises on error."""
+        loop = asyncio.get_running_loop()
+        async with sem:
+            t0 = loop.time()
+            try:
+                return await connector.download_activity(item.meta), False
+            except ActivityUnavailableError:
+                return None, True
+            except Exception:
+                if pad:
+                    remaining = _MIN_ATTEMPT_DURATION_S - (loop.time() - t0)
+                    if remaining > 0:
+                        await asyncio.sleep(remaining)
+                raise
+
+    async def _on_download_success(
+        self,
+        activity: Activity | None,
+        meta: ActivityMeta,
+        source_id: str,
+        account: str,
+        tracking: tuple[TaskTracker, str] | None,
+        advanced: bool,
+        log: SyncLogger | None,
+    ) -> None:
+        if activity is not None:
+            stored = self._cache_activity(source_id, activity)
+            if log:
+                log.info(
+                    f"[download] {source_id}{account}:"
+                    f" {activity.external_id!r}"
+                    f" {activity.start_time.date()}"
+                    f' "{activity.name}" -> {stored.filename}'
+                )
+        elif log:
+            log.info(
+                f"[download] {source_id}{account}:"
+                f" {meta.external_id!r} - unavailable, skipped"
+            )
+        if not advanced and tracking is not None:
+            await tracking[0].advance(tracking[1])
+
+    async def _download_one(
+        self,
+        item: DownloadItem,
+        connector: ServiceConnector,
+        sem: asyncio.Semaphore,
+        source_id: str,
+        tracking: tuple[TaskTracker, str] | None,
+    ) -> int:
+        """Download one activity with retries. Returns 1 if all attempts failed."""
+        log = self._tracker.sync_logger if self._tracker is not None else None
+        label = connector.user_label
+        account = f" ({label})" if label else ""
+        advanced = False
+        last_exc: Exception | None = None
+        for attempt in range(_DOWNLOAD_ATTEMPTS):
+            if attempt > 0:
+                await asyncio.sleep(_DOWNLOAD_RETRY_DELAY_S)
+            try:
+                activity, _ = await self._attempt_download(
+                    connector, sem, item, pad=not advanced
+                )
+            except Exception as exc:
+                last_exc = exc
+                if not advanced:
+                    if tracking is not None:
+                        await tracking[0].advance(tracking[1])
+                    advanced = True
+                if log:
+                    log.debug(
+                        f"[download] {source_id}{account}:"
+                        f" {item.meta.external_id!r} - attempt"
+                        f" {attempt + 1}/{_DOWNLOAD_ATTEMPTS} failed ({exc})"
+                    )
+                continue
+            await self._on_download_success(
+                activity, item.meta, source_id, account, tracking, advanced, log
+            )
+            return 0
+        if tracking is not None:
+            await tracking[0].warn(
+                tracking[1],
+                f"{item.meta.external_id!r}: download failed ({last_exc})",
+            )
+        return 1
+
     async def _download_source(
         self,
         source_id: str,
         items: list[DownloadItem],
         connector: ServiceConnector,
         tracking: tuple[TaskTracker, str] | None,
-    ) -> None:
-        log = self._tracker.sync_logger if self._tracker is not None else None
-        label = connector.user_label
-        account = f" ({label})" if label else ""
+    ) -> int:
+        sem = asyncio.Semaphore(connector._max_concurrent)
+        tasks = [
+            asyncio.create_task(
+                self._download_one(item, connector, sem, source_id, tracking)
+            )
+            for item in items
+        ]
         try:
-            for item in items:
-                try:
-                    activity = await connector.download_activity(item.meta)
-                except ActivityUnavailableError:
-                    if log:
-                        log.info(
-                            f"[download] {source_id}{account}:"
-                            f" {item.meta.external_id!r} - unavailable, skipped"
-                        )
-                    if tracking is not None:
-                        await tracking[0].advance(tracking[1])
-                    continue
-                stored = self._cache_activity(source_id, activity)
-                if log:
-                    log.info(
-                        f"[download] {source_id}{account}: {activity.external_id!r}"
-                        f" {activity.start_time.date()}"
-                        f' "{activity.name}" -> {stored.filename}'
-                    )
-                if tracking is not None:
-                    await tracking[0].advance(tracking[1])
+            results = await asyncio.gather(*tasks)
         except Exception as exc:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
             if tracking is not None:
                 await tracking[0].fail(tracking[1], error=str(exc))
             raise
         if tracking is not None:
             await tracking[0].finish(tracking[1])
+        return sum(results)
 
     async def _plan(
         self,
@@ -217,7 +313,7 @@ class SyncExecutor:
                 f" {to_dl} to download, {len(metas) - to_dl} skipped"
             )
 
-    async def _download(self, start: date, end: date, *, force: bool) -> None:
+    async def _download(self, start: date, end: date, *, force: bool) -> int:
         source_metas: list[tuple[SourceSpec, list[ActivityMeta]]] = []
         for spec, connector in self._sources:
             metas = await connector.list_activities(start, end)
@@ -240,14 +336,16 @@ class SyncExecutor:
                     f"Download {source_id}{suffix} activities", total=len(items)
                 )
 
+        total_failures = 0
         for source_id, items in by_source.items():
             task_name = source_task_names.get(source_id)
             tracking = (
                 (tracker, task_name) if tracker is not None and task_name else None
             )
-            await self._download_source(
+            total_failures += await self._download_source(
                 source_id, items, source_map[source_id], tracking
             )
+        return total_failures
 
     def _get_candidates(self, start: date, end: date) -> list[CacheEntry]:
         return [

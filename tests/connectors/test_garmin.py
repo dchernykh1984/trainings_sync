@@ -1205,6 +1205,8 @@ class TestUploadActivityPhotos:
                 MediaItem(content=b"photo2", media_type="photo"),
             ),
         )
+        tracker = logged_in_with_log._tracker
+        task_name = await tracker.add_task("Upload to garmin", total=2)
         with (
             patch("app.connectors.garmin._UPLOAD_SETTLE_S", 0),
             patch(
@@ -1217,12 +1219,12 @@ class TestUploadActivityPhotos:
                 side_effect=_call_sync,
             ),
         ):
-            await logged_in_with_log.upload_activity(activity)
+            await logged_in_with_log.upload_activity(activity, task_name=task_name)
         log = logged_in_with_log._tracker.sync_logger
         assert log is not None
         msgs = [c.args[0] for c in log.warning.call_args_list]  # type: ignore[attr-defined]
-        assert any("failed to upload photo #1" in m for m in msgs)
-        assert not any("failed to upload photo #2" in m for m in msgs)
+        assert any("photo #1 not uploaded" in m for m in msgs)
+        assert not any("photo #2 not uploaded" in m for m in msgs)
 
     async def test_no_photo_upload_when_no_media(
         self, logged_in: GarminConnector, mock_client: MagicMock
@@ -1407,11 +1409,9 @@ class TestUploadActivityPhotos:
         ):
             await logged_in_with_log.upload_activity(activity, task_name="upload #1")
         assert mock_upload.call_count == _PHOTO_UPLOAD_RETRIES
-        log = logged_in_with_log._tracker.sync_logger
-        assert log is not None
-        msgs = [c.args[0] for c in log.warning.call_args_list]  # type: ignore[attr-defined]
-        assert any("failed to upload photo #1" in m for m in msgs)
         mock_warn.assert_awaited_once()
+        warn_msg = mock_warn.call_args.args[1]
+        assert "photo #1 not uploaded" in warn_msg
 
 
 class TestGarminMediaUploadSupport:

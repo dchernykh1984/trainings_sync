@@ -38,6 +38,13 @@ class ConsoleRenderer(ProgressRenderer):
         else:
             final = max(1, task.progress)
             self._progress.update(task_id, total=final, completed=final)
+        if task.warnings:
+            n = len(task.warnings)
+            noun = "warning" if n == 1 else "warnings"
+            self._progress.update(
+                task_id,
+                description=f"[bold yellow]{task.name} ({n} {noun} - see log)",
+            )
         self._progress.stop_task(task_id)
 
     def on_task_failed(self, task: Task) -> None:
@@ -53,7 +60,7 @@ class ConsoleRenderer(ProgressRenderer):
         self._progress.update(task_id, total=task.total)
 
     def on_task_warning(self, task: Task, message: str) -> None:
-        self._progress.print(f"[bold yellow]WARNING [{task.name}]: {message}")
+        pass
 
     def stop(self) -> None:
         self._progress.stop()

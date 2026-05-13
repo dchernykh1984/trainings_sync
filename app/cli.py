@@ -213,6 +213,7 @@ async def _run_sync(
         },
     }
 
+    download_failures = 0
     with ConsoleRenderer() as renderer:
         tracker = TaskTracker(renderer, sync_logger=sync_logger)
         provider = (
@@ -264,6 +265,16 @@ async def _run_sync(
             sources=sources, destinations=destinations, cache=cache, tracker=tracker
         )
         await executor.run(start, end, force=args.force)
+        download_failures = executor.download_failures
+
+    if download_failures:
+        n = download_failures
+        noun = "activity" if n == 1 else "activities"
+        print(
+            f"warning: {n} {noun} failed to download"
+            f" (see {sync_logger.path} for details)",
+            file=sys.stderr,
+        )
 
 
 async def _run(args: argparse.Namespace) -> None:

@@ -6,10 +6,15 @@ from datetime import date, datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import requests
 from stravalib.exc import ObjectNotFound
 
 from app.connectors.base import Activity, ActivityMeta
-from app.connectors.strava import StravaConnector
+from app.connectors.strava import (
+    StravaConnector,
+    _make_strava_session,
+    _TimeoutHTTPAdapter,
+)
 from app.credentials.base import StravaCredentials
 from app.tracking.tracker import ProgressRenderer, Task, TaskStatus, TaskTracker
 
@@ -1060,3 +1065,42 @@ class TestDownloadActivityPhotos:
 class TestUploadActivityMediaSupport:
     def test_supports_media_upload_is_false(self, connector: StravaConnector) -> None:
         assert connector.supports_media_upload is False
+
+
+class TestTimeoutHTTPAdapter:
+    def test_injects_default_timeout(self) -> None:
+        from app.connectors.strava import _REQUEST_TIMEOUT_S
+
+        adapter = _TimeoutHTTPAdapter()
+        with patch.object(
+            adapter.__class__.__bases__[0], "send", return_value=MagicMock()
+        ) as mock_send:
+            adapter.send(MagicMock())
+        _, kwargs = mock_send.call_args
+        assert kwargs.get("timeout") == _REQUEST_TIMEOUT_S
+
+    def test_does_not_override_explicit_timeout(self) -> None:
+        adapter = _TimeoutHTTPAdapter()
+        with patch.object(
+            adapter.__class__.__bases__[0], "send", return_value=MagicMock()
+        ) as mock_send:
+            adapter.send(MagicMock(), timeout=5)
+        _, kwargs = mock_send.call_args
+        assert kwargs.get("timeout") == 5
+
+
+class TestMakeStravaSession:
+    def test_returns_requests_session(self) -> None:
+        assert isinstance(_make_strava_session(), requests.Session)
+
+    def test_https_adapter_is_timeout_adapter(self) -> None:
+        session = _make_strava_session()
+        assert isinstance(
+            session.get_adapter("https://example.com"), _TimeoutHTTPAdapter
+        )
+
+    def test_http_adapter_is_timeout_adapter(self) -> None:
+        session = _make_strava_session()
+        assert isinstance(
+            session.get_adapter("http://example.com"), _TimeoutHTTPAdapter
+        )

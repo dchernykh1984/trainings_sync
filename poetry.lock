@@ -2029,6 +2029,21 @@ files = [
 ]
 
 [[package]]
+name = "types-requests"
+version = "2.33.0.20260508"
+description = "Typing stubs for requests"
+optional = false
+python-versions = ">=3.10"
+groups = ["dev"]
+files = [
+    {file = "types_requests-2.33.0.20260508-py3-none-any.whl", hash = "sha256:fa01459cca184229713df03709db46a905325906d27e042cd4fd7ea3d15d3400"},
+    {file = "types_requests-2.33.0.20260508.tar.gz", hash = "sha256:81b2ae5f0d20967714a6aa5ef9284c05570d7cb06b7de8f2a77b918b63ddd411"},
+]
+
+[package.dependencies]
+urllib3 = ">=2"
+
+[[package]]
 name = "typing-extensions"
 version = "4.15.0"
 description = "Backported and Experimental Type Hints for Python 3.9+"
@@ -2085,7 +2100,7 @@ version = "2.7.0"
 description = "HTTP library with thread-safe connection pooling, file post, and more."
 optional = false
 python-versions = ">=3.10"
-groups = ["main"]
+groups = ["main", "dev"]
 files = [
     {file = "urllib3-2.7.0-py3-none-any.whl", hash = "sha256:9fb4c81ebbb1ce9531cce37674bbc6f1360472bc18ca9a553ede278ef7276897"},
     {file = "urllib3-2.7.0.tar.gz", hash = "sha256:231e0ec3b63ceb14667c67be60f2f2c40a518cb38b03af60abc813da26505f4c"},
@@ -2233,4 +2248,4 @@ dev = ["pytest", "setuptools"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.14"
-content-hash = "c4a2885d27ce4a82f65b8720392628c710ff70bc8d3380b2c88142c7003dc820"
+content-hash = "b6d5d69888c289e2854bf987a3538f53f9bd1ef00db3e0cc4f469c02788ee12f"

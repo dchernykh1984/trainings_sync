@@ -20,6 +20,10 @@ class ActivityUnavailableError(Exception):
     """
 
 
+class TransientDownloadError(Exception):
+    """Raised by connectors for transient network errors that are worth retrying."""
+
+
 @dataclass(frozen=True)
 class ActivityMeta:
     external_id: str

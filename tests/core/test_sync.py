@@ -11,6 +11,7 @@ from app.connectors.base import (
     ActivityMeta,
     ActivityUnavailableError,
     MediaItem,
+    TransientDownloadError,
 )
 from app.core.cache import ActivityCache, CacheEntry
 from app.core.planner import SourceSpec
@@ -762,7 +763,9 @@ class TestSyncExecutorTracking:
     ) -> None:
         conn = _make_conn()
         conn.list_activities = AsyncMock(return_value=[_meta()])
-        conn.download_activity = AsyncMock(side_effect=OSError("network error"))
+        conn.download_activity = AsyncMock(
+            side_effect=TransientDownloadError("network error")
+        )
         tracker = _make_tracker()
         executor = SyncExecutor(
             sources=[(_spec("garmin"), conn)],
@@ -810,7 +813,7 @@ class TestSyncExecutorTracking:
         conn = _make_conn()
         conn.list_activities = AsyncMock(return_value=[_meta("a1")])
         conn.download_activity = AsyncMock(
-            side_effect=[OSError("transient"), _activity("a1")]
+            side_effect=[TransientDownloadError("transient"), _activity("a1")]
         )
         executor = SyncExecutor(
             sources=[(_spec("garmin"), conn)],
@@ -830,7 +833,8 @@ class TestSyncExecutorTracking:
         conn.list_activities = AsyncMock(return_value=metas)
         # a1 exhausts all attempts; a2 succeeds on first try
         conn.download_activity = AsyncMock(
-            side_effect=[OSError("timeout")] * _DOWNLOAD_ATTEMPTS + [_activity("a2")]
+            side_effect=[TransientDownloadError("timeout")] * _DOWNLOAD_ATTEMPTS
+            + [_activity("a2")]
         )
         tracker = _make_tracker()
         executor = SyncExecutor(
@@ -867,6 +871,21 @@ class TestSyncExecutorTracking:
         )
         await executor.run(_START, _END)
         assert executor.download_failures == 0
+
+    async def test_non_transient_error_propagates_without_retry(
+        self, cache: ActivityCache
+    ) -> None:
+        conn = _make_conn()
+        conn.list_activities = AsyncMock(return_value=[_meta("a1")])
+        conn.download_activity = AsyncMock(side_effect=ValueError("bad zip"))
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), conn)],
+            destinations=[],
+            cache=cache,
+        )
+        with pytest.raises(ValueError, match="bad zip"):
+            await executor.run(_START, _END)
+        assert conn.download_activity.call_count == 1
 
     async def test_cache_write_error_fails_task_and_raises(
         self, cache: ActivityCache

@@ -7,7 +7,8 @@ from app.connectors.base import ServiceConnector
 from app.core.cache import ActivityCache
 from app.core.config import SyncGroupConfig
 from app.core.connector_factory import resolve_group_destinations, resolve_group_sources
-from app.core.sync import SharedDownloadTasks, SharedListTasks, SyncExecutor
+from app.core.planner import SourceSpec
+from app.core.sync import SyncExecutor
 from app.tracking.tracker import TaskTracker
 
 
@@ -27,34 +28,24 @@ class SyncOrchestrator:
         self._login_tasks = login_tasks
 
     async def run(self, start: date, end: date, *, force: bool = False) -> int:
-        executors = [(g, self._build_executor(g)) for g in self._groups]
+        # Collect unique source IDs in declaration order across all groups.
+        unique_source_ids: list[str] = list(
+            dict.fromkeys(src.id for group in self._groups for src in group.sources)
+        )
+        source_executors = [
+            self._build_source_executor(src_id) for src_id in unique_source_ids
+        ]
 
-        # Lazy single-flight tasks for list_activities: the first group that needs
-        # a source starts the task; subsequent groups await the running task.
-        shared_list_tasks: SharedListTasks = {}
-        # Shared in-flight download tasks prevent duplicate downloads of the same
-        # (external_id, source_id) when multiple groups use the same source.
-        shared_tasks: SharedDownloadTasks = {}
-
-        # Phase 1: downloads run in parallel across all groups.
+        # Phase 1: download each source exactly once, in parallel.
         await asyncio.gather(
             *(
-                self._download_group(
-                    g,
-                    ex,
-                    start,
-                    end,
-                    force=force,
-                    shared_list_tasks=shared_list_tasks,
-                    shared_tasks=shared_tasks,
-                )
-                for g, ex in executors
+                self._download_source_phase(src_id, ex, start, end, force=force)
+                for src_id, ex in zip(unique_source_ids, source_executors, strict=True)
             )
         )
 
-        # Phase 2: uploads serialized per group connector set (sources + destinations)
-        # to prevent read-after-write hazards when one group's destination is
-        # another group's source.
+        # Phase 2: upload phase per group, built after source downloads complete.
+        executors = [(g, self._build_executor(g)) for g in self._groups]
         conn_locks: dict[str, asyncio.Lock] = {
             cid: asyncio.Lock() for cid in self._connectors
         }
@@ -65,7 +56,18 @@ class SyncOrchestrator:
             )
         )
 
-        return sum(ex.download_failures for _, ex in executors)
+        return sum(ex.download_failures for ex in source_executors)
+
+    def _build_source_executor(self, source_id: str) -> SyncExecutor:
+        connector = self._connectors[source_id]
+        return SyncExecutor(
+            sources=[(SourceSpec(source_id=source_id, priority=1), connector)],
+            destinations=[],
+            cache=self._cache,
+            tracker=self._tracker,
+            task_prefix="",
+            login_tasks=self._login_tasks,
+        )
 
     def _build_executor(self, group: SyncGroupConfig) -> SyncExecutor:
         return SyncExecutor(
@@ -79,34 +81,26 @@ class SyncOrchestrator:
             login_tasks=self._login_tasks,
         )
 
-    async def _download_group(
+    async def _download_source_phase(
         self,
-        group: SyncGroupConfig,
+        source_id: str,
         executor: SyncExecutor,
         start: date,
         end: date,
         *,
         force: bool,
-        shared_list_tasks: SharedListTasks | None = None,
-        shared_tasks: SharedDownloadTasks | None = None,
     ) -> None:
         log = self._tracker.sync_logger if self._tracker is not None else None
         if log is not None:
-            log.info(f"[group] {group.id} - download started")
+            log.info(f"[source] {source_id} - download started")
         try:
-            await executor.download_phase(
-                start,
-                end,
-                force=force,
-                shared_list_tasks=shared_list_tasks,
-                shared_tasks=shared_tasks,
-            )
+            await executor.download_phase(start, end, force=force)
         except BaseException:
             if log is not None:
-                log.error(f"[group] {group.id} - download failed")
+                log.error(f"[source] {source_id} - download failed")
             raise
         if log is not None:
-            log.info(f"[group] {group.id} - download done")
+            log.info(f"[source] {source_id} - download done")
 
     async def _upload_group_locked(
         self,

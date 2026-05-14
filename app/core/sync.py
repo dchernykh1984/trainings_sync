@@ -26,17 +26,6 @@ _DOWNLOAD_ATTEMPTS: int = 3
 _DOWNLOAD_RETRY_DELAY_S: float = 15.0
 _MIN_ATTEMPT_DURATION_S: float = 30.0
 
-# In-flight list_activities tasks shared across groups for the same source.
-SharedListTasks = dict[str, asyncio.Task[list[ActivityMeta]]]
-# In-flight download tasks shared across groups: (external_id, source_id) -> task.
-SharedDownloadTasks = dict[tuple[str, str], asyncio.Task[int]]
-
-
-async def _await_as_zero(task: asyncio.Task[int]) -> int:
-    """Await an existing download task and return 0 (not a new failure)."""
-    await task
-    return 0
-
 
 def _entries_overlap(
     a: CacheEntry,
@@ -139,16 +128,8 @@ class SyncExecutor:
         end: date,
         *,
         force: bool = False,
-        shared_list_tasks: SharedListTasks | None = None,
-        shared_tasks: SharedDownloadTasks | None = None,
     ) -> None:
-        self._download_failures = await self._do_download(
-            start,
-            end,
-            force=force,
-            shared_list_tasks=shared_list_tasks,
-            shared_tasks=shared_tasks,
-        )
+        self._download_failures = await self._do_download(start, end, force=force)
 
     async def upload_phase(self, start: date, end: date) -> None:
         await self._do_upload(start, end)
@@ -282,22 +263,14 @@ class SyncExecutor:
         items: list[DownloadItem],
         connector: ServiceConnector,
         tracking: tuple[TaskTracker, str] | None,
-        *,
-        shared_tasks: SharedDownloadTasks | None = None,
     ) -> int:
         sem = asyncio.Semaphore(connector._max_concurrent)
-        tasks: list[asyncio.Task[int]] = []
-        for item in items:
-            key = (item.meta.external_id, source_id)
-            if shared_tasks is not None and key in shared_tasks:
-                tasks.append(asyncio.create_task(_await_as_zero(shared_tasks[key])))
-            else:
-                t = asyncio.create_task(
-                    self._download_one(item, connector, sem, source_id, tracking)
-                )
-                if shared_tasks is not None:
-                    shared_tasks[key] = t
-                tasks.append(t)
+        tasks: list[asyncio.Task[int]] = [
+            asyncio.create_task(
+                self._download_one(item, connector, sem, source_id, tracking)
+            )
+            for item in items
+        ]
         try:
             results = await asyncio.gather(*tasks)
         except BaseException as exc:
@@ -375,38 +348,16 @@ class SyncExecutor:
                 await login_task
         return await connector.list_activities(start, end)
 
-    async def _get_or_fetch_metas(
-        self,
-        source_id: str,
-        connector: ServiceConnector,
-        start: date,
-        end: date,
-        shared_list_tasks: SharedListTasks | None,
-    ) -> list[ActivityMeta]:
-        if shared_list_tasks is not None:
-            if source_id in shared_list_tasks:
-                return await shared_list_tasks[source_id]
-            task: asyncio.Task[list[ActivityMeta]] = asyncio.create_task(
-                self._login_then_list(source_id, connector, start, end)
-            )
-            shared_list_tasks[source_id] = task
-            return await task
-        return await self._login_then_list(source_id, connector, start, end)
-
     async def _do_download(
         self,
         start: date,
         end: date,
         *,
         force: bool,
-        shared_list_tasks: SharedListTasks | None = None,
-        shared_tasks: SharedDownloadTasks | None = None,
     ) -> int:
         metas_list = await asyncio.gather(
             *(
-                self._get_or_fetch_metas(
-                    spec.source_id, connector, start, end, shared_list_tasks
-                )
+                self._login_then_list(spec.source_id, connector, start, end)
                 for spec, connector in self._sources
             )
         )
@@ -445,7 +396,6 @@ class SyncExecutor:
                     items,
                     source_map[source_id],
                     tracking,
-                    shared_tasks=shared_tasks,
                 )
             )
         results = await asyncio.gather(*download_coros)

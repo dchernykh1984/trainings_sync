@@ -1916,3 +1916,58 @@ class TestParallelism:
         await executor.run(_START, _END)
 
         assert call_log == ["d1-start", "d2-start", "d1-done", "d2-done"]
+
+
+class TestLoginPipelining:
+    async def test_source_list_waits_for_its_login_task(
+        self, cache: ActivityCache
+    ) -> None:
+        call_log: list[str] = []
+
+        async def _login_a() -> None:
+            call_log.append("login-a")
+
+        async def _list_a(start: date, end: date) -> list[ActivityMeta]:
+            call_log.append("list-a")
+            return []
+
+        conn = _make_conn()
+        conn.list_activities = _list_a
+        login_task: asyncio.Task[None] = asyncio.create_task(_login_a())
+
+        executor = SyncExecutor(
+            sources=[(_spec("a", priority=1), conn)],
+            destinations=[],
+            cache=cache,
+            login_tasks={"a": login_task},
+        )
+        await executor.run(_START, _END)
+
+        assert call_log == ["login-a", "list-a"]
+
+    async def test_dest_list_waits_for_its_login_task(
+        self, cache: ActivityCache
+    ) -> None:
+        call_log: list[str] = []
+
+        async def _login_d() -> None:
+            call_log.append("login-d")
+
+        async def _list_d(start: date, end: date) -> list[ActivityMeta]:
+            call_log.append("list-d")
+            return []
+
+        cache.put(_entry("act-1", "garmin"), b"content")
+        dest = _dest_conn()
+        dest.list_activities = _list_d
+        login_task: asyncio.Task[None] = asyncio.create_task(_login_d())
+
+        executor = SyncExecutor(
+            sources=[(_spec("garmin", priority=1), _source_conn())],
+            destinations=[("dest", dest)],
+            cache=cache,
+            login_tasks={"dest": login_task},
+        )
+        await executor.run(_START, _END)
+
+        assert call_log == ["login-d", "list-d"]

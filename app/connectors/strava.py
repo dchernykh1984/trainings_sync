@@ -339,7 +339,8 @@ class StravaConnector(ServiceConnector):
         except requests.RequestException as exc:
             raise TransientDownloadError(str(exc)) from exc
 
-        media = await self._fetch_photos(client, activity_id)
+        has_photos = (getattr(raw, "total_photo_count", None) or 0) > 0
+        media = await self._fetch_photos(client, activity_id) if has_photos else []
 
         if no_streams or not _stream_data(streams, "time"):
             if log:

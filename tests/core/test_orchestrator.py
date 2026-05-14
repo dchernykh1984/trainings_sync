@@ -45,7 +45,7 @@ def cache(tmp_path: Path) -> ActivityCache:
 
 
 # ---------------------------------------------------------------------------
-# Sequential execution
+# Parallel execution
 # ---------------------------------------------------------------------------
 
 
@@ -59,11 +59,11 @@ async def test_runs_all_groups(cache: ActivityCache) -> None:
     }
     ran: set[str] = set()
 
-    async def _fake_run(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
+    async def _fake_download(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
         ran.add(executor_self._task_prefix)
 
     orchestrator = SyncOrchestrator(groups=(g1, g2), connectors=connectors, cache=cache)
-    with patch("app.core.orchestrator.SyncExecutor.run", new=_fake_run):
+    with patch("app.core.orchestrator.SyncExecutor.download_phase", new=_fake_download):
         await orchestrator.run(_START, _END)
 
     assert ran == {"g1: ", "g2: "}
@@ -73,18 +73,18 @@ async def test_groups_run_in_parallel(cache: ActivityCache) -> None:
     g1 = _group("g1", ["strava"], [])
     g2 = _group("g2", ["garmin"], [])
     connectors = {"strava": _mock_connector(), "garmin": _mock_connector()}
-    run_log: list[str] = []
+    download_log: list[str] = []
 
-    async def _fake_run(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
-        run_log.append(f"{executor_self._task_prefix}start")
+    async def _fake_download(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
+        download_log.append(f"{executor_self._task_prefix}start")
         await asyncio.sleep(0)
-        run_log.append(f"{executor_self._task_prefix}done")
+        download_log.append(f"{executor_self._task_prefix}done")
 
     orchestrator = SyncOrchestrator(groups=(g1, g2), connectors=connectors, cache=cache)
-    with patch("app.core.orchestrator.SyncExecutor.run", new=_fake_run):
+    with patch("app.core.orchestrator.SyncExecutor.download_phase", new=_fake_download):
         await orchestrator.run(_START, _END)
 
-    assert run_log == ["g1: start", "g2: start", "g1: done", "g2: done"]
+    assert download_log == ["g1: start", "g2: start", "g1: done", "g2: done"]
 
 
 async def test_returns_total_download_failures_across_groups(
@@ -94,11 +94,11 @@ async def test_returns_total_download_failures_across_groups(
     g2 = _group("g2", ["garmin"], [])
     connectors = {"strava": _mock_connector(), "garmin": _mock_connector()}
 
-    async def _fake_run(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
+    async def _fake_download(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
         executor_self._download_failures = 2
 
     orchestrator = SyncOrchestrator(groups=(g1, g2), connectors=connectors, cache=cache)
-    with patch("app.core.orchestrator.SyncExecutor.run", new=_fake_run):
+    with patch("app.core.orchestrator.SyncExecutor.download_phase", new=_fake_download):
         total = await orchestrator.run(_START, _END)
 
     assert total == 4  # 2 per group x 2 groups
@@ -109,11 +109,11 @@ async def test_task_prefix_set_to_group_id(cache: ActivityCache) -> None:
     connectors = {"src": _mock_connector()}
     captured_prefixes: list[str] = []
 
-    async def _fake_run(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
+    async def _fake_download(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
         captured_prefixes.append(executor_self._task_prefix)
 
     orchestrator = SyncOrchestrator(groups=(g,), connectors=connectors, cache=cache)
-    with patch("app.core.orchestrator.SyncExecutor.run", new=_fake_run):
+    with patch("app.core.orchestrator.SyncExecutor.download_phase", new=_fake_download):
         await orchestrator.run(_START, _END)
 
     assert captured_prefixes == ["my-group: "]
@@ -134,18 +134,20 @@ async def test_logs_group_start_and_end_when_sync_logger_present(
     tracker = MagicMock()
     tracker.sync_logger = sync_logger
 
-    async def _fake_run(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
+    async def _fake_download(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
         pass
 
     orchestrator = SyncOrchestrator(
         groups=(g,), connectors=connectors, cache=cache, tracker=tracker
     )
-    with patch("app.core.orchestrator.SyncExecutor.run", new=_fake_run):
+    with patch("app.core.orchestrator.SyncExecutor.download_phase", new=_fake_download):
         await orchestrator.run(_START, _END)
 
     calls = [c[0][0] for c in sync_logger.info.call_args_list]
-    assert any("test-group" in m and "started" in m for m in calls)
-    assert any("test-group" in m and "done" in m for m in calls)
+    assert any("test-group" in m and "download started" in m for m in calls)
+    assert any("test-group" in m and "download done" in m for m in calls)
+    assert any("test-group" in m and "upload started" in m for m in calls)
+    assert any("test-group" in m and "upload done" in m for m in calls)
 
 
 async def test_logs_group_failed_when_executor_raises(cache: ActivityCache) -> None:
@@ -156,32 +158,62 @@ async def test_logs_group_failed_when_executor_raises(cache: ActivityCache) -> N
     tracker = MagicMock()
     tracker.sync_logger = sync_logger
 
-    async def _raising_run(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
+    async def _raising_download(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
         raise RuntimeError("boom")
 
     orchestrator = SyncOrchestrator(
         groups=(g,), connectors=connectors, cache=cache, tracker=tracker
     )
-    with patch("app.core.orchestrator.SyncExecutor.run", new=_raising_run):
+    with patch(
+        "app.core.orchestrator.SyncExecutor.download_phase", new=_raising_download
+    ):
         with pytest.raises(RuntimeError, match="boom"):
             await orchestrator.run(_START, _END)
 
     info_calls = [c[0][0] for c in sync_logger.info.call_args_list]
     error_calls = [c[0][0] for c in sync_logger.error.call_args_list]
-    assert any("failing-group" in m and "started" in m for m in info_calls)
-    assert any("failing-group" in m and "failed" in m for m in error_calls)
+    assert any("failing-group" in m and "download started" in m for m in info_calls)
+    assert any("failing-group" in m and "download failed" in m for m in error_calls)
     assert not any("done" in m for m in info_calls)
+
+
+async def test_logs_group_failed_when_upload_phase_raises(cache: ActivityCache) -> None:
+    g = _group("upload-fail-group", ["src"], [])
+    connectors = {"src": _mock_connector()}
+
+    sync_logger = MagicMock()
+    tracker = MagicMock()
+    tracker.sync_logger = sync_logger
+
+    async def _fake_download(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
+        pass
+
+    async def _raising_upload(executor_self, start, end):  # type: ignore[no-untyped-def]
+        raise RuntimeError("upload boom")
+
+    orchestrator = SyncOrchestrator(
+        groups=(g,), connectors=connectors, cache=cache, tracker=tracker
+    )
+    with (
+        patch("app.core.orchestrator.SyncExecutor.download_phase", new=_fake_download),
+        patch("app.core.orchestrator.SyncExecutor.upload_phase", new=_raising_upload),
+    ):
+        with pytest.raises(RuntimeError, match="upload boom"):
+            await orchestrator.run(_START, _END)
+
+    error_calls = [c[0][0] for c in sync_logger.error.call_args_list]
+    assert any("upload-fail-group" in m and "upload failed" in m for m in error_calls)
 
 
 async def test_no_log_when_no_tracker(cache: ActivityCache) -> None:
     g = _group("g", ["src"], [])
     connectors = {"src": _mock_connector()}
 
-    async def _fake_run(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
+    async def _fake_download(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
         pass
 
     orchestrator = SyncOrchestrator(groups=(g,), connectors=connectors, cache=cache)
-    with patch("app.core.orchestrator.SyncExecutor.run", new=_fake_run):
+    with patch("app.core.orchestrator.SyncExecutor.download_phase", new=_fake_download):
         await orchestrator.run(_START, _END)  # must not raise
 
 
@@ -192,13 +224,13 @@ async def test_no_log_when_tracker_has_no_sync_logger(cache: ActivityCache) -> N
     tracker = MagicMock()
     tracker.sync_logger = None
 
-    async def _fake_run(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
+    async def _fake_download(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
         pass
 
     orchestrator = SyncOrchestrator(
         groups=(g,), connectors=connectors, cache=cache, tracker=tracker
     )
-    with patch("app.core.orchestrator.SyncExecutor.run", new=_fake_run):
+    with patch("app.core.orchestrator.SyncExecutor.download_phase", new=_fake_download):
         await orchestrator.run(_START, _END)  # must not raise
 
 
@@ -212,38 +244,114 @@ async def test_force_forwarded_to_executor(cache: ActivityCache) -> None:
     connectors = {"src": _mock_connector()}
     received_force: list[bool] = []
 
-    async def _fake_run(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
+    async def _fake_download(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
         received_force.append(force)
 
     orchestrator = SyncOrchestrator(groups=(g,), connectors=connectors, cache=cache)
-    with patch("app.core.orchestrator.SyncExecutor.run", new=_fake_run):
+    with patch("app.core.orchestrator.SyncExecutor.download_phase", new=_fake_download):
         await orchestrator.run(_START, _END, force=True)
 
     assert received_force == [True]
 
 
 # ---------------------------------------------------------------------------
-# Conflict-aware scheduling
+# Phase-aware scheduling
 # ---------------------------------------------------------------------------
 
 
-async def test_groups_sharing_connector_run_sequentially(cache: ActivityCache) -> None:
-    # g1 and g2 both use "strava"; they must be serialized via the strava lock.
+async def test_downloads_always_run_in_parallel(cache: ActivityCache) -> None:
+    # Even when g1 and g2 share "strava" as source, their download phases
+    # must start concurrently - there are no source-level locks during download.
     g1 = _group("g1", ["strava"], [])
     g2 = _group("g2", ["strava"], [])
     connectors = {"strava": _mock_connector()}
-    run_log: list[str] = []
+    download_log: list[str] = []
 
-    async def _fake_run(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
-        run_log.append(f"{executor_self._task_prefix}start")
-        await asyncio.sleep(0)  # yield; g2 must not interleave because lock is held
-        run_log.append(f"{executor_self._task_prefix}done")
+    async def _fake_download(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
+        download_log.append(f"{executor_self._task_prefix}start")
+        await asyncio.sleep(0)  # yield; g2 must still start before g1 finishes
+        download_log.append(f"{executor_self._task_prefix}done")
 
     orchestrator = SyncOrchestrator(groups=(g1, g2), connectors=connectors, cache=cache)
-    with patch("app.core.orchestrator.SyncExecutor.run", new=_fake_run):
+    with patch("app.core.orchestrator.SyncExecutor.download_phase", new=_fake_download):
         await orchestrator.run(_START, _END)
 
-    assert run_log == ["g1: start", "g1: done", "g2: start", "g2: done"]
+    assert download_log == ["g1: start", "g2: start", "g1: done", "g2: done"]
+
+
+async def test_uploads_serialized_when_source_is_other_groups_destination(
+    cache: ActivityCache,
+) -> None:
+    # strava-to-garmin must finish uploading before garmin-to-local reads garmin.
+    # They share "garmin" in their connector sets (dest vs source), so upload
+    # phases must be serialized even though their destinations differ.
+    g1 = _group("g1", ["strava"], ["garmin"])
+    g2 = _group("g2", ["garmin"], ["local"])
+    connectors = {
+        "strava": _mock_connector(),
+        "garmin": _mock_connector(),
+        "local": _mock_connector(),
+    }
+    upload_log: list[str] = []
+
+    async def _fake_download(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
+        pass
+
+    async def _fake_upload(executor_self, start, end):  # type: ignore[no-untyped-def]
+        upload_log.append(f"{executor_self._task_prefix}start")
+        await asyncio.sleep(
+            0
+        )  # yield; sibling must not interleave because lock is held
+        upload_log.append(f"{executor_self._task_prefix}done")
+
+    orchestrator = SyncOrchestrator(groups=(g1, g2), connectors=connectors, cache=cache)
+    with (
+        patch("app.core.orchestrator.SyncExecutor.download_phase", new=_fake_download),
+        patch("app.core.orchestrator.SyncExecutor.upload_phase", new=_fake_upload),
+    ):
+        await orchestrator.run(_START, _END)
+
+    assert upload_log in [
+        ["g1: start", "g1: done", "g2: start", "g2: done"],
+        ["g2: start", "g2: done", "g1: start", "g1: done"],
+    ]
+
+
+async def test_uploads_with_shared_destination_run_sequentially(
+    cache: ActivityCache,
+) -> None:
+    # g1 and g2 both upload to "garmin"; they must be serialized via the
+    # garmin destination lock to prevent duplicate uploads.
+    g1 = _group("g1", ["strava"], ["garmin"])
+    g2 = _group("g2", ["local"], ["garmin"])
+    connectors = {
+        "strava": _mock_connector(),
+        "local": _mock_connector(),
+        "garmin": _mock_connector(),
+    }
+    upload_log: list[str] = []
+
+    async def _fake_download(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
+        pass
+
+    async def _fake_upload(executor_self, start, end):  # type: ignore[no-untyped-def]
+        upload_log.append(f"{executor_self._task_prefix}start")
+        await asyncio.sleep(
+            0
+        )  # yield; sibling must not interleave because lock is held
+        upload_log.append(f"{executor_self._task_prefix}done")
+
+    orchestrator = SyncOrchestrator(groups=(g1, g2), connectors=connectors, cache=cache)
+    with (
+        patch("app.core.orchestrator.SyncExecutor.download_phase", new=_fake_download),
+        patch("app.core.orchestrator.SyncExecutor.upload_phase", new=_fake_upload),
+    ):
+        await orchestrator.run(_START, _END)
+
+    assert upload_log in [
+        ["g1: start", "g1: done", "g2: start", "g2: done"],
+        ["g2: start", "g2: done", "g1: start", "g1: done"],
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -255,8 +363,8 @@ async def test_externally_cancelled_run_logs_group_as_failed(
     cache: ActivityCache,
 ) -> None:
     # When orchestrator.run() is externally cancelled, asyncio.gather propagates
-    # CancelledError to all running groups. The except BaseException in _run_group
-    # must catch it and log "failed" (not leave the group logged only as "started").
+    # CancelledError to all running download groups. The except BaseException in
+    # _download_group must catch it and log "failed".
     g = _group("g", ["src"], [])
     connectors = {"src": _mock_connector()}
 
@@ -264,22 +372,24 @@ async def test_externally_cancelled_run_logs_group_as_failed(
     tracker = MagicMock()
     tracker.sync_logger = sync_logger
 
-    async def _hanging_run(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+    async def _hanging_download(*_args, **_kwargs):  # type: ignore[no-untyped-def]
         await asyncio.sleep(100)
 
-    with patch("app.core.orchestrator.SyncExecutor.run", new=_hanging_run):
+    with patch(
+        "app.core.orchestrator.SyncExecutor.download_phase", new=_hanging_download
+    ):
         orchestrator = SyncOrchestrator(
             groups=(g,), connectors=connectors, cache=cache, tracker=tracker
         )
         task = asyncio.create_task(orchestrator.run(_START, _END))
         await asyncio.sleep(0)  # let outer task create child tasks via asyncio.gather
-        await asyncio.sleep(0)  # let child task run until it awaits _hanging_run
+        await asyncio.sleep(0)  # let child task run until it awaits _hanging_download
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
 
     error_calls = [c[0][0] for c in sync_logger.error.call_args_list]
-    assert any("g" in m and "failed" in m for m in error_calls)
+    assert any("g" in m and "download failed" in m for m in error_calls)
 
 
 async def test_login_tasks_passed_to_executor(cache: ActivityCache) -> None:
@@ -287,7 +397,7 @@ async def test_login_tasks_passed_to_executor(cache: ActivityCache) -> None:
     connectors = {"src": _mock_connector()}
     captured: list = []
 
-    async def _fake_run(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
+    async def _fake_download(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
         captured.append(executor_self._login_tasks)
 
     login_task: asyncio.Task[None] = asyncio.create_task(asyncio.sleep(0))
@@ -295,7 +405,7 @@ async def test_login_tasks_passed_to_executor(cache: ActivityCache) -> None:
     orchestrator = SyncOrchestrator(
         groups=(g,), connectors=connectors, cache=cache, login_tasks=login_tasks
     )
-    with patch("app.core.orchestrator.SyncExecutor.run", new=_fake_run):
+    with patch("app.core.orchestrator.SyncExecutor.download_phase", new=_fake_download):
         await orchestrator.run(_START, _END)
     await login_task
 

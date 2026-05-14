@@ -4,7 +4,7 @@ import asyncio
 from datetime import date, timezone
 from pathlib import Path
 from typing import cast
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -34,6 +34,7 @@ def _mock_connector() -> ServiceConnector:
     conn = MagicMock()
     conn.user_label = ""
     conn._max_concurrent = 1
+    conn.list_activities = AsyncMock(return_value=[])
     return cast(ServiceConnector, conn)
 
 
@@ -59,7 +60,7 @@ async def test_runs_all_groups(cache: ActivityCache) -> None:
     }
     ran: set[str] = set()
 
-    async def _fake_download(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
+    async def _fake_download(executor_self, start, end, *, force=False, **_kw):  # type: ignore[no-untyped-def]
         ran.add(executor_self._task_prefix)
 
     orchestrator = SyncOrchestrator(groups=(g1, g2), connectors=connectors, cache=cache)
@@ -75,7 +76,7 @@ async def test_groups_run_in_parallel(cache: ActivityCache) -> None:
     connectors = {"strava": _mock_connector(), "garmin": _mock_connector()}
     download_log: list[str] = []
 
-    async def _fake_download(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
+    async def _fake_download(executor_self, start, end, *, force=False, **_kw):  # type: ignore[no-untyped-def]
         download_log.append(f"{executor_self._task_prefix}start")
         await asyncio.sleep(0)
         download_log.append(f"{executor_self._task_prefix}done")
@@ -94,7 +95,7 @@ async def test_returns_total_download_failures_across_groups(
     g2 = _group("g2", ["garmin"], [])
     connectors = {"strava": _mock_connector(), "garmin": _mock_connector()}
 
-    async def _fake_download(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
+    async def _fake_download(executor_self, start, end, *, force=False, **_kw):  # type: ignore[no-untyped-def]
         executor_self._download_failures = 2
 
     orchestrator = SyncOrchestrator(groups=(g1, g2), connectors=connectors, cache=cache)
@@ -109,7 +110,7 @@ async def test_task_prefix_set_to_group_id(cache: ActivityCache) -> None:
     connectors = {"src": _mock_connector()}
     captured_prefixes: list[str] = []
 
-    async def _fake_download(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
+    async def _fake_download(executor_self, start, end, *, force=False, **_kw):  # type: ignore[no-untyped-def]
         captured_prefixes.append(executor_self._task_prefix)
 
     orchestrator = SyncOrchestrator(groups=(g,), connectors=connectors, cache=cache)
@@ -134,7 +135,7 @@ async def test_logs_group_start_and_end_when_sync_logger_present(
     tracker = MagicMock()
     tracker.sync_logger = sync_logger
 
-    async def _fake_download(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
+    async def _fake_download(executor_self, start, end, *, force=False, **_kw):  # type: ignore[no-untyped-def]
         pass
 
     orchestrator = SyncOrchestrator(
@@ -158,7 +159,7 @@ async def test_logs_group_failed_when_executor_raises(cache: ActivityCache) -> N
     tracker = MagicMock()
     tracker.sync_logger = sync_logger
 
-    async def _raising_download(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
+    async def _raising_download(executor_self, start, end, *, force=False, **_kw):  # type: ignore[no-untyped-def]
         raise RuntimeError("boom")
 
     orchestrator = SyncOrchestrator(
@@ -185,7 +186,7 @@ async def test_logs_group_failed_when_upload_phase_raises(cache: ActivityCache) 
     tracker = MagicMock()
     tracker.sync_logger = sync_logger
 
-    async def _fake_download(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
+    async def _fake_download(executor_self, start, end, *, force=False, **_kw):  # type: ignore[no-untyped-def]
         pass
 
     async def _raising_upload(executor_self, start, end):  # type: ignore[no-untyped-def]
@@ -209,7 +210,7 @@ async def test_no_log_when_no_tracker(cache: ActivityCache) -> None:
     g = _group("g", ["src"], [])
     connectors = {"src": _mock_connector()}
 
-    async def _fake_download(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
+    async def _fake_download(executor_self, start, end, *, force=False, **_kw):  # type: ignore[no-untyped-def]
         pass
 
     orchestrator = SyncOrchestrator(groups=(g,), connectors=connectors, cache=cache)
@@ -224,7 +225,7 @@ async def test_no_log_when_tracker_has_no_sync_logger(cache: ActivityCache) -> N
     tracker = MagicMock()
     tracker.sync_logger = None
 
-    async def _fake_download(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
+    async def _fake_download(executor_self, start, end, *, force=False, **_kw):  # type: ignore[no-untyped-def]
         pass
 
     orchestrator = SyncOrchestrator(
@@ -244,7 +245,7 @@ async def test_force_forwarded_to_executor(cache: ActivityCache) -> None:
     connectors = {"src": _mock_connector()}
     received_force: list[bool] = []
 
-    async def _fake_download(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
+    async def _fake_download(executor_self, start, end, *, force=False, **_kw):  # type: ignore[no-untyped-def]
         received_force.append(force)
 
     orchestrator = SyncOrchestrator(groups=(g,), connectors=connectors, cache=cache)
@@ -267,7 +268,7 @@ async def test_downloads_always_run_in_parallel(cache: ActivityCache) -> None:
     connectors = {"strava": _mock_connector()}
     download_log: list[str] = []
 
-    async def _fake_download(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
+    async def _fake_download(executor_self, start, end, *, force=False, **_kw):  # type: ignore[no-untyped-def]
         download_log.append(f"{executor_self._task_prefix}start")
         await asyncio.sleep(0)  # yield; g2 must still start before g1 finishes
         download_log.append(f"{executor_self._task_prefix}done")
@@ -294,7 +295,7 @@ async def test_uploads_serialized_when_source_is_other_groups_destination(
     }
     upload_log: list[str] = []
 
-    async def _fake_download(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
+    async def _fake_download(executor_self, start, end, *, force=False, **_kw):  # type: ignore[no-untyped-def]
         pass
 
     async def _fake_upload(executor_self, start, end):  # type: ignore[no-untyped-def]
@@ -331,7 +332,7 @@ async def test_uploads_with_shared_destination_run_sequentially(
     }
     upload_log: list[str] = []
 
-    async def _fake_download(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
+    async def _fake_download(executor_self, start, end, *, force=False, **_kw):  # type: ignore[no-untyped-def]
         pass
 
     async def _fake_upload(executor_self, start, end):  # type: ignore[no-untyped-def]
@@ -372,7 +373,10 @@ async def test_externally_cancelled_run_logs_group_as_failed(
     tracker = MagicMock()
     tracker.sync_logger = sync_logger
 
+    reached = asyncio.Event()
+
     async def _hanging_download(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        reached.set()
         await asyncio.sleep(100)
 
     with patch(
@@ -382,8 +386,7 @@ async def test_externally_cancelled_run_logs_group_as_failed(
             groups=(g,), connectors=connectors, cache=cache, tracker=tracker
         )
         task = asyncio.create_task(orchestrator.run(_START, _END))
-        await asyncio.sleep(0)  # let outer task create child tasks via asyncio.gather
-        await asyncio.sleep(0)  # let child task run until it awaits _hanging_download
+        await reached.wait()  # wait until download_phase is actually reached
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
@@ -397,7 +400,7 @@ async def test_login_tasks_passed_to_executor(cache: ActivityCache) -> None:
     connectors = {"src": _mock_connector()}
     captured: list = []
 
-    async def _fake_download(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
+    async def _fake_download(executor_self, start, end, *, force=False, **_kw):  # type: ignore[no-untyped-def]
         captured.append(executor_self._login_tasks)
 
     login_task: asyncio.Task[None] = asyncio.create_task(asyncio.sleep(0))

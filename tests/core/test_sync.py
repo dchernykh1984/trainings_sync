@@ -16,7 +16,12 @@ from app.connectors.base import (
 )
 from app.core.cache import ActivityCache, CacheEntry
 from app.core.planner import SourceSpec
-from app.core.sync import _DOWNLOAD_ATTEMPTS, SyncExecutor
+from app.core.sync import (
+    _DOWNLOAD_ATTEMPTS,
+    SharedDownloadTasks,
+    SharedListTasks,
+    SyncExecutor,
+)
 
 
 def _make_conn(user_label: str = "", max_concurrent: int = 1) -> MagicMock:
@@ -2074,3 +2079,91 @@ class TestUploadPhase:
         await executor.upload_phase(_START, _END)
 
         assert dest.upload_activity.await_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Shared deduplication (Commit 3)
+# ---------------------------------------------------------------------------
+
+
+class TestSharedDeduplication:
+    async def test_shared_list_tasks_deduplicates_source_list(
+        self, cache: ActivityCache
+    ) -> None:
+        meta = _meta()
+        conn = _source_conn(metas=[meta], activity=_activity())
+        shared_list_tasks: SharedListTasks = {}
+        ex1 = SyncExecutor(
+            sources=[(_spec("garmin"), conn)], destinations=[], cache=cache
+        )
+        ex2 = SyncExecutor(
+            sources=[(_spec("garmin"), conn)], destinations=[], cache=cache
+        )
+
+        await asyncio.gather(
+            ex1.download_phase(_START, _END, shared_list_tasks=shared_list_tasks),
+            ex2.download_phase(_START, _END, shared_list_tasks=shared_list_tasks),
+        )
+
+        conn.list_activities.assert_called_once()
+
+    async def test_shared_tasks_prevents_duplicate_download(
+        self, cache: ActivityCache
+    ) -> None:
+        meta = _meta()
+        conn = _source_conn(metas=[meta], activity=_activity())
+        shared_list_tasks: SharedListTasks = {}
+        shared_tasks: SharedDownloadTasks = {}
+        ex1 = SyncExecutor(
+            sources=[(_spec("garmin"), conn)], destinations=[], cache=cache
+        )
+        ex2 = SyncExecutor(
+            sources=[(_spec("garmin"), conn)], destinations=[], cache=cache
+        )
+
+        await asyncio.gather(
+            ex1.download_phase(
+                _START,
+                _END,
+                shared_list_tasks=shared_list_tasks,
+                shared_tasks=shared_tasks,
+            ),
+            ex2.download_phase(
+                _START,
+                _END,
+                shared_list_tasks=shared_list_tasks,
+                shared_tasks=shared_tasks,
+            ),
+        )
+
+        assert conn.download_activity.call_count == 1
+        assert cache.has("act-1", "garmin")
+        assert ex1.download_failures == 0
+        assert ex2.download_failures == 0
+
+    async def test_shared_list_tasks_key_registered_for_new_source(
+        self, cache: ActivityCache
+    ) -> None:
+        conn = _source_conn(metas=[_meta()], activity=_activity())
+        shared_list_tasks: SharedListTasks = {}
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), conn)], destinations=[], cache=cache
+        )
+
+        await executor.download_phase(_START, _END, shared_list_tasks=shared_list_tasks)
+
+        assert "garmin" in shared_list_tasks
+
+    async def test_shared_tasks_key_registered_for_new_download(
+        self, cache: ActivityCache
+    ) -> None:
+        meta = _meta()
+        conn = _source_conn(metas=[meta], activity=_activity())
+        shared_tasks: SharedDownloadTasks = {}
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), conn)], destinations=[], cache=cache
+        )
+
+        await executor.download_phase(_START, _END, shared_tasks=shared_tasks)
+
+        assert ("act-1", "garmin") in shared_tasks

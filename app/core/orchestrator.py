@@ -7,7 +7,7 @@ from app.connectors.base import ServiceConnector
 from app.core.cache import ActivityCache
 from app.core.config import SyncGroupConfig
 from app.core.connector_factory import resolve_group_destinations, resolve_group_sources
-from app.core.sync import SyncExecutor
+from app.core.sync import SharedDownloadTasks, SharedListTasks, SyncExecutor
 from app.tracking.tracker import TaskTracker
 
 
@@ -29,12 +29,25 @@ class SyncOrchestrator:
     async def run(self, start: date, end: date, *, force: bool = False) -> int:
         executors = [(g, self._build_executor(g)) for g in self._groups]
 
+        # Lazy single-flight tasks for list_activities: the first group that needs
+        # a source starts the task; subsequent groups await the running task.
+        shared_list_tasks: SharedListTasks = {}
+        # Shared in-flight download tasks prevent duplicate downloads of the same
+        # (external_id, source_id) when multiple groups use the same source.
+        shared_tasks: SharedDownloadTasks = {}
+
         # Phase 1: downloads run in parallel across all groups.
-        # Cache writes are keyed per (external_id, source_id), so concurrent
-        # writes from different groups to the same source are idempotent.
         await asyncio.gather(
             *(
-                self._download_group(g, ex, start, end, force=force)
+                self._download_group(
+                    g,
+                    ex,
+                    start,
+                    end,
+                    force=force,
+                    shared_list_tasks=shared_list_tasks,
+                    shared_tasks=shared_tasks,
+                )
                 for g, ex in executors
             )
         )
@@ -74,12 +87,20 @@ class SyncOrchestrator:
         end: date,
         *,
         force: bool,
+        shared_list_tasks: SharedListTasks | None = None,
+        shared_tasks: SharedDownloadTasks | None = None,
     ) -> None:
         log = self._tracker.sync_logger if self._tracker is not None else None
         if log is not None:
             log.info(f"[group] {group.id} - download started")
         try:
-            await executor.download_phase(start, end, force=force)
+            await executor.download_phase(
+                start,
+                end,
+                force=force,
+                shared_list_tasks=shared_list_tasks,
+                shared_tasks=shared_tasks,
+            )
         except BaseException:
             if log is not None:
                 log.error(f"[group] {group.id} - download failed")

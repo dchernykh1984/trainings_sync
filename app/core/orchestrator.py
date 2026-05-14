@@ -11,10 +11,6 @@ from app.core.sync import SyncExecutor
 from app.tracking.tracker import TaskTracker
 
 
-def _group_connector_ids(group: SyncGroupConfig) -> set[str]:
-    return {src.id for src in group.sources} | set(group.destinations)
-
-
 class SyncOrchestrator:
     def __init__(
         self,
@@ -31,67 +27,90 @@ class SyncOrchestrator:
         self._login_tasks = login_tasks
 
     async def run(self, start: date, end: date, *, force: bool = False) -> int:
-        # One lock per connector; groups acquire in sorted order to prevent deadlocks.
-        # Groups with disjoint connector sets run in parallel; groups sharing any
-        # connector are serialized on that connector's lock.
-        locks: dict[str, asyncio.Lock] = {
-            conn_id: asyncio.Lock() for conn_id in self._connectors
-        }
-        results = await asyncio.gather(
+        executors = [(g, self._build_executor(g)) for g in self._groups]
+
+        # Phase 1: downloads run in parallel across all groups.
+        # Cache writes are keyed per (external_id, source_id), so concurrent
+        # writes from different groups to the same source are idempotent.
+        await asyncio.gather(
             *(
-                self._run_group_locked(group, locks, start, end, force=force)
-                for group in self._groups
+                self._download_group(g, ex, start, end, force=force)
+                for g, ex in executors
             )
         )
-        return sum(results)
 
-    async def _run_group_locked(
-        self,
-        group: SyncGroupConfig,
-        locks: dict[str, asyncio.Lock],
-        start: date,
-        end: date,
-        *,
-        force: bool,
-    ) -> int:
-        conn_ids = sorted(_group_connector_ids(group))
-        acquired: list[asyncio.Lock] = []
-        try:
-            for conn_id in conn_ids:
-                await locks[conn_id].acquire()
-                acquired.append(locks[conn_id])
-            return await self._run_group(group, start, end, force=force)
-        finally:
-            for lock in acquired:
-                lock.release()
+        # Phase 2: uploads serialized per group connector set (sources + destinations)
+        # to prevent read-after-write hazards when one group's destination is
+        # another group's source.
+        conn_locks: dict[str, asyncio.Lock] = {
+            cid: asyncio.Lock() for cid in self._connectors
+        }
+        await asyncio.gather(
+            *(
+                self._upload_group_locked(g, ex, conn_locks, start, end)
+                for g, ex in executors
+            )
+        )
 
-    async def _run_group(
-        self,
-        group: SyncGroupConfig,
-        start: date,
-        end: date,
-        *,
-        force: bool,
-    ) -> int:
-        log = self._tracker.sync_logger if self._tracker is not None else None
-        if log is not None:
-            log.info(f"[group] {group.id} - started")
-        sources = resolve_group_sources(group, self._connectors)
-        destinations = resolve_group_destinations(group, self._connectors, self._cache)
-        executor = SyncExecutor(
-            sources=sources,
-            destinations=destinations,
+        return sum(ex.download_failures for _, ex in executors)
+
+    def _build_executor(self, group: SyncGroupConfig) -> SyncExecutor:
+        return SyncExecutor(
+            sources=resolve_group_sources(group, self._connectors),
+            destinations=resolve_group_destinations(
+                group, self._connectors, self._cache
+            ),
             cache=self._cache,
             tracker=self._tracker,
             task_prefix=f"{group.id}: ",
             login_tasks=self._login_tasks,
         )
+
+    async def _download_group(
+        self,
+        group: SyncGroupConfig,
+        executor: SyncExecutor,
+        start: date,
+        end: date,
+        *,
+        force: bool,
+    ) -> None:
+        log = self._tracker.sync_logger if self._tracker is not None else None
+        if log is not None:
+            log.info(f"[group] {group.id} - download started")
         try:
-            await executor.run(start, end, force=force)
+            await executor.download_phase(start, end, force=force)
         except BaseException:
             if log is not None:
-                log.error(f"[group] {group.id} - failed")
+                log.error(f"[group] {group.id} - download failed")
             raise
         if log is not None:
-            log.info(f"[group] {group.id} - done")
-        return executor.download_failures
+            log.info(f"[group] {group.id} - download done")
+
+    async def _upload_group_locked(
+        self,
+        group: SyncGroupConfig,
+        executor: SyncExecutor,
+        conn_locks: dict[str, asyncio.Lock],
+        start: date,
+        end: date,
+    ) -> None:
+        log = self._tracker.sync_logger if self._tracker is not None else None
+        conn_ids = sorted({src.id for src in group.sources} | set(group.destinations))
+        acquired: list[asyncio.Lock] = []
+        try:
+            for conn_id in conn_ids:
+                await conn_locks[conn_id].acquire()
+                acquired.append(conn_locks[conn_id])
+            if log is not None:
+                log.info(f"[group] {group.id} - upload started")
+            await executor.upload_phase(start, end)
+        except BaseException:
+            if log is not None:
+                log.error(f"[group] {group.id} - upload failed")
+            raise
+        finally:
+            for lock in acquired:
+                lock.release()
+        if log is not None:
+            log.info(f"[group] {group.id} - upload done")

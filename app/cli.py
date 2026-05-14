@@ -206,22 +206,23 @@ async def _run_sync(
             print(f"error: {exc}", file=sys.stderr)
             sys.exit(1)
 
-        login_tasks = [asyncio.create_task(c.login()) for c in connectors.values()]
-        try:
-            await asyncio.gather(*login_tasks)
-        except BaseException:
-            for t in login_tasks:
-                t.cancel()
-            await asyncio.gather(*login_tasks, return_exceptions=True)
-            raise
-
+        login_tasks = {
+            cid: asyncio.create_task(c.login()) for cid, c in connectors.items()
+        }
         orchestrator = SyncOrchestrator(
             groups=config.sync_groups,
             connectors=connectors,
             cache=cache,
             tracker=tracker,
+            login_tasks=login_tasks,
         )
-        download_failures = await orchestrator.run(start, end, force=args.force)
+        try:
+            download_failures = await orchestrator.run(start, end, force=args.force)
+        finally:
+            for t in login_tasks.values():
+                if not t.done():
+                    t.cancel()
+            await asyncio.gather(*login_tasks.values(), return_exceptions=True)
 
     if download_failures:
         n = download_failures

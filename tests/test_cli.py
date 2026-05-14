@@ -230,7 +230,13 @@ class TestBuildConnectorsCallback:
             patch("app.cli.ConsoleRenderer"),
         ):
             mock_cache.return_value.load = MagicMock()
-            mock_orch.return_value.run = AsyncMock(return_value=0)
+
+            async def _mock_run_refresh_1(*args, **kwargs):
+                lt = mock_orch.call_args.kwargs.get("login_tasks", {})
+                await asyncio.gather(*lt.values())
+                return 0
+
+            mock_orch.return_value.run = _mock_run_refresh_1
             await _run(args)
 
         data = json.loads(creds_file.read_text(encoding="utf-8"))
@@ -296,7 +302,13 @@ class TestTokenRefreshCallback:
             patch("app.cli.ConsoleRenderer"),
         ):
             mock_cache.return_value.load = MagicMock()
-            mock_orch.return_value.run = AsyncMock(return_value=0)
+
+            async def _mock_run_refresh_2(*args, **kwargs):
+                lt = mock_orch.call_args.kwargs.get("login_tasks", {})
+                await asyncio.gather(*lt.values())
+                return 0
+
+            mock_orch.return_value.run = _mock_run_refresh_2
             await _run(args)
 
         data = json.loads(creds_file.read_text(encoding="utf-8"))
@@ -752,7 +764,13 @@ class TestParallelLogin:
             patch("app.cli.ConsoleRenderer"),
         ):
             mock_cache.return_value.load = MagicMock()
-            mock_orch.return_value.run = AsyncMock(return_value=0)
+
+            async def _mock_run(*args, **kwargs):
+                lt = mock_orch.call_args.kwargs.get("login_tasks", {})
+                await asyncio.gather(*lt.values())
+                return 0
+
+            mock_orch.return_value.run = _mock_run
             await _run(args)
 
         assert call_log == ["a-start", "b-start", "a-done", "b-done"]
@@ -793,14 +811,73 @@ class TestParallelLogin:
         with (
             patch("app.cli.load_config", return_value=config),
             patch("app.cli.build_connectors", new=_fake_build_connectors),
+            patch("app.cli.SyncOrchestrator") as mock_orch,
             patch("app.cli.ActivityCache") as mock_cache,
             patch("app.cli.ConsoleRenderer"),
         ):
             mock_cache.return_value.load = MagicMock()
+
+            async def _mock_run_failing(*args, **kwargs):
+                lt = mock_orch.call_args.kwargs.get("login_tasks", {})
+                await lt["fail"]  # propagates RuntimeError to trigger finally cleanup
+                return 0
+
+            mock_orch.return_value.run = _mock_run_failing
             with pytest.raises(SystemExit):
                 await _run(args)
 
         assert "slow-cancelled" in call_log
+
+    async def test_fast_source_listed_before_slow_connector_login_finishes(
+        self, tmp_path: Path
+    ) -> None:
+        """Pipeline property: a connector's list starts as soon as its own login
+        completes, without waiting for other connectors' logins."""
+        config = AppConfig(cache_dir=tmp_path, connectors=(), sync_groups=())
+        args = argparse.Namespace(
+            config=tmp_path / "unused.json",
+            start=_START,
+            end=_END,
+            force=False,
+            creds_json=None,
+            creds_keepass=None,
+        )
+        slow_done_when_fast_listed: list[bool] = []
+
+        async def _fake_build_connectors(
+            _cfg, _provider, _tracker, on_strava_token_refresh=None
+        ):
+            class _ConnFast:
+                async def login(self) -> None:
+                    pass  # completes immediately
+
+            class _ConnSlow:
+                async def login(self) -> None:
+                    await asyncio.sleep(100)  # still running when fast lists
+
+            return {"fast": _ConnFast(), "slow": _ConnSlow()}
+
+        with (
+            patch("app.cli.load_config", return_value=config),
+            patch("app.cli.build_connectors", new=_fake_build_connectors),
+            patch("app.cli.SyncOrchestrator") as mock_orch,
+            patch("app.cli.ActivityCache") as mock_cache,
+            patch("app.cli.ConsoleRenderer"),
+        ):
+            mock_cache.return_value.load = MagicMock()
+
+            async def _mock_run_pipeline(*args, **kwargs):
+                lt = mock_orch.call_args.kwargs.get("login_tasks", {})
+                await lt["fast"]  # simulate fast source starting list_activities
+                slow_done_when_fast_listed.append(lt["slow"].done())
+                lt["slow"].cancel()
+                await asyncio.gather(lt["slow"], return_exceptions=True)
+                return 0
+
+            mock_orch.return_value.run = _mock_run_pipeline
+            await _run(args)
+
+        assert slow_done_when_fast_listed == [False]
 
 
 class TestMainIfNameMain:

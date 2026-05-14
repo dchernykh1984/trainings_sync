@@ -280,3 +280,23 @@ async def test_externally_cancelled_run_logs_group_as_failed(
 
     error_calls = [c[0][0] for c in sync_logger.error.call_args_list]
     assert any("g" in m and "failed" in m for m in error_calls)
+
+
+async def test_login_tasks_passed_to_executor(cache: ActivityCache) -> None:
+    g = _group("g", ["src"], [])
+    connectors = {"src": _mock_connector()}
+    captured: list = []
+
+    async def _fake_run(executor_self, start, end, *, force=False):  # type: ignore[no-untyped-def]
+        captured.append(executor_self._login_tasks)
+
+    login_task: asyncio.Task[None] = asyncio.create_task(asyncio.sleep(0))
+    login_tasks = {"src": login_task}
+    orchestrator = SyncOrchestrator(
+        groups=(g,), connectors=connectors, cache=cache, login_tasks=login_tasks
+    )
+    with patch("app.core.orchestrator.SyncExecutor.run", new=_fake_run):
+        await orchestrator.run(_START, _END)
+    await login_task
+
+    assert captured == [login_tasks]

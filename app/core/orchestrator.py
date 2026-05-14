@@ -22,11 +22,13 @@ class SyncOrchestrator:
         connectors: dict[str, ServiceConnector],
         cache: ActivityCache,
         tracker: TaskTracker | None = None,
+        login_tasks: dict[str, asyncio.Task[None]] | None = None,
     ) -> None:
         self._groups = groups
         self._connectors = connectors
         self._cache = cache
         self._tracker = tracker
+        self._login_tasks = login_tasks
 
     async def run(self, start: date, end: date, *, force: bool = False) -> int:
         # One lock per connector; groups acquire in sorted order to prevent deadlocks.
@@ -82,6 +84,7 @@ class SyncOrchestrator:
             cache=self._cache,
             tracker=self._tracker,
             task_prefix=f"{group.id}: ",
+            login_tasks=self._login_tasks,
         )
         try:
             await executor.run(start, end, force=force)

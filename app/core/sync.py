@@ -100,6 +100,7 @@ class SyncExecutor:
         cache: ActivityCache,
         tracker: TaskTracker | None = None,
         task_prefix: str = "",
+        login_tasks: dict[str, asyncio.Task[None]] | None = None,
     ) -> None:
         source_ids = [spec.source_id for spec, _ in sources]
         if len(source_ids) != len(set(source_ids)):
@@ -114,6 +115,7 @@ class SyncExecutor:
         self._planner = SyncPlanner()
         self._tracker = tracker
         self._task_prefix = task_prefix
+        self._login_tasks = login_tasks
         self._download_failures: int = 0
 
     @property
@@ -321,9 +323,25 @@ class SyncExecutor:
                 f" {to_dl} to download, {len(metas) - to_dl} skipped"
             )
 
+    async def _login_then_list(
+        self,
+        connector_id: str,
+        connector: ServiceConnector,
+        start: date,
+        end: date,
+    ) -> list[ActivityMeta]:
+        if self._login_tasks is not None:
+            login_task = self._login_tasks.get(connector_id)
+            if login_task is not None:
+                await login_task
+        return await connector.list_activities(start, end)
+
     async def _download(self, start: date, end: date, *, force: bool) -> int:
         metas_list = await asyncio.gather(
-            *(connector.list_activities(start, end) for _, connector in self._sources)
+            *(
+                self._login_then_list(spec.source_id, connector, start, end)
+                for spec, connector in self._sources
+            )
         )
         source_metas = [
             (spec, list(metas))
@@ -419,8 +437,8 @@ class SyncExecutor:
 
         dest_metas = await asyncio.gather(
             *(
-                connector.list_activities(start, end)
-                for _, connector in self._destinations
+                self._login_then_list(dest_id, connector, start, end)
+                for dest_id, connector in self._destinations
             )
         )
         dest_existing: dict[str, list[ActivityMeta]] = {

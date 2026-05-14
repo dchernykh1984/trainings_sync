@@ -1007,10 +1007,10 @@ class TestSyncExecutorTracking:
         )
         await executor.run(_START, _END)
         add_calls = {c.args[0]: c for c in tracker.add_task.call_args_list}
-        assert "Sync: plan" in add_calls
-        assert add_calls["Sync: plan"].kwargs["total"] == 1
+        assert "Sync: plan downloads garmin" in add_calls
+        assert add_calls["Sync: plan downloads garmin"].kwargs["total"] == 1
         finish_names = [c.args[0] for c in tracker.finish.call_args_list]
-        assert "Sync: plan" in finish_names
+        assert "Sync: plan downloads garmin" in finish_names
 
     async def test_plan_task_not_created_when_no_metas(
         self, cache: ActivityCache
@@ -1025,7 +1025,7 @@ class TestSyncExecutorTracking:
         )
         await executor.run(_START, _END)
         task_names = [c.args[0] for c in tracker.add_task.call_args_list]
-        assert "Sync: plan" not in task_names
+        assert "Sync: plan downloads garmin" not in task_names
 
     async def test_collect_uploads_task_created_with_tracker(
         self, cache: ActivityCache
@@ -1089,9 +1089,9 @@ class TestSyncExecutorTracking:
         ):
             await executor.run(_START, _END)
         fail_calls = {c.args[0]: c for c in tracker.fail.call_args_list}
-        assert "Sync: plan" in fail_calls
+        assert "Sync: plan downloads garmin" in fail_calls
         finish_names = [c.args[0] for c in tracker.finish.call_args_list]
-        assert "Sync: plan" not in finish_names
+        assert "Sync: plan downloads garmin" not in finish_names
 
 
 class TestSyncExecutorEntryOverlapsMeta:

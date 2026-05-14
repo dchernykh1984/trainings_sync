@@ -294,8 +294,16 @@ class SyncExecutor:
         total_metas = sum(len(metas) for _, metas in source_metas)
         plan_task: str | None = None
         if tracker is not None and total_metas > 0:
+            if len(source_metas) == 1:
+                spec, _ = source_metas[0]
+                label = self._source_user_label(spec.source_id)
+                src_part = (
+                    f" {spec.source_id} ({label})" if label else f" {spec.source_id}"
+                )
+            else:
+                src_part = ""
             plan_task = await tracker.add_task(
-                f"{self._task_prefix}Sync: plan", total=total_metas
+                f"{self._task_prefix}Sync: plan downloads{src_part}", total=total_metas
             )
         to_download: list[DownloadItem] = []
         try:

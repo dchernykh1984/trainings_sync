@@ -86,6 +86,7 @@ def tracker_with_log() -> TaskTracker:
 def mock_client() -> MagicMock:
     m = MagicMock()
     m.get_activity.return_value.description = None
+    m.get_activity.return_value.total_photo_count = 0
     m.get_activity_photos.return_value = []
     return m
 
@@ -961,6 +962,7 @@ class TestDownloadActivityPhotos:
         self, logged_in: StravaConnector, mock_client: MagicMock
     ) -> None:
         mock_client.get_activity_streams.return_value = _make_gps_streams()
+        mock_client.get_activity.return_value.total_photo_count = 2
         mock_client.get_activity_photos.return_value = [
             _make_photo("https://example.com/p1.jpg", caption="Summit"),
             _make_photo("https://example.com/p2.jpg", caption=None),
@@ -1006,6 +1008,7 @@ class TestDownloadActivityPhotos:
         self, logged_in_with_log: StravaConnector, mock_client: MagicMock
     ) -> None:
         mock_client.get_activity_streams.return_value = _make_gps_streams()
+        mock_client.get_activity.return_value.total_photo_count = 1
         mock_client.get_activity_photos.side_effect = OSError("API error")
 
         with patch(
@@ -1026,6 +1029,7 @@ class TestDownloadActivityPhotos:
         self, logged_in_with_log: StravaConnector, mock_client: MagicMock
     ) -> None:
         mock_client.get_activity_streams.return_value = _make_gps_streams()
+        mock_client.get_activity.return_value.total_photo_count = 1
         mock_client.get_activity_photos.return_value = [
             _make_photo("https://example.com/p1.jpg"),
         ]
@@ -1058,6 +1062,7 @@ class TestDownloadActivityPhotos:
         photo.urls = {}
         photo.caption = None
         mock_client.get_activity_streams.return_value = _make_gps_streams()
+        mock_client.get_activity.return_value.total_photo_count = 1
         mock_client.get_activity_photos.return_value = [photo]
 
         with patch(
@@ -1073,6 +1078,7 @@ class TestDownloadActivityPhotos:
         self, logged_in: StravaConnector, mock_client: MagicMock
     ) -> None:
         mock_client.get_activity_streams.return_value = {}
+        mock_client.get_activity.return_value.total_photo_count = 1
         mock_client.get_activity_photos.return_value = [
             _make_photo("https://example.com/p.jpg")
         ]
@@ -1098,6 +1104,7 @@ class TestDownloadActivityPhotos:
         self, logged_in: StravaConnector, mock_client: MagicMock
     ) -> None:
         mock_client.get_activity_streams.return_value = _make_gps_streams()
+        mock_client.get_activity.return_value.total_photo_count = 1
 
         with patch(
             "app.connectors.strava.asyncio.to_thread",
@@ -1107,6 +1114,22 @@ class TestDownloadActivityPhotos:
             await logged_in.download_activity(_make_meta(external_id="99999"))
 
         mock_client.get_activity_photos.assert_called_once_with(99999, size=2048)
+
+    async def test_photo_fetch_not_called_when_total_photo_count_is_zero(
+        self, logged_in: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.get_activity_streams.return_value = _make_gps_streams()
+        mock_client.get_activity.return_value.total_photo_count = 0
+
+        with patch(
+            "app.connectors.strava.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            result = await logged_in.download_activity(_make_meta())
+
+        assert result.media == ()
+        mock_client.get_activity_photos.assert_not_called()
 
 
 class TestUploadActivityMediaSupport:

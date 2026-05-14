@@ -1971,3 +1971,106 @@ class TestLoginPipelining:
         await executor.run(_START, _END)
 
         assert call_log == ["login-d", "list-d"]
+
+
+# ---------------------------------------------------------------------------
+# Phase API
+# ---------------------------------------------------------------------------
+
+
+class TestDownloadPhase:
+    async def test_downloads_to_cache_without_uploading(
+        self, cache: ActivityCache
+    ) -> None:
+        conn = _source_conn(metas=[_meta()])
+        dest = _dest_conn()
+        executor = SyncExecutor(
+            sources=[(_spec("garmin", priority=1), conn)],
+            destinations=[("local", dest)],
+            cache=cache,
+        )
+
+        await executor.download_phase(_START, _END)
+
+        assert cache.get_entry("act-1", "garmin") is not None
+        dest.upload_activity.assert_not_awaited()
+
+    async def test_download_phase_sets_failures_count(
+        self, cache: ActivityCache
+    ) -> None:
+        conn = _source_conn(metas=[_meta()])
+        conn.download_activity = AsyncMock(side_effect=TransientDownloadError("net"))
+        executor = SyncExecutor(
+            sources=[(_spec("garmin", priority=1), conn)],
+            destinations=[],
+            cache=cache,
+        )
+
+        await executor.download_phase(_START, _END)
+
+        assert executor.download_failures == 1
+
+    async def test_download_failures_zero_after_clean_phase(
+        self, cache: ActivityCache
+    ) -> None:
+        executor = SyncExecutor(
+            sources=[(_spec("garmin", priority=1), _source_conn())],
+            destinations=[],
+            cache=cache,
+        )
+        await executor.download_phase(_START, _END)
+        assert executor.download_failures == 0
+
+
+class TestUploadPhase:
+    async def test_uploads_from_cache_without_calling_source_connectors(
+        self, cache: ActivityCache
+    ) -> None:
+        cache.put(_entry("act-1", "garmin"), b"content")
+        source_conn = _source_conn()
+        dest = _dest_conn()
+        executor = SyncExecutor(
+            sources=[(_spec("garmin", priority=1), source_conn)],
+            destinations=[("local", dest)],
+            cache=cache,
+        )
+
+        await executor.upload_phase(_START, _END)
+
+        dest.upload_activity.assert_awaited_once()
+        source_conn.list_activities.assert_not_awaited()
+
+    async def test_upload_phase_skips_already_uploaded(
+        self, cache: ActivityCache
+    ) -> None:
+        cache.put(_entry("act-1", "garmin", uploaded_to=("local",)), b"content")
+        dest = _dest_conn()
+        dest.has_activity = MagicMock(return_value=True)
+        executor = SyncExecutor(
+            sources=[(_spec("garmin", priority=1), _source_conn())],
+            destinations=[("local", dest)],
+            cache=cache,
+        )
+
+        await executor.upload_phase(_START, _END)
+
+        dest.upload_activity.assert_not_awaited()
+
+    async def test_phases_together_equal_run(self, cache: ActivityCache) -> None:
+        """download_phase + upload_phase produces the same result as run()."""
+        metas = [_meta("a-1", _T0), _meta("a-2", _T0 + timedelta(hours=2))]
+        source_conn = _source_conn(metas=metas)
+        source_conn.download_activity = AsyncMock(
+            side_effect=lambda m: _activity(m.external_id, m.start_time, m.elapsed_s)
+        )
+        dest = _dest_conn()
+        executor = SyncExecutor(
+            sources=[(_spec("garmin", priority=1), source_conn)],
+            destinations=[("local", dest)],
+            cache=cache,
+        )
+
+        await executor.download_phase(_START, _END)
+        await executor.upload_phase(_START, _END)
+
+        assert dest.upload_activity.await_count == 2

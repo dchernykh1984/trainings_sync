@@ -122,6 +122,18 @@ class SyncExecutor:
     def download_failures(self) -> int:
         return self._download_failures
 
+    async def download_phase(
+        self,
+        start: date,
+        end: date,
+        *,
+        force: bool = False,
+    ) -> None:
+        self._download_failures = await self._do_download(start, end, force=force)
+
+    async def upload_phase(self, start: date, end: date) -> None:
+        await self._do_upload(start, end)
+
     async def run(
         self,
         start: date,
@@ -129,8 +141,8 @@ class SyncExecutor:
         *,
         force: bool = False,
     ) -> None:
-        self._download_failures = await self._download(start, end, force=force)
-        await self._upload(start, end)
+        await self.download_phase(start, end, force=force)
+        await self.upload_phase(start, end)
 
     def _cache_activity(self, source_id: str, activity: Activity) -> CacheEntry:
         entry = CacheEntry(
@@ -336,7 +348,7 @@ class SyncExecutor:
                 await login_task
         return await connector.list_activities(start, end)
 
-    async def _download(self, start: date, end: date, *, force: bool) -> int:
+    async def _do_download(self, start: date, end: date, *, force: bool) -> int:
         metas_list = await asyncio.gather(
             *(
                 self._login_then_list(spec.source_id, connector, start, end)
@@ -656,7 +668,7 @@ class SyncExecutor:
         if tracking is not None:
             await tracking[0].finish(tracking[1])
 
-    async def _upload(self, start: date, end: date) -> None:
+    async def _do_upload(self, start: date, end: date) -> None:
         tracker = self._tracker
         candidates = self._get_candidates(start, end)
         collect_task: str | None = None

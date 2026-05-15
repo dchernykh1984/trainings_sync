@@ -24,6 +24,14 @@ class TransientDownloadError(Exception):
     """Raised by connectors for transient network errors that are worth retrying."""
 
 
+class RateLimitError(TransientDownloadError):
+    """Raised when the service returns HTTP 429; carries the suggested retry delay."""
+
+    def __init__(self, message: str, retry_after: float = 900.0) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
 @dataclass(frozen=True)
 class ActivityMeta:
     external_id: str

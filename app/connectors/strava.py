@@ -20,6 +20,7 @@ from app.connectors.base import (
     Activity,
     ActivityMeta,
     MediaItem,
+    RateLimitError,
     ServiceConnector,
     TransientDownloadError,
 )
@@ -38,6 +39,13 @@ _AE_NS = "http://www.garmin.com/xmlschemas/ActivityExtension/v2"
 
 _PHOTO_DOWNLOAD_TIMEOUT_S: int = 30
 _REQUEST_TIMEOUT_S: float = 30.0
+
+
+def _parse_retry_after(headers: Any, default: float = 900.0) -> float:
+    try:
+        return float(headers.get("Retry-After", default))
+    except (ValueError, TypeError):
+        return default
 
 
 class _TimeoutHTTPAdapter(HTTPAdapter):
@@ -284,6 +292,17 @@ class StravaConnector(ServiceConnector):
             photos: list = await asyncio.to_thread(
                 lambda: list(client.get_activity_photos(activity_id, size=2048))
             )
+        except requests.HTTPError as exc:
+            if exc.response is not None and exc.response.status_code == 429:
+                raise RateLimitError(
+                    str(exc), retry_after=_parse_retry_after(exc.response.headers)
+                ) from exc
+            if log:
+                log.warning(
+                    f"[strava] Download{account}: {activity_id!r}"
+                    f" - failed to fetch photo list: {exc}"
+                )
+            return []
         except Exception as exc:
             if log:
                 log.warning(
@@ -323,6 +342,13 @@ class StravaConnector(ServiceConnector):
         try:
             raw = await asyncio.to_thread(client.get_activity, activity_id)
         except requests.RequestException as exc:
+            if (
+                isinstance(exc, requests.HTTPError)
+                and exc.response is not None
+                and exc.response.status_code == 429
+            ):
+                retry_after = _parse_retry_after(exc.response.headers)
+                raise RateLimitError(str(exc), retry_after=retry_after) from exc
             raise TransientDownloadError(str(exc)) from exc
         description: str | None = getattr(raw, "description", None) or None
 
@@ -337,6 +363,13 @@ class StravaConnector(ServiceConnector):
             no_streams = True
             streams = None
         except requests.RequestException as exc:
+            if (
+                isinstance(exc, requests.HTTPError)
+                and exc.response is not None
+                and exc.response.status_code == 429
+            ):
+                retry_after = _parse_retry_after(exc.response.headers)
+                raise RateLimitError(str(exc), retry_after=retry_after) from exc
             raise TransientDownloadError(str(exc)) from exc
 
         has_photos = (getattr(raw, "total_photo_count", None) or 0) > 0

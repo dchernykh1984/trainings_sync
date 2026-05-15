@@ -21,6 +21,7 @@ from app.connectors.base import (
     MediaItem,
     ServiceConnector,
     TransientDownloadError,
+    _run_with_timeout,
 )
 from app.credentials.base import Credentials
 from app.tracking.tracker import TaskTracker
@@ -90,8 +91,8 @@ def _set_activity_description(
 
 
 async def _ids_on_date(client: Garmin, date_str: str) -> set[int]:
-    raw: list[dict] = await asyncio.to_thread(
-        client.get_activities_by_date, date_str, date_str
+    raw: list[dict] = await _run_with_timeout(
+        asyncio.to_thread(client.get_activities_by_date, date_str, date_str)
     )
     return {int(a["activityId"]) for a in raw if "activityId" in a}
 
@@ -108,8 +109,8 @@ async def _find_uploaded_id(
     """
     await asyncio.sleep(_UPLOAD_SETTLE_S)
     date_str = activity.start_time.strftime("%Y-%m-%d")
-    raw: list[dict] = await asyncio.to_thread(
-        client.get_activities_by_date, date_str, date_str
+    raw: list[dict] = await _run_with_timeout(
+        asyncio.to_thread(client.get_activities_by_date, date_str, date_str)
     )
     for a in raw:
         if int(a.get("activityId", 0)) in pre_existing_ids:
@@ -155,7 +156,7 @@ class GarminConnector(ServiceConnector):
             password=self._credentials.password,
         )
         try:
-            await asyncio.to_thread(client.login)
+            await _run_with_timeout(asyncio.to_thread(client.login))
         except BaseException as exc:
             await self._tracker.fail(task_name, error=f"Login failed: {exc}")
             raise
@@ -183,7 +184,10 @@ class GarminConnector(ServiceConnector):
                     "limit": str(_PAGE_SIZE),
                 }
                 page: list[dict] = (
-                    await asyncio.to_thread(client.connectapi, url, params=params) or []
+                    await _run_with_timeout(
+                        asyncio.to_thread(client.connectapi, url, params=params)
+                    )
+                    or []
                 )
                 if not page:
                     break
@@ -218,7 +222,9 @@ class GarminConnector(ServiceConnector):
         log = self._tracker.sync_logger
         account = self._credentials.login
         try:
-            photos = await asyncio.to_thread(_list_activity_photos, client, activity_id)
+            photos = await _run_with_timeout(
+                asyncio.to_thread(_list_activity_photos, client, activity_id)
+            )
         except Exception as exc:
             if log:
                 if "404" in str(exc):
@@ -237,7 +243,9 @@ class GarminConnector(ServiceConnector):
             if not url:
                 continue
             try:
-                content = await asyncio.to_thread(_download_garmin_photo, url)
+                content = await _run_with_timeout(
+                    asyncio.to_thread(_download_garmin_photo, url)
+                )
             except Exception as exc:
                 if log:
                     log.warning(
@@ -265,8 +273,10 @@ class GarminConnector(ServiceConnector):
         task_name: str | None,
     ) -> None:
         try:
-            await asyncio.to_thread(
-                _upload_photo_to_activity, client, activity_id, photo.content, index
+            await _run_with_timeout(
+                asyncio.to_thread(
+                    _upload_photo_to_activity, client, activity_id, photo.content, index
+                )
             )
         except Exception as exc:
             if "404" in str(exc):
@@ -356,14 +366,18 @@ class GarminConnector(ServiceConnector):
         account = self._credentials.login
         activity_id = int(meta.external_id)
         zip_task: asyncio.Task[bytes] = asyncio.create_task(
-            asyncio.to_thread(
-                client.download_activity,
-                activity_id,
-                dl_fmt=Garmin.ActivityDownloadFormat.ORIGINAL,
+            _run_with_timeout(
+                asyncio.to_thread(
+                    client.download_activity,
+                    activity_id,
+                    dl_fmt=Garmin.ActivityDownloadFormat.ORIGINAL,
+                )
             )
         )
         detail_task: asyncio.Task[Any] = asyncio.create_task(
-            asyncio.to_thread(client.get_activity_details, activity_id)
+            _run_with_timeout(
+                asyncio.to_thread(client.get_activity_details, activity_id)
+            )
         )
         photos_task: asyncio.Task[list[MediaItem]] = asyncio.create_task(
             self._fetch_photos(client, activity_id)
@@ -445,7 +459,7 @@ class GarminConnector(ServiceConnector):
             f.write(activity.content)
             tmp_path = f.name
         try:
-            await asyncio.to_thread(client.upload_activity, tmp_path)
+            await _run_with_timeout(asyncio.to_thread(client.upload_activity, tmp_path))
         except GarminConnectConnectionError as e:
             if "Duplicate Activity" not in str(e):
                 raise
@@ -467,17 +481,23 @@ class GarminConnector(ServiceConnector):
                 )
             return None
         if activity.name:
-            await asyncio.to_thread(
-                client.set_activity_name, str(activity_id), activity.name
+            await _run_with_timeout(
+                asyncio.to_thread(
+                    client.set_activity_name, str(activity_id), activity.name
+                )
             )
         garmin_type = _STRAVA_TO_GARMIN_TYPE.get(activity.sport_type)
         if garmin_type:
-            await asyncio.to_thread(
-                client.set_activity_type, str(activity_id), 0, garmin_type, 0
+            await _run_with_timeout(
+                asyncio.to_thread(
+                    client.set_activity_type, str(activity_id), 0, garmin_type, 0
+                )
             )
         if activity.description:
-            await asyncio.to_thread(
-                _set_activity_description, client, activity_id, activity.description
+            await _run_with_timeout(
+                asyncio.to_thread(
+                    _set_activity_description, client, activity_id, activity.description
+                )
             )
         await self._upload_photos(
             client, activity_id, activity.external_id, activity.media, task_name

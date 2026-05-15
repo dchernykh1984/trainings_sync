@@ -3,10 +3,10 @@ from __future__ import annotations
 import asyncio
 import itertools
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Awaitable, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
-from typing import Literal
+from typing import Literal, TypeVar
 
 from app.tracking.tracker import TaskTracker
 
@@ -30,6 +30,21 @@ class RateLimitError(TransientDownloadError):
     def __init__(self, message: str, retry_after: float = 900.0) -> None:
         super().__init__(message)
         self.retry_after = retry_after
+
+
+_T = TypeVar("_T")
+_API_TIMEOUT_S: float = 120.0
+
+
+async def _run_with_timeout(
+    coro: Awaitable[_T], timeout_s: float = _API_TIMEOUT_S
+) -> _T:
+    try:
+        return await asyncio.wait_for(coro, timeout=timeout_s)
+    except asyncio.TimeoutError:
+        raise TransientDownloadError(
+            f"operation timed out after {timeout_s:.0f}s"
+        ) from None
 
 
 @dataclass(frozen=True)

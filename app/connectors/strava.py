@@ -23,6 +23,7 @@ from app.connectors.base import (
     RateLimitError,
     ServiceConnector,
     TransientDownloadError,
+    _run_with_timeout,
 )
 from app.credentials.base import StravaCredentials
 from app.tracking.tracker import TaskTracker
@@ -204,11 +205,15 @@ class StravaConnector(ServiceConnector):
         if log:
             log.info(f"[strava] Login: client_id={self._credentials.client_id}")
         try:
-            token_info = await asyncio.to_thread(
-                Client(requests_session=_make_strava_session()).refresh_access_token,
-                client_id=self._credentials.client_id,
-                client_secret=self._credentials.client_secret,
-                refresh_token=self._credentials.refresh_token,
+            token_info = await _run_with_timeout(
+                asyncio.to_thread(
+                    Client(
+                        requests_session=_make_strava_session()
+                    ).refresh_access_token,
+                    client_id=self._credentials.client_id,
+                    client_secret=self._credentials.client_secret,
+                    refresh_token=self._credentials.refresh_token,
+                )
             )
             new_credentials = StravaCredentials(
                 client_id=self._credentials.client_id,
@@ -221,7 +226,9 @@ class StravaConnector(ServiceConnector):
                 requests_session=_make_strava_session(),
             )
             try:
-                athlete = await asyncio.to_thread(self._client.get_athlete)
+                athlete = await _run_with_timeout(
+                    asyncio.to_thread(self._client.get_athlete)
+                )
                 self._athlete_id = str(athlete.id) if athlete.id is not None else ""
                 parts = [athlete.firstname or "", athlete.lastname or ""]
                 self._athlete_name = " ".join(p for p in parts if p)
@@ -256,8 +263,8 @@ class StravaConnector(ServiceConnector):
         try:
             it = iter(client.get_activities(after=after, before=before))
             while True:
-                batch: list = await asyncio.to_thread(
-                    lambda: list(itertools.islice(it, _page_size))
+                batch: list = await _run_with_timeout(
+                    asyncio.to_thread(lambda: list(itertools.islice(it, _page_size)))
                 )
                 if not batch or batch[0].id in seen_ids:
                     break
@@ -289,8 +296,10 @@ class StravaConnector(ServiceConnector):
         log = self._tracker.sync_logger
         account = f" ({self.user_label})" if self.user_label else ""
         try:
-            photos: list = await asyncio.to_thread(
-                lambda: list(client.get_activity_photos(activity_id, size=2048))
+            photos: list = await _run_with_timeout(
+                asyncio.to_thread(
+                    lambda: list(client.get_activity_photos(activity_id, size=2048))
+                )
             )
         except requests.HTTPError as exc:
             if exc.response is not None and exc.response.status_code == 429:
@@ -316,7 +325,9 @@ class StravaConnector(ServiceConnector):
             if not url:
                 continue
             try:
-                content = await asyncio.to_thread(_download_bytes, url)
+                content = await _run_with_timeout(
+                    asyncio.to_thread(_download_bytes, url)
+                )
             except Exception as exc:
                 if log:
                     log.warning(
@@ -340,7 +351,9 @@ class StravaConnector(ServiceConnector):
         activity_id = int(meta.external_id)
 
         try:
-            raw = await asyncio.to_thread(client.get_activity, activity_id)
+            raw = await _run_with_timeout(
+                asyncio.to_thread(client.get_activity, activity_id)
+            )
         except requests.RequestException as exc:
             if (
                 isinstance(exc, requests.HTTPError)
@@ -354,10 +367,12 @@ class StravaConnector(ServiceConnector):
 
         no_streams = False
         try:
-            streams = await asyncio.to_thread(
-                client.get_activity_streams,
-                activity_id,
-                types=_STREAM_TYPES,
+            streams = await _run_with_timeout(
+                asyncio.to_thread(
+                    client.get_activity_streams,
+                    activity_id,
+                    types=_STREAM_TYPES,
+                )
             )
         except ObjectNotFound:
             no_streams = True
@@ -415,20 +430,24 @@ class StravaConnector(ServiceConnector):
     ) -> str | None:
         client = self._require_client()
         log = self._tracker.sync_logger
-        uploader = await asyncio.to_thread(
-            client.upload_activity,
-            activity_file=io.BytesIO(activity.content),
-            data_type=activity.format,  # type: ignore[arg-type]
-            name=activity.name,
+        uploader = await _run_with_timeout(
+            asyncio.to_thread(
+                client.upload_activity,
+                activity_file=io.BytesIO(activity.content),
+                data_type=activity.format,  # type: ignore[arg-type]
+                name=activity.name,
+            )
         )
-        result = await asyncio.to_thread(uploader.wait)
+        result = await _run_with_timeout(asyncio.to_thread(uploader.wait))
         if activity.description:
             uploaded_id = getattr(result, "id", None) if result is not None else None
             if uploaded_id:
-                await asyncio.to_thread(
-                    client.update_activity,
-                    uploaded_id,
-                    description=activity.description,
+                await _run_with_timeout(
+                    asyncio.to_thread(
+                        client.update_activity,
+                        uploaded_id,
+                        description=activity.description,
+                    )
                 )
             elif log:
                 log.warning(

@@ -2137,9 +2137,11 @@ class TestDownloadPhase:
             cache=cache,
         )
 
-        await executor.download_phase(_START, _END)
+        with patch("asyncio.sleep", new=AsyncMock()):
+            await executor.download_phase(_START, _END)
 
         assert executor.download_failures == 1
+        assert conn.download_activity.call_count == _DOWNLOAD_ATTEMPTS
 
     async def test_download_failures_zero_after_clean_phase(
         self, cache: ActivityCache

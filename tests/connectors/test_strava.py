@@ -571,6 +571,85 @@ class TestDownloadActivity:
             with pytest.raises(TransientDownloadError, match="connection reset"):
                 await logged_in.download_activity(_make_meta())
 
+    async def test_get_activity_429_raises_rate_limit_error(
+        self, logged_in: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        from app.connectors.base import RateLimitError
+
+        mock_response = MagicMock()
+        mock_response.status_code = 429
+        mock_response.headers = {"Retry-After": "300"}
+        mock_client.get_activity.side_effect = requests.HTTPError(
+            "429 Client Error", response=mock_response
+        )
+        with patch(
+            "app.connectors.strava.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            with pytest.raises(RateLimitError) as exc_info:
+                await logged_in.download_activity(_make_meta())
+        assert exc_info.value.retry_after == 300.0
+
+    async def test_get_activity_streams_429_raises_rate_limit_error(
+        self, logged_in: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        from app.connectors.base import RateLimitError
+
+        mock_response = MagicMock()
+        mock_response.status_code = 429
+        mock_response.headers = {}
+        mock_client.get_activity_streams.side_effect = requests.HTTPError(
+            "429 Client Error", response=mock_response
+        )
+        with patch(
+            "app.connectors.strava.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            with pytest.raises(RateLimitError) as exc_info:
+                await logged_in.download_activity(_make_meta())
+        assert exc_info.value.retry_after == 900.0  # default when no Retry-After header
+
+    async def test_get_activity_non_429_http_error_raises_transient(
+        self, logged_in: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        from app.connectors.base import TransientDownloadError
+
+        mock_response = MagicMock()
+        mock_response.status_code = 500
+        mock_response.headers = {}
+        mock_client.get_activity.side_effect = requests.HTTPError(
+            "500 Server Error", response=mock_response
+        )
+        with patch(
+            "app.connectors.strava.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            with pytest.raises(TransientDownloadError):
+                await logged_in.download_activity(_make_meta())
+
+    async def test_get_activity_429_non_numeric_retry_after_uses_default(
+        self, logged_in: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        from app.connectors.base import RateLimitError
+
+        mock_response = MagicMock()
+        mock_response.status_code = 429
+        mock_response.headers = {"Retry-After": "Wed, 21 Oct 2015 07:28:00 GMT"}
+        mock_client.get_activity.side_effect = requests.HTTPError(
+            "429 Client Error", response=mock_response
+        )
+        with patch(
+            "app.connectors.strava.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            with pytest.raises(RateLimitError) as exc_info:
+                await logged_in.download_activity(_make_meta())
+        assert exc_info.value.retry_after == 900.0
+
     async def test_returns_minimal_tcx_when_time_stream_absent(
         self, logged_in: StravaConnector, mock_client: MagicMock
     ) -> None:
@@ -1003,6 +1082,51 @@ class TestDownloadActivityPhotos:
             result = await logged_in.download_activity(_make_meta())
 
         assert result.media == ()
+
+    async def test_get_activity_photos_429_raises_rate_limit_error(
+        self, logged_in: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        from app.connectors.base import RateLimitError
+
+        mock_client.get_activity_streams.return_value = _make_gps_streams()
+        mock_client.get_activity.return_value.total_photo_count = 1
+        mock_response = MagicMock()
+        mock_response.status_code = 429
+        mock_response.headers = {"Retry-After": "120"}
+        mock_client.get_activity_photos.side_effect = requests.HTTPError(
+            "429 Client Error", response=mock_response
+        )
+        with patch(
+            "app.connectors.strava.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            with pytest.raises(RateLimitError) as exc_info:
+                await logged_in.download_activity(_make_meta())
+        assert exc_info.value.retry_after == 120.0
+
+    async def test_photo_fetch_http_error_non_429_returns_empty_and_logs_warning(
+        self, logged_in_with_log: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.get_activity_streams.return_value = _make_gps_streams()
+        mock_client.get_activity.return_value.total_photo_count = 1
+        mock_response = MagicMock()
+        mock_response.status_code = 403
+        mock_response.headers = {}
+        mock_client.get_activity_photos.side_effect = requests.HTTPError(
+            "403 Forbidden", response=mock_response
+        )
+        with patch(
+            "app.connectors.strava.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            result = await logged_in_with_log.download_activity(_make_meta())
+        assert result.media == ()
+        log = logged_in_with_log._tracker.sync_logger
+        assert log is not None
+        msgs = [c.args[0] for c in log.warning.call_args_list]  # type: ignore[attr-defined]
+        assert any("failed to fetch photo list" in m for m in msgs)
 
     async def test_photo_fetch_exception_returns_empty_and_logs_warning(
         self, logged_in_with_log: StravaConnector, mock_client: MagicMock

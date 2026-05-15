@@ -891,6 +891,134 @@ class TestSyncExecutorTracking:
             await executor.run(_START, _END)
         assert conn.download_activity.call_count == 1
 
+    async def test_rate_limit_error_uses_retry_after_as_sleep(
+        self, cache: ActivityCache
+    ) -> None:
+        from app.connectors.base import RateLimitError
+
+        conn = _make_conn()
+        conn.list_activities = AsyncMock(return_value=[_meta("a1")])
+        conn.download_activity = AsyncMock(
+            side_effect=[RateLimitError("429", retry_after=300.0), _activity("a1")]
+        )
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), conn)],
+            destinations=[],
+            cache=cache,
+        )
+        sleep_calls: list[float] = []
+        with patch(
+            "asyncio.sleep", new=AsyncMock(side_effect=lambda s: sleep_calls.append(s))
+        ):
+            await executor.run(_START, _END)
+        assert any(abs(s - 300.0) < 1.0 for s in sleep_calls)
+        assert cache.has("a1", "garmin")
+
+    async def test_rate_limit_error_defers_progress_advance(
+        self, cache: ActivityCache
+    ) -> None:
+        from app.connectors.base import RateLimitError
+
+        conn = _make_conn()
+        conn.list_activities = AsyncMock(return_value=[_meta("a1")])
+        conn.download_activity = AsyncMock(
+            side_effect=[RateLimitError("429", retry_after=1.0)] * _DOWNLOAD_ATTEMPTS
+        )
+        tracker = _make_tracker()
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), conn)],
+            destinations=[],
+            cache=cache,
+            tracker=tracker,
+        )
+        with patch("asyncio.sleep", new=AsyncMock()):
+            await executor.run(_START, _END)
+        advances = [
+            c
+            for c in tracker.advance.call_args_list
+            if c.args[0] == "Download garmin activities"
+        ]
+        assert len(advances) == 1  # advance at end of all retries, not on each 429
+
+    async def test_rate_limit_gate_blocks_concurrent_tasks(
+        self, cache: ActivityCache
+    ) -> None:
+        """After 429, tasks inside the semaphore wait for the window; no extra 429s."""
+        from app.connectors.base import RateLimitError
+
+        conn = _make_conn()
+        conn.list_activities = AsyncMock(return_value=[_meta("a1"), _meta("a2")])
+        conn.download_activity = AsyncMock(
+            side_effect=[
+                RateLimitError("429", retry_after=300.0),
+                _activity("a1"),
+                _activity("a2"),
+            ]
+        )
+        with patch("asyncio.sleep", new=AsyncMock()):
+            executor = SyncExecutor(
+                sources=[(_spec("garmin"), conn)],
+                destinations=[],
+                cache=cache,
+            )
+            await executor.run(_START, _END)
+        # Exactly 3 calls: 1 failed + 2 succeeded; the gate prevented extra 429s
+        assert conn.download_activity.call_count == 3
+
+    async def test_rate_limit_error_advances_on_eventual_success(
+        self, cache: ActivityCache
+    ) -> None:
+        from app.connectors.base import RateLimitError
+
+        conn = _make_conn()
+        conn.list_activities = AsyncMock(return_value=[_meta("a1")])
+        conn.download_activity = AsyncMock(
+            side_effect=[RateLimitError("429", retry_after=1.0), _activity("a1")]
+        )
+        tracker = _make_tracker()
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), conn)],
+            destinations=[],
+            cache=cache,
+            tracker=tracker,
+        )
+        with patch("asyncio.sleep", new=AsyncMock()):
+            await executor.run(_START, _END)
+        assert cache.has("a1", "garmin")
+        assert executor.download_failures == 0
+        advances = [
+            c
+            for c in tracker.advance.call_args_list
+            if c.args[0] == "Download garmin activities"
+        ]
+        assert len(advances) == 1
+
+    async def test_rate_limit_error_logged_at_warning(
+        self, cache: ActivityCache
+    ) -> None:
+        from app.connectors.base import RateLimitError
+
+        conn = _make_conn()
+        conn.list_activities = AsyncMock(return_value=[_meta("a1")])
+        conn.download_activity = AsyncMock(
+            side_effect=[RateLimitError("429", retry_after=1.0), _activity("a1")]
+        )
+        log = MagicMock()
+        tracker = _make_tracker()
+        tracker.sync_logger = log
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), conn)],
+            destinations=[],
+            cache=cache,
+            tracker=tracker,
+        )
+        with patch("asyncio.sleep", new=AsyncMock()):
+            await executor.run(_START, _END)
+        assert log.warning.called
+        msg = log.warning.call_args.args[0]
+        assert "rate limited" in msg
+        assert "1s" in msg
+
     async def test_non_transient_error_does_not_trigger_padding(
         self, cache: ActivityCache
     ) -> None:

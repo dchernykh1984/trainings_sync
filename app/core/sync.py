@@ -10,6 +10,7 @@ from app.connectors.base import (
     ActivityMeta,
     ActivityUnavailableError,
     MediaItem,
+    RateLimitError,
     ServiceConnector,
     TransientDownloadError,
 )
@@ -92,6 +93,24 @@ def _shadowed_by_higher_priority(
     return None
 
 
+class _RateLimitState:
+    """Per-source rate-limit deadline. Shared by all download tasks for one source."""
+
+    def __init__(self) -> None:
+        self._unlock_at: float = 0.0
+
+    def record_429(self, retry_after: float) -> None:
+        loop = asyncio.get_running_loop()
+        new_unlock_at = loop.time() + retry_after
+        if new_unlock_at > self._unlock_at:
+            self._unlock_at = new_unlock_at
+
+    async def wait_if_limited(self) -> None:
+        remaining = self._unlock_at - asyncio.get_running_loop().time()
+        if remaining > 0:
+            await asyncio.sleep(remaining)
+
+
 class SyncExecutor:
     def __init__(
         self,
@@ -165,17 +184,22 @@ class SyncExecutor:
         connector: ServiceConnector,
         sem: asyncio.Semaphore,
         item: DownloadItem,
+        rate_state: _RateLimitState,
         *,
         pad: bool,
     ) -> tuple[Activity | None, bool]:
         """Download inside semaphore. Returns (activity, skipped); raises on error."""
         loop = asyncio.get_running_loop()
         async with sem:
+            await rate_state.wait_if_limited()
             t0 = loop.time()
             try:
                 return await connector.download_activity(item.meta), False
             except ActivityUnavailableError:
                 return None, True
+            except RateLimitError as exc:
+                rate_state.record_429(exc.retry_after)
+                raise
             except TransientDownloadError:
                 if pad:
                     remaining = _MIN_ATTEMPT_DURATION_S - (loop.time() - t0)
@@ -212,11 +236,44 @@ class SyncExecutor:
         if not advanced and tracking is not None:
             await tracking[0].advance(tracking[1])
 
+    async def _on_attempt_error(
+        self,
+        exc: TransientDownloadError,
+        source_id: str,
+        account: str,
+        external_id: str,
+        tracking: tuple[TaskTracker, str] | None,
+        advanced: bool,
+        attempt: int,
+        log: SyncLogger | None,
+    ) -> tuple[float, bool]:
+        """Handle one failed download attempt. Returns (next_sleep, advanced)."""
+        if isinstance(exc, RateLimitError):
+            if log:
+                log.warning(
+                    f"[download] {source_id}{account}:"
+                    f" {external_id!r} - rate limited,"
+                    f" retrying in {exc.retry_after:.0f}s"
+                )
+            return 0.0, advanced
+        if not advanced:
+            if tracking is not None:
+                await tracking[0].advance(tracking[1])
+            advanced = True
+        if log:
+            log.debug(
+                f"[download] {source_id}{account}:"
+                f" {external_id!r} - attempt"
+                f" {attempt + 1}/{_DOWNLOAD_ATTEMPTS} failed ({exc})"
+            )
+        return _DOWNLOAD_RETRY_DELAY_S, advanced
+
     async def _download_one(
         self,
         item: DownloadItem,
         connector: ServiceConnector,
         sem: asyncio.Semaphore,
+        rate_state: _RateLimitState,
         source_id: str,
         tracking: tuple[TaskTracker, str] | None,
     ) -> int:
@@ -226,25 +283,27 @@ class SyncExecutor:
         account = f" ({label})" if label else ""
         advanced = False
         last_exc: Exception | None = None
+        next_sleep: float = 0.0
         for attempt in range(_DOWNLOAD_ATTEMPTS):
             if attempt > 0:
-                await asyncio.sleep(_DOWNLOAD_RETRY_DELAY_S)
+                await asyncio.sleep(next_sleep)
+            next_sleep = _DOWNLOAD_RETRY_DELAY_S
             try:
                 activity, _ = await self._attempt_download(
-                    connector, sem, item, pad=not advanced
+                    connector, sem, item, rate_state, pad=not advanced
                 )
             except TransientDownloadError as exc:
                 last_exc = exc
-                if not advanced:
-                    if tracking is not None:
-                        await tracking[0].advance(tracking[1])
-                    advanced = True
-                if log:
-                    log.debug(
-                        f"[download] {source_id}{account}:"
-                        f" {item.meta.external_id!r} - attempt"
-                        f" {attempt + 1}/{_DOWNLOAD_ATTEMPTS} failed ({exc})"
-                    )
+                next_sleep, advanced = await self._on_attempt_error(
+                    exc,
+                    source_id,
+                    account,
+                    item.meta.external_id,
+                    tracking,
+                    advanced,
+                    attempt,
+                    log,
+                )
                 continue
             await self._on_download_success(
                 activity, item.meta, source_id, account, tracking, advanced, log
@@ -255,6 +314,8 @@ class SyncExecutor:
                 tracking[1],
                 f"{item.meta.external_id!r}: download failed ({last_exc})",
             )
+            if not advanced:
+                await tracking[0].advance(tracking[1])
         return 1
 
     async def _download_source(
@@ -265,9 +326,12 @@ class SyncExecutor:
         tracking: tuple[TaskTracker, str] | None,
     ) -> int:
         sem = asyncio.Semaphore(connector._max_concurrent)
+        rate_state = _RateLimitState()
         tasks: list[asyncio.Task[int]] = [
             asyncio.create_task(
-                self._download_one(item, connector, sem, source_id, tracking)
+                self._download_one(
+                    item, connector, sem, rate_state, source_id, tracking
+                )
             )
             for item in items
         ]

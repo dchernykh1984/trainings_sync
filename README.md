@@ -64,7 +64,7 @@ pipx ensurepath
 pipx install poetry
 ```
 
-**Linux**
+**Linux (Ubuntu / Debian)**
 
 ```bash
 pip3 install pipx
@@ -192,6 +192,8 @@ poetry run trainings-sync \
 | `--start DATE`         | Start date (YYYY-MM-DD). Overrides the value in config. Defaults to `2000-01-01` if not set anywhere.                                                                     |
 | `--end DATE`           | End date (YYYY-MM-DD). Overrides the value in config. Defaults to today.                                                                                                  |
 | `--force`              | Re-download activities even if already cached.                                                                                                                            |
+
+If a sync run is interrupted, simply run the same command again. Already downloaded activities are stored in the cache (`cache_dir` in config) and will not be re-downloaded.
 
 ## Contributing
 

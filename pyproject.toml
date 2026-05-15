@@ -41,10 +41,10 @@ select = [
     "I",   # isort
     "N",   # pep8-naming
     "C90", # McCabe cyclomatic complexity
-    "UP",  # pyupgrade — modernise syntax for target Python version
-    "B",   # flake8-bugbear — common bugs and design issues
-    "S",   # flake8-bandit — security
-    "PTH", # flake8-use-pathlib — prefer pathlib over os.path
+    "UP",  # pyupgrade - modernise syntax for target Python version
+    "B",   # flake8-bugbear - common bugs and design issues
+    "S",   # flake8-bandit - security
+    "PTH", # flake8-use-pathlib - prefer pathlib over os.path
     "RUF", # Ruff-specific rules
 ]
 

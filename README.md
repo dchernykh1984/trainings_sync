@@ -113,10 +113,10 @@ poetry run pre-commit run --all-files
 Example config and credentials files are in [config_templates/](config_templates/).
 Two templates are provided:
 
-- **`config.garmin-to-local.json`** — sync from Garmin Connect to a local folder (simple, no Strava).
-- **`config.strava-and-garmin.json`** — full setup with two sync groups running in a single pass:
-  1. Strava → Garmin Connect (upload Strava activities to Garmin)
-  2. Garmin + Strava → local folder (save to disk, Garmin has priority)
+- **`config.garmin-to-local.json`** - sync from Garmin Connect to a local folder (simple, no Strava).
+- **`config.strava-and-garmin.json`** - full setup with two sync groups running in a single pass:
+  1. Strava -> Garmin Connect (upload Strava activities to Garmin)
+  2. Garmin + Strava -> local folder (save to disk, Garmin has priority)
 
 First copy the templates to the ignored `config/` directory:
 
@@ -129,7 +129,7 @@ Then edit files in `config/` and replace placeholder values such as Garmin
 email, local folders, and Strava `client_id`. Run the CLI
 with the local `config/` files, not the templates.
 
-### Garmin → local folder (simple)
+### Garmin -> local folder (simple)
 
 Edit `config/config.garmin-to-local.json`: set `credential_login` to your Garmin email and `folder` to your local trainings directory.
 
@@ -159,7 +159,7 @@ poetry run trainings-sync \
    ```
    https://www.strava.com/oauth/authorize?client_id=YOUR_CLIENT_ID&redirect_uri=http://localhost&response_type=code&scope=activity:read_all
    ```
-   Click **Authorize**. The browser redirects to `http://localhost/?...&code=XXXX` — copy the `code` value from the URL.
+   Click **Authorize**. The browser redirects to `http://localhost/?...&code=XXXX` - copy the `code` value from the URL.
 
 3. Exchange the code for a refresh token (replace placeholders):
    ```bash
@@ -174,9 +174,9 @@ poetry run trainings-sync \
 4. In `config/config.strava-and-garmin.json` set `client_id` to your Strava Client ID,
    `credential_login` to your Garmin email, and `folder` to your local trainings directory.
    In `config/creds.strava-source.json` fill in:
-   - Garmin `password` — your Garmin password
-   - Strava `login` — your Client Secret
-   - Strava `password` — the refresh token from step 3
+   - Garmin `password` - your Garmin password
+   - Strava `login` - your Client Secret
+   - Strava `password` - the refresh token from step 3
 
 ```bash
 poetry run trainings-sync \

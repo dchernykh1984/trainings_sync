@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import date, datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.connectors.base import Activity, ActivityMeta, MediaItem, ServiceConnector
+from app.connectors.base import (
+    Activity,
+    ActivityMeta,
+    MediaItem,
+    ServiceConnector,
+    TransientDownloadError,
+    _run_with_timeout,
+)
 from app.tracking.tracker import ProgressRenderer, Task, TaskStatus, TaskTracker
 
 _START = date(2026, 1, 1)
@@ -354,3 +362,19 @@ class TestMediaItem:
         )
         assert item.caption == "Great view"
         assert item.url == "https://example.com/photo.jpg"
+
+
+class TestRunWithTimeout:
+    async def test_passes_result_through(self) -> None:
+        async def immediate() -> int:
+            return 42
+
+        assert await _run_with_timeout(immediate()) == 42
+
+    async def test_timeout_raises_transient_download_error(self) -> None:
+        fut: asyncio.Future[None] = asyncio.Future()
+        with patch(
+            "app.connectors.base.asyncio.wait_for", side_effect=asyncio.TimeoutError
+        ):
+            with pytest.raises(TransientDownloadError, match="timed out after 120s"):
+                await _run_with_timeout(fut)

@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 _UNKNOWN_PRIORITY: int = sys.maxsize
 _UNKNOWN_ORDER: int = sys.maxsize
 _DOWNLOAD_ATTEMPTS: int = 3
-_DOWNLOAD_RETRY_DELAY_S: float = 15.0
+_DOWNLOAD_RETRY_DELAY_S: float = 60.0
 _MIN_ATTEMPT_DURATION_S: float = 30.0
 
 
@@ -260,12 +260,21 @@ class SyncExecutor:
             if tracking is not None:
                 await tracking[0].advance(tracking[1])
             advanced = True
+        has_next = attempt + 1 < _DOWNLOAD_ATTEMPTS
         if log:
-            log.debug(
-                f"[download] {source_id}{account}:"
-                f" {external_id!r} - attempt"
-                f" {attempt + 1}/{_DOWNLOAD_ATTEMPTS} failed ({exc})"
-            )
+            if has_next:
+                log.warning(
+                    f"[download] {source_id}{account}:"
+                    f" {external_id!r} - attempt"
+                    f" {attempt + 1}/{_DOWNLOAD_ATTEMPTS} failed ({exc}),"
+                    f" sleeping {_DOWNLOAD_RETRY_DELAY_S:.0f}s before retry"
+                )
+            else:
+                log.warning(
+                    f"[download] {source_id}{account}:"
+                    f" {external_id!r} - attempt"
+                    f" {attempt + 1}/{_DOWNLOAD_ATTEMPTS} failed ({exc})"
+                )
         return _DOWNLOAD_RETRY_DELAY_S, advanced
 
     async def _download_one(
@@ -309,6 +318,12 @@ class SyncExecutor:
                 activity, item.meta, source_id, account, tracking, advanced, log
             )
             return 0
+        if log:
+            log.error(
+                f"[download] {source_id}{account}:"
+                f" {item.meta.external_id!r} - all {_DOWNLOAD_ATTEMPTS} attempts"
+                f" failed ({last_exc})"
+            )
         if tracking is not None:
             await tracking[0].warn(
                 tracking[1],

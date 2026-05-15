@@ -170,6 +170,10 @@ async def _run_sync(
         if isinstance(c, StravaConnectorConfig)
     }
 
+    print(
+        f"Sync log: {sync_logger.path}\n"
+        "If progress appears frozen, check the log file above for details."
+    )
     download_failures = 0
     with ConsoleRenderer() as renderer:
         tracker = TaskTracker(renderer, sync_logger=sync_logger)

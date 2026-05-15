@@ -105,8 +105,11 @@ class _RateLimitState:
         if new_unlock_at > self._unlock_at:
             self._unlock_at = new_unlock_at
 
+    def remaining(self) -> float:
+        return max(0.0, self._unlock_at - asyncio.get_running_loop().time())
+
     async def wait_if_limited(self) -> None:
-        remaining = self._unlock_at - asyncio.get_running_loop().time()
+        remaining = self.remaining()
         if remaining > 0:
             await asyncio.sleep(remaining)
 
@@ -185,12 +188,21 @@ class SyncExecutor:
         sem: asyncio.Semaphore,
         item: DownloadItem,
         rate_state: _RateLimitState,
+        source_id: str,
+        account: str,
+        log: SyncLogger | None,
         *,
         pad: bool,
     ) -> tuple[Activity | None, bool]:
         """Download inside semaphore. Returns (activity, skipped); raises on error."""
         loop = asyncio.get_running_loop()
         async with sem:
+            remaining = rate_state.remaining()
+            if remaining > 0 and log:
+                log.warning(
+                    f"[download] {source_id}{account}:"
+                    f" rate limited, waiting {remaining:.0f}s"
+                )
             await rate_state.wait_if_limited()
             t0 = loop.time()
             try:
@@ -299,7 +311,14 @@ class SyncExecutor:
             next_sleep = _DOWNLOAD_RETRY_DELAY_S
             try:
                 activity, _ = await self._attempt_download(
-                    connector, sem, item, rate_state, pad=not advanced
+                    connector,
+                    sem,
+                    item,
+                    rate_state,
+                    source_id,
+                    account,
+                    log,
+                    pad=not advanced,
                 )
             except TransientDownloadError as exc:
                 last_exc = exc

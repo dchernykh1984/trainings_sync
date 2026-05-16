@@ -86,6 +86,10 @@ htmlcov/
 # Local config files
 config/
 
+# Local run scripts and scratch files
+sync_all.sh
+tmp/
+
 # Logs
 *.log
 

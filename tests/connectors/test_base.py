@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 from datetime import date, datetime, timedelta, timezone
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import requests
 
 from app.connectors.base import (
     Activity,
@@ -12,7 +13,10 @@ from app.connectors.base import (
     MediaItem,
     ServiceConnector,
     TransientDownloadError,
+    _fetch_url_bytes,
+    _redact_url,
     _run_with_timeout,
+    attach_debug_logging,
 )
 from app.tracking.tracker import ProgressRenderer, Task, TaskStatus, TaskTracker
 
@@ -362,6 +366,177 @@ class TestMediaItem:
         )
         assert item.caption == "Great view"
         assert item.url == "https://example.com/photo.jpg"
+
+
+class TestRedactUrl:
+    def test_url_without_query_returned_unchanged(self) -> None:
+        url = "https://example.com/api/v3/activities/123"
+        assert _redact_url(url) == url
+
+    def test_safe_params_left_unchanged(self) -> None:
+        url = "https://example.com/api?after=1704067200&before=1706745600&per_page=200"
+        assert _redact_url(url) == url
+
+    def test_aws_signature_params_redacted(self) -> None:
+        url = (
+            "https://s3.example.com/file"
+            "?X-Amz-Signature=abc123&X-Amz-Credential=KEY&X-Amz-Algorithm=AWS4"
+        )
+        result = _redact_url(url)
+        assert "abc123" not in result
+        assert "KEY" not in result
+        assert result.count("REDACTED") == 3
+
+    def test_cloudfront_params_redacted(self) -> None:
+        url = "https://cdn.example.com/photo?Policy=eyJ&Signature=abc&Key-Pair-Id=APKA"
+        result = _redact_url(url)
+        assert "eyJ" not in result
+        assert "abc" not in result
+        assert "REDACTED" in result
+
+    def test_only_sensitive_params_redacted(self) -> None:
+        url = "https://example.com/api?page=1&X-Amz-Signature=secret"
+        result = _redact_url(url)
+        assert "page=1" in result
+        assert "secret" not in result
+        assert "REDACTED" in result
+
+    def test_strava_oauth_token_params_redacted(self) -> None:
+        url = (
+            "https://www.strava.com/oauth/token"
+            "?client_id=12345&client_secret=ACTUAL_SECRET"
+            "&refresh_token=ACTUAL_REFRESH_TOKEN&grant_type=refresh_token"
+        )
+        result = _redact_url(url)
+        assert "ACTUAL_SECRET" not in result
+        assert "ACTUAL_REFRESH_TOKEN" not in result
+        assert "client_id=12345" in result
+        assert "grant_type=refresh_token" in result
+        assert result.count("REDACTED") == 2
+
+
+def _make_fake_send(status: int = 200, side_effect: Exception | None = None):
+    """Return a mock suitable for use as session.send before attach_debug_logging."""
+    fake_resp = MagicMock()
+    fake_resp.status_code = status
+    mock = MagicMock(return_value=fake_resp, side_effect=side_effect)
+    return mock, fake_resp
+
+
+class TestAttachDebugLogging:
+    def test_logs_method_url_status_on_success(self) -> None:
+        calls: list[str] = []
+        session = requests.Session()
+        # Replace send BEFORE attach so our mock becomes original_send in the closure.
+        fake_send, _ = _make_fake_send(200)
+        session.send = fake_send  # type: ignore[method-assign]
+        attach_debug_logging(session, calls.append)
+
+        prep = session.prepare_request(
+            requests.Request("GET", "https://example.com/path")
+        )
+        session.send(prep)
+
+        assert len(calls) == 1
+        assert "GET" in calls[0]
+        assert "example.com/path" in calls[0]
+        assert "200" in calls[0]
+
+    def test_logs_exception_type_on_network_failure(self) -> None:
+        calls: list[str] = []
+        session = requests.Session()
+        fake_send, _ = _make_fake_send(side_effect=requests.ConnectionError("down"))
+        session.send = fake_send  # type: ignore[method-assign]
+        attach_debug_logging(session, calls.append)
+
+        prep = session.prepare_request(
+            requests.Request("GET", "https://example.com/path")
+        )
+        with pytest.raises(requests.ConnectionError):
+            session.send(prep)
+
+        assert len(calls) == 1
+        assert "ConnectionError" in calls[0]
+        assert "GET" in calls[0]
+
+    def test_redacts_sensitive_query_params(self) -> None:
+        calls: list[str] = []
+        session = requests.Session()
+        fake_send, _ = _make_fake_send(200)
+        session.send = fake_send  # type: ignore[method-assign]
+        attach_debug_logging(session, calls.append)
+
+        prep = session.prepare_request(
+            requests.Request(
+                "GET", "https://cdn.example.com/photo?X-Amz-Signature=topsecret"
+            )
+        )
+        session.send(prep)
+
+        assert "topsecret" not in calls[0]
+        assert "REDACTED" in calls[0]
+
+
+class TestFetchUrlBytes:
+    def test_returns_content_on_success(self) -> None:
+        with patch("app.connectors.base.requests.get") as mock_get:
+            mock_get.return_value.status_code = 200
+            mock_get.return_value.content = b"photo-data"
+            mock_get.return_value.raise_for_status = MagicMock()
+
+            result = _fetch_url_bytes("https://cdn.example.com/photo.jpg", 30)
+
+        assert result == b"photo-data"
+
+    def test_logs_status_on_success(self) -> None:
+        calls: list[str] = []
+        with patch("app.connectors.base.requests.get") as mock_get:
+            mock_get.return_value.status_code = 200
+            mock_get.return_value.content = b"data"
+            mock_get.return_value.raise_for_status = MagicMock()
+
+            _fetch_url_bytes("https://example.com/file", 30, calls.append)
+
+        assert len(calls) == 1
+        assert "200" in calls[0]
+        assert "GET" in calls[0]
+
+    def test_logs_exception_type_on_failure(self) -> None:
+        calls: list[str] = []
+        with patch("app.connectors.base.requests.get") as mock_get:
+            mock_get.side_effect = requests.ConnectionError("err")
+
+            with pytest.raises(requests.ConnectionError):
+                _fetch_url_bytes("https://example.com/file", 30, calls.append)
+
+        assert len(calls) == 1
+        assert "ConnectionError" in calls[0]
+
+    def test_no_log_when_log_fn_is_none(self) -> None:
+        with patch("app.connectors.base.requests.get") as mock_get:
+            mock_get.return_value.status_code = 200
+            mock_get.return_value.content = b"data"
+            mock_get.return_value.raise_for_status = MagicMock()
+
+            result = _fetch_url_bytes("https://example.com/file", 30, None)
+
+        assert result == b"data"
+
+    def test_redacts_sensitive_params_in_log(self) -> None:
+        calls: list[str] = []
+        with patch("app.connectors.base.requests.get") as mock_get:
+            mock_get.return_value.status_code = 200
+            mock_get.return_value.content = b"data"
+            mock_get.return_value.raise_for_status = MagicMock()
+
+            _fetch_url_bytes(
+                "https://cdn.example.com/photo?Signature=secret123",
+                30,
+                calls.append,
+            )
+
+        assert "secret123" not in calls[0]
+        assert "REDACTED" in calls[0]
 
 
 class TestRunWithTimeout:

@@ -8,13 +8,14 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import requests
 
 from app.connectors.base import Activity, ActivityMeta, MediaItem
 from app.connectors.garmin import (
     _DESCRIPTION_RETRY_ATTEMPTS,
     _PAGE_SIZE,
     GarminConnector,
-    _download_garmin_photo,
+    _attach_garmin_session_logging,
     _list_activity_photos,
     _set_activity_description,
     _upload_photo_to_activity,
@@ -953,6 +954,49 @@ class TestLoginWithLogging:
         assert any("user@example.com" in m and "Login" in m for m in msgs)
         assert any("user@example.com" in m and "success" in m for m in msgs)
 
+    async def test_login_calls_attach_garmin_session_logging(
+        self, connector_with_log: GarminConnector
+    ) -> None:
+        with (
+            patch("app.connectors.garmin.Garmin"),
+            patch(
+                "app.connectors.garmin._attach_garmin_session_logging"
+            ) as mock_attach,
+            patch(
+                "app.connectors.garmin.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=_call_sync,
+            ),
+        ):
+            await connector_with_log.login()
+
+        mock_attach.assert_called_once()
+
+
+class TestAttachGarminSessionLogging:
+    def test_attaches_to_cs_and_api_session(self) -> None:
+        cs_session = requests.Session()
+        api_session = requests.Session()
+
+        mock_inner = MagicMock(spec=["cs", "_api_session"])
+        mock_inner.cs = cs_session
+        mock_inner._api_session = api_session
+
+        mock_garmin = MagicMock()
+        mock_garmin.client = mock_inner
+
+        _attach_garmin_session_logging(mock_garmin, MagicMock())
+
+        assert "send" in cs_session.__dict__
+        assert "send" in api_session.__dict__
+
+    def test_skips_absent_sessions(self) -> None:
+        mock_inner = MagicMock(spec=[])
+        mock_garmin = MagicMock()
+        mock_garmin.client = mock_inner
+
+        _attach_garmin_session_logging(mock_garmin, MagicMock())
+
 
 class TestListActivitiesWithLogging:
     async def test_list_activities_logs_pages_when_sync_logger_present(
@@ -1083,20 +1127,6 @@ class TestListActivityPhotos:
         )
 
 
-class TestDownloadGarminPhoto:
-    def test_returns_response_content(self) -> None:
-        with patch("app.connectors.garmin._requests.get") as mock_get:
-            mock_get.return_value.content = b"photo-bytes"
-            assert _download_garmin_photo("https://example.com/p.jpg") == b"photo-bytes"
-        mock_get.assert_called_once_with("https://example.com/p.jpg", timeout=30)
-
-    def test_raises_on_http_error(self) -> None:
-        with patch("app.connectors.garmin._requests.get") as mock_get:
-            mock_get.return_value.raise_for_status.side_effect = OSError("HTTP 403")
-            with pytest.raises(OSError):
-                _download_garmin_photo("https://example.com/p.jpg")
-
-
 class TestUploadPhotoToActivity:
     def test_calls_client_post_with_photo_file(self) -> None:
         client = MagicMock()
@@ -1136,7 +1166,7 @@ class TestDownloadActivityPhotos:
                 return_value=[_make_photo_dict()],
             ),
             patch(
-                "app.connectors.garmin._download_garmin_photo",
+                "app.connectors.garmin._fetch_url_bytes",
                 return_value=b"photo-bytes",
             ),
             patch(
@@ -1161,7 +1191,7 @@ class TestDownloadActivityPhotos:
                 return_value=[_make_photo_dict(caption="Nice view")],
             ),
             patch(
-                "app.connectors.garmin._download_garmin_photo",
+                "app.connectors.garmin._fetch_url_bytes",
                 return_value=b"photo-bytes",
             ),
             patch(
@@ -1230,7 +1260,7 @@ class TestDownloadActivityPhotos:
                 return_value=[_make_photo_dict(url=photo_url)],
             ),
             patch(
-                "app.connectors.garmin._download_garmin_photo",
+                "app.connectors.garmin._fetch_url_bytes",
                 side_effect=OSError("download failed"),
             ),
             patch(
@@ -1276,7 +1306,7 @@ class TestDownloadActivityPhotos:
                 return_value=[{"imageUrl": "https://example.com/image.jpg"}],
             ),
             patch(
-                "app.connectors.garmin._download_garmin_photo",
+                "app.connectors.garmin._fetch_url_bytes",
                 return_value=b"photo-bytes",
             ),
             patch(

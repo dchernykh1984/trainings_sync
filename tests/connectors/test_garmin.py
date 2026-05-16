@@ -11,6 +11,7 @@ import pytest
 
 from app.connectors.base import Activity, ActivityMeta, MediaItem
 from app.connectors.garmin import (
+    _DESCRIPTION_RETRY_ATTEMPTS,
     _PAGE_SIZE,
     GarminConnector,
     _download_garmin_photo,
@@ -547,6 +548,88 @@ class TestDownloadActivity:
             and "description unavailable" in m
             for m in msgs
         )
+
+    async def test_description_retried_on_transient_error(
+        self, logged_in: GarminConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.download_activity.return_value = _make_zip()
+        mock_client.get_activity_details.side_effect = [
+            OSError("connection reset"),
+            OSError("connection reset"),
+            {"description": "Tough climb!"},
+        ]
+
+        with (
+            patch(
+                "app.connectors.garmin.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=_call_sync,
+            ),
+            patch("asyncio.sleep", new_callable=AsyncMock),
+        ):
+            result = await logged_in.download_activity(_make_meta())
+
+        assert result.description == "Tough climb!"
+        assert mock_client.get_activity_details.call_count == 3
+
+    async def test_description_none_after_all_transient_retries_exhausted(
+        self, logged_in: GarminConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.download_activity.return_value = _make_zip()
+        mock_client.get_activity_details.side_effect = OSError("connection reset")
+
+        with (
+            patch(
+                "app.connectors.garmin.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=_call_sync,
+            ),
+            patch("asyncio.sleep", new_callable=AsyncMock),
+        ):
+            result = await logged_in.download_activity(_make_meta())
+
+        assert result.description is None
+        assert (
+            mock_client.get_activity_details.call_count == _DESCRIPTION_RETRY_ATTEMPTS
+        )
+
+    async def test_description_retry_warnings_logged(
+        self, logged_in_with_log: GarminConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.download_activity.return_value = _make_zip()
+        mock_client.get_activity_details.side_effect = OSError("connection reset")
+
+        with (
+            patch(
+                "app.connectors.garmin.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=_call_sync,
+            ),
+            patch("asyncio.sleep", new_callable=AsyncMock),
+        ):
+            result = await logged_in_with_log.download_activity(_make_meta())
+
+        log = logged_in_with_log._tracker.sync_logger
+        assert log is not None
+        assert result.description is None
+        msgs = [c.args[0] for c in log.warning.call_args_list]  # type: ignore[attr-defined]
+        assert any("description fetch attempt 1" in m and "retrying" in m for m in msgs)
+        assert any("description unavailable" in m for m in msgs)
+
+    async def test_description_none_when_details_not_a_dict(
+        self, logged_in: GarminConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.download_activity.return_value = _make_zip()
+        mock_client.get_activity_details.return_value = None
+
+        with patch(
+            "app.connectors.garmin.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            result = await logged_in.download_activity(_make_meta())
+
+        assert result.description is None
 
     async def test_zip_failure_raises_and_cancels_detail_task(
         self, logged_in: GarminConnector, mock_client: MagicMock

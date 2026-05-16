@@ -308,6 +308,12 @@ class SyncExecutor:
         for attempt in range(_DOWNLOAD_ATTEMPTS):
             if attempt > 0:
                 await asyncio.sleep(next_sleep)
+                if log:
+                    log.info(
+                        f"[download] {source_id}{account}:"
+                        f" {item.meta.external_id!r} - attempt"
+                        f" {attempt + 1}/{_DOWNLOAD_ATTEMPTS} starting"
+                    )
             next_sleep = _DOWNLOAD_RETRY_DELAY_S
             try:
                 activity, _ = await self._attempt_download(

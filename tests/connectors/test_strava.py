@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import time
 import xml.etree.ElementTree as ET
 from datetime import date, datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -17,6 +18,8 @@ from app.connectors.base import (
     TransientDownloadError,
 )
 from app.connectors.strava import (
+    _RATE_LIMIT_MARGIN,
+    _RESET_PADDING_S,
     StravaConnector,
     _make_strava_session,
     _StravaRateLimiter,
@@ -1577,38 +1580,6 @@ class TestStravaRateLimiter:
     # Quarter-hour and midnight helpers
     # ------------------------------------------------------------------
 
-    def test_seconds_to_next_quarter_hour_at_exact_boundary(self) -> None:
-        # At xx:00:00 UTC, next slot is in exactly 15 minutes.
-        from datetime import datetime, timezone
-
-        dt = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-        ts = dt.timestamp()
-        with patch("app.connectors.strava.time.time", return_value=ts):
-            limiter = _StravaRateLimiter()
-            secs = limiter._seconds_to_next_quarter_hour()
-        assert abs(secs - 900) < 2
-
-    def test_seconds_to_next_quarter_hour_at_midpoint(self) -> None:
-        # At xx:07:30, 7.5 minutes remain.
-        from datetime import datetime, timezone
-
-        dt = datetime(2026, 1, 1, 12, 7, 30, tzinfo=timezone.utc)
-        ts = dt.timestamp()
-        with patch("app.connectors.strava.time.time", return_value=ts):
-            limiter = _StravaRateLimiter()
-            secs = limiter._seconds_to_next_quarter_hour()
-        assert abs(secs - 450) < 2
-
-    def test_seconds_to_midnight_utc(self) -> None:
-        from datetime import datetime, timezone
-
-        dt = datetime(2026, 1, 1, 23, 0, 0, tzinfo=timezone.utc)
-        ts = dt.timestamp()
-        with patch("app.connectors.strava.time.time", return_value=ts):
-            limiter = _StravaRateLimiter()
-            secs = limiter._seconds_to_midnight_utc()
-        assert abs(secs - 3600) < 2
-
     # ------------------------------------------------------------------
     # retry_after_for_429
     # ------------------------------------------------------------------
@@ -1618,26 +1589,29 @@ class TestStravaRateLimiter:
         resp = MagicMock()
         resp.headers = {"X-RateLimit-Limit": "100,1000", "X-RateLimit-Usage": "5,999"}
         limiter.update_from_headers(resp)
-        # daily usage (999) >= daily limit (1000) - 2 -> should sleep until midnight
+        # daily usage (999) >= daily limit (1000) - _RATE_LIMIT_MARGIN -> daily pause
         pause = limiter.retry_after_for_429()
         assert pause > 0
-        # Should be close to midnight (longer than 15min in most test runs)
-        assert pause > 0
+        expected = limiter._reset_time_daily + _RESET_PADDING_S - time.time()
+        assert abs(pause - expected) < 2
 
     def test_retry_after_for_429_15min_near_limit(self) -> None:
         limiter = _StravaRateLimiter()
         resp = MagicMock()
         resp.headers = {"X-RateLimit-Limit": "100,1000", "X-RateLimit-Usage": "99,5"}
         limiter.update_from_headers(resp)
-        # 15min usage (99) >= limit (100) - 2; daily is fine -> quarter-hour pause
+        # 15min usage (99) >= limit - _RATE_LIMIT_MARGIN; daily fine -> 15min pause
         pause = limiter.retry_after_for_429()
         assert pause > 0
+        expected = limiter._reset_time_15min + _RESET_PADDING_S - time.time()
+        assert abs(pause - expected) < 2
 
     def test_retry_after_for_429_unknown_buckets_fallback(self) -> None:
         limiter = _StravaRateLimiter()
-        # No headers parsed -- all buckets are None
+        # No headers parsed -- all buckets are None; falls back to 15min reset target.
         pause = limiter.retry_after_for_429()
-        assert pause > 0  # fallback to next quarter-hour
+        expected = limiter._reset_time_15min + _RESET_PADDING_S - time.time()
+        assert abs(pause - expected) < 2
 
     def test_retry_after_for_429_respects_retry_after_header(self) -> None:
         limiter = _StravaRateLimiter()
@@ -1659,9 +1633,7 @@ class TestStravaRateLimiter:
             "app.connectors.strava.asyncio.sleep",
             new=AsyncMock(side_effect=lambda s: sleep_calls.append(s)),
         ):
-            await limiter.wait_if_needed(
-                is_non_upload=True, log_fn=None, in_flight_margin=1
-            )
+            await limiter.wait_if_needed(is_non_upload=True, log_fn=None)
         assert sleep_calls == []
 
     async def test_wait_if_needed_no_sleep_below_margin(self) -> None:
@@ -1674,9 +1646,7 @@ class TestStravaRateLimiter:
             "app.connectors.strava.asyncio.sleep",
             new=AsyncMock(side_effect=lambda s: sleep_calls.append(s)),
         ):
-            await limiter.wait_if_needed(
-                is_non_upload=True, log_fn=None, in_flight_margin=1
-            )
+            await limiter.wait_if_needed(is_non_upload=True, log_fn=None)
         assert sleep_calls == []
 
     async def test_wait_if_needed_15min_pause(self) -> None:
@@ -1691,9 +1661,7 @@ class TestStravaRateLimiter:
             limiter._usage_15min = 0  # simulate window reset so next iteration exits
 
         with patch("app.connectors.strava.asyncio.sleep", new=fake_sleep):
-            await limiter.wait_if_needed(
-                is_non_upload=True, log_fn=None, in_flight_margin=1
-            )
+            await limiter.wait_if_needed(is_non_upload=True, log_fn=None)
         assert len(sleep_calls) == 1
         assert sleep_calls[0] > 0
 
@@ -1709,9 +1677,7 @@ class TestStravaRateLimiter:
             limiter._usage_daily = 0  # simulate midnight reset
 
         with patch("app.connectors.strava.asyncio.sleep", new=fake_sleep):
-            await limiter.wait_if_needed(
-                is_non_upload=True, log_fn=None, in_flight_margin=1
-            )
+            await limiter.wait_if_needed(is_non_upload=True, log_fn=None)
         assert len(sleep_calls) == 1
         assert sleep_calls[0] > 0
 
@@ -1729,9 +1695,7 @@ class TestStravaRateLimiter:
             limiter._usage_15min = 0
 
         with patch("app.connectors.strava.asyncio.sleep", new=fake_sleep):
-            await limiter.wait_if_needed(
-                is_non_upload=True, log_fn=None, in_flight_margin=1
-            )
+            await limiter.wait_if_needed(is_non_upload=True, log_fn=None)
         # Daily check fires first in _compute_needed_pause (longer wait wins).
         assert len(sleep_calls) == 1
 
@@ -1752,9 +1716,7 @@ class TestStravaRateLimiter:
             limiter._read_usage_15min = 0  # simulate window reset
 
         with patch("app.connectors.strava.asyncio.sleep", new=fake_sleep):
-            await limiter.wait_if_needed(
-                is_non_upload=True, log_fn=None, in_flight_margin=1
-            )
+            await limiter.wait_if_needed(is_non_upload=True, log_fn=None)
         assert len(sleep_calls) == 1
 
     async def test_wait_if_needed_read_bucket_does_not_pause_upload(self) -> None:
@@ -1772,9 +1734,7 @@ class TestStravaRateLimiter:
             "app.connectors.strava.asyncio.sleep",
             new=AsyncMock(side_effect=lambda s: sleep_calls.append(s)),
         ):
-            await limiter.wait_if_needed(
-                is_non_upload=False, log_fn=None, in_flight_margin=1
-            )
+            await limiter.wait_if_needed(is_non_upload=False, log_fn=None)
         assert sleep_calls == []
 
     async def test_wait_if_needed_read_daily_pauses_non_upload(self) -> None:
@@ -1795,9 +1755,7 @@ class TestStravaRateLimiter:
             limiter._read_usage_daily = 0
 
         with patch("app.connectors.strava.asyncio.sleep", new=fake_sleep):
-            await limiter.wait_if_needed(
-                is_non_upload=True, log_fn=None, in_flight_margin=1
-            )
+            await limiter.wait_if_needed(is_non_upload=True, log_fn=None)
         assert len(sleep_calls) == 1
 
     async def test_wait_if_needed_logs_pause_message(self) -> None:
@@ -1815,43 +1773,38 @@ class TestStravaRateLimiter:
             await limiter.wait_if_needed(
                 is_non_upload=True,
                 log_fn=lambda msg: log_calls.append(msg),
-                in_flight_margin=1,
             )
         assert len(log_calls) == 1
         assert "pausing" in log_calls[0]
         assert "until" in log_calls[0]
 
     async def test_wait_if_needed_resets_stale_usage_after_quarter(self) -> None:
-        """Usage near limit; after reset window passes, no sleep should occur."""
+        """Usage near limit; after reset window + padding passes, no sleep occurs."""
         limiter = _StravaRateLimiter()
         resp = MagicMock()
         resp.headers = {"X-RateLimit-Limit": "100,1000", "X-RateLimit-Usage": "99,5"}
         limiter.update_from_headers(resp)
-        # Advance clock past the reset time.
-        future_ts = limiter._reset_time_15min + 1.0
+        # Advance clock past the reset time including _RESET_PADDING_S.
+        future_ts = limiter._reset_time_15min + _RESET_PADDING_S + 1.0
         with (
             patch("app.connectors.strava.time.time", return_value=future_ts),
             patch("app.connectors.strava.asyncio.sleep", new=AsyncMock()) as mock_sleep,
         ):
-            await limiter.wait_if_needed(
-                is_non_upload=True, log_fn=None, in_flight_margin=1
-            )
+            await limiter.wait_if_needed(is_non_upload=True, log_fn=None)
         mock_sleep.assert_not_called()
 
     async def test_wait_if_needed_resets_stale_daily_usage_after_midnight(self) -> None:
-        """Daily usage near limit; after midnight passes, no sleep should occur."""
+        """Daily usage near limit; after midnight + padding passes, no sleep occurs."""
         limiter = _StravaRateLimiter()
         resp = MagicMock()
         resp.headers = {"X-RateLimit-Limit": "100,1000", "X-RateLimit-Usage": "1,999"}
         limiter.update_from_headers(resp)
-        future_ts = limiter._reset_time_daily + 1.0
+        future_ts = limiter._reset_time_daily + _RESET_PADDING_S + 1.0
         with (
             patch("app.connectors.strava.time.time", return_value=future_ts),
             patch("app.connectors.strava.asyncio.sleep", new=AsyncMock()) as mock_sleep,
         ):
-            await limiter.wait_if_needed(
-                is_non_upload=True, log_fn=None, in_flight_margin=1
-            )
+            await limiter.wait_if_needed(is_non_upload=True, log_fn=None)
         mock_sleep.assert_not_called()
 
     # ------------------------------------------------------------------
@@ -1886,20 +1839,75 @@ class TestStravaRateLimiter:
         resp = MagicMock()
         resp.headers = {"X-RateLimit-Limit": "100,1000", "X-RateLimit-Usage": "99,5"}
         limiter.update_from_headers(resp)
-        # Advance clock past reset; first call zeroes usage, no sleep.
-        future_ts = limiter._reset_time_15min + 1.0
+        # Advance clock past reset + padding; first call zeroes usage, no sleep.
+        future_ts = limiter._reset_time_15min + _RESET_PADDING_S + 1.0
         with (
             patch("app.connectors.strava.time.time", return_value=future_ts),
             patch("app.connectors.strava.asyncio.sleep", new=AsyncMock()) as mock_sleep,
         ):
-            await limiter.wait_if_needed(
-                is_non_upload=True, log_fn=None, in_flight_margin=1
-            )
+            await limiter.wait_if_needed(is_non_upload=True, log_fn=None)
             # Second call: usage already 0 after stale reset -- no sleep.
-            await limiter.wait_if_needed(
-                is_non_upload=True, log_fn=None, in_flight_margin=1
-            )
+            await limiter.wait_if_needed(is_non_upload=True, log_fn=None)
         mock_sleep.assert_not_called()
+
+    async def test_wait_if_needed_does_not_reset_within_padding(self) -> None:
+        """Usage is NOT zeroed when clock is past boundary but still within padding."""
+        limiter = _StravaRateLimiter()
+        resp = MagicMock()
+        resp.headers = {"X-RateLimit-Limit": "100,1000", "X-RateLimit-Usage": "99,5"}
+        limiter.update_from_headers(resp)
+        # Clock is just past the boundary but before padding expires -- no reset.
+        within_padding_ts = limiter._reset_time_15min + _RESET_PADDING_S - 1.0
+        sleep_calls: list[float] = []
+
+        async def fake_sleep(s: float) -> None:
+            sleep_calls.append(s)
+            limiter._usage_15min = 0  # manually clear so loop exits
+
+        with (
+            patch("app.connectors.strava.time.time", return_value=within_padding_ts),
+            patch("app.connectors.strava.asyncio.sleep", new=fake_sleep),
+        ):
+            await limiter.wait_if_needed(is_non_upload=True, log_fn=None)
+        # Sleep must have fired: usage was not cleared by the stale-check.
+        assert len(sleep_calls) == 1
+
+    def test_compute_needed_pause_uses_stored_reset_target(self) -> None:
+        """Within padding window: pause must be remaining padding, not next boundary."""
+        limiter = _StravaRateLimiter()
+        resp = MagicMock()
+        resp.headers = {"X-RateLimit-Limit": "100,1000", "X-RateLimit-Usage": "90,5"}
+        limiter.update_from_headers(resp)
+
+        # 1 second before the padding deadline -- usage is still stale.
+        target_ts = limiter._reset_time_15min + _RESET_PADDING_S
+        now_ts = target_ts - 1.0
+
+        with patch("app.connectors.strava.time.time", return_value=now_ts):
+            pause, _ = limiter._compute_needed_pause(
+                is_non_upload=True, margin=_RATE_LIMIT_MARGIN
+            )
+
+        # Must be ~1s (time left until padding expires), not ~900s (next boundary).
+        assert 0.9 <= pause <= 2.0, f"expected ~1s pause, got {pause:.1f}s"
+
+    def test_compute_needed_pause_daily_uses_stored_reset_target(self) -> None:
+        """Daily padding window: pause must be remaining padding, not next midnight."""
+        limiter = _StravaRateLimiter()
+        resp = MagicMock()
+        resp.headers = {"X-RateLimit-Limit": "200,2000", "X-RateLimit-Usage": "190,5"}
+        limiter.update_from_headers(resp)
+
+        target_ts = limiter._reset_time_daily + _RESET_PADDING_S
+        now_ts = target_ts - 1.0
+
+        with patch("app.connectors.strava.time.time", return_value=now_ts):
+            pause, _ = limiter._compute_needed_pause(
+                is_non_upload=True, margin=_RATE_LIMIT_MARGIN
+            )
+
+        # Must be ~1s (remaining padding), not ~86400s (next midnight UTC).
+        assert 0.9 <= pause <= 2.0, f"expected ~1s pause, got {pause:.1f}s"
 
     async def test_call_api_retries_on_429(self, logged_in: StravaConnector) -> None:
         """_call_api catches RateLimitError from session hook and retries the call."""
@@ -2128,3 +2136,34 @@ class TestStravaRateLimiter:
                 await connector.login()
         for kwargs in created_kwargs:
             assert kwargs.get("rate_limit_requests") is False
+
+    def test_connectors_with_same_client_id_share_rate_limiter(
+        self, tracker: TaskTracker
+    ) -> None:
+        """Two connectors with the same client_id must use one _StravaRateLimiter."""
+        creds = StravaCredentials(
+            client_id=_CREDENTIALS.client_id,
+            client_secret="s",
+            refresh_token="r",
+        )
+        # Ensure registry is clean for this client_id before the test.
+        StravaConnector._limiter_registry.pop(creds.client_id, None)
+        c1 = StravaConnector(creds, tracker)
+        c2 = StravaConnector(creds, tracker)
+        assert c1._rate_limiter is c2._rate_limiter
+
+    def test_connectors_with_different_client_ids_use_separate_limiters(
+        self, tracker: TaskTracker
+    ) -> None:
+        """Two connectors with different client_ids must have independent limiters."""
+        creds_a = StravaCredentials(
+            client_id=11111, client_secret="s", refresh_token="r"
+        )
+        creds_b = StravaCredentials(
+            client_id=22222, client_secret="s", refresh_token="r"
+        )
+        StravaConnector._limiter_registry.pop(11111, None)
+        StravaConnector._limiter_registry.pop(22222, None)
+        c1 = StravaConnector(creds_a, tracker)
+        c2 = StravaConnector(creds_b, tracker)
+        assert c1._rate_limiter is not c2._rate_limiter

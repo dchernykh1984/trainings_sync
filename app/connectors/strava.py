@@ -10,7 +10,7 @@ import time
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from datetime import date, datetime, timedelta, timezone
-from typing import Any
+from typing import Any, ClassVar
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -47,6 +47,15 @@ _PHOTO_DOWNLOAD_TIMEOUT_S: int = 30
 _REQUEST_TIMEOUT_S: float = 30.0
 _CALL_API_MAX_ATTEMPTS: int = 3
 _UPLOAD_POLL_INTERVAL_S: float = 1.0
+# Workers per connector instance (caps asyncio.to_thread concurrency).
+_MAX_CONCURRENT: int = 2
+# Stop proactive waits this many requests before the hard limit.
+# Up to 5 sync processes x _MAX_CONCURRENT in-flight requests each can all
+# read the same stale usage value and proceed before any response arrives.
+_RATE_LIMIT_MARGIN: int = _MAX_CONCURRENT * 5
+# Seconds of padding after a window boundary before zeroing stale usage.
+# Guards against local-clock drift vs Strava's server clock.
+_RESET_PADDING_S: float = 10.0
 
 
 def _parse_retry_after(headers: Any, default: float = 900.0) -> float:
@@ -123,11 +132,9 @@ class _StravaRateLimiter:
         )
         return tomorrow.timestamp()
 
-    def _seconds_to_next_quarter_hour(self) -> float:
-        return max(1.0, self._next_quarter_hour_ts() - time.time())
-
-    def _seconds_to_midnight_utc(self) -> float:
-        return max(1.0, self._next_midnight_utc_ts() - time.time())
+    @staticmethod
+    def _seconds_until(target: float) -> float:
+        return max(1.0, target - time.time())
 
     def update_from_headers(
         self, response: Any
@@ -199,31 +206,31 @@ class _StravaRateLimiter:
     ) -> float:
         """Compute pause duration when a real 429 is received.
 
-        Checks daily buckets first (longer wait wins). Falls back to next
-        quarter-hour even when all buckets are unknown. Uses Retry-After header
-        as an additional lower bound.
+        Checks daily buckets first (longer wait wins). Falls back to the stored
+        15-min reset target + padding even when all buckets are unknown. Uses
+        Retry-After header as an additional lower bound.
 
         is_non_upload mirrors the same flag in wait_if_needed: upload requests
         (is_non_upload=False) are not subject to X-ReadRateLimit-* limits.
         """
-        margin = 2
         with self._lock:
             daily_near = (
                 self._usage_daily is not None
                 and self._limit_daily is not None
-                and self._usage_daily >= self._limit_daily - margin
+                and self._usage_daily >= self._limit_daily - _RATE_LIMIT_MARGIN
             ) or (
                 is_non_upload
                 and (
                     self._read_usage_daily is not None
                     and self._read_limit_daily is not None
-                    and self._read_usage_daily >= self._read_limit_daily - margin
+                    and self._read_usage_daily
+                    >= self._read_limit_daily - _RATE_LIMIT_MARGIN
                 )
             )
             if daily_near:
-                pause = self._seconds_to_midnight_utc()
+                pause = self._seconds_until(self._reset_time_daily + _RESET_PADDING_S)
             else:
-                pause = self._seconds_to_next_quarter_hour()
+                pause = self._seconds_until(self._reset_time_15min + _RESET_PADDING_S)
         if retry_after_header is not None:
             pause = max(pause, retry_after_header)
         return pause
@@ -232,31 +239,31 @@ class _StravaRateLimiter:
         self,
         is_non_upload: bool,
         log_fn: Any,
-        in_flight_margin: int,
     ) -> None:
         """Proactively sleep before an API call if we are near the rate limit.
 
         is_non_upload=True  -- checks both overall and X-ReadRateLimit buckets.
         is_non_upload=False -- checks only overall buckets (POST /uploads etc.).
 
-        Stale usage is zeroed under lock when the reset window has passed so that
-        wait_if_needed does not re-sleep after a window reset.
+        Stale usage is zeroed only after _RESET_PADDING_S past the boundary to
+        guard against local-clock drift relative to Strava's server clock.
         """
         while True:
             with self._lock:
                 now = time.time()
                 # Stale-check: zero expired window usage (mutates state under lock).
-                if now >= self._reset_time_15min:
+                # _RESET_PADDING_S delay prevents racing the server-side reset.
+                if now >= self._reset_time_15min + _RESET_PADDING_S:
                     self._usage_15min = 0
                     self._read_usage_15min = 0
                     self._reset_time_15min = self._next_quarter_hour_ts()
-                if now >= self._reset_time_daily:
+                if now >= self._reset_time_daily + _RESET_PADDING_S:
                     self._usage_daily = 0
                     self._read_usage_daily = 0
                     self._reset_time_daily = self._next_midnight_utc_ts()
 
                 pause, reason = self._compute_needed_pause(
-                    is_non_upload, in_flight_margin
+                    is_non_upload, _RATE_LIMIT_MARGIN
                 )
 
             if pause <= 0:
@@ -281,7 +288,7 @@ class _StravaRateLimiter:
             and self._usage_daily >= self._limit_daily - margin
         ):
             return (
-                self._seconds_to_midnight_utc(),
+                self._seconds_until(self._reset_time_daily + _RESET_PADDING_S),
                 f"daily limit reached ({self._usage_daily}/{self._limit_daily})",
             )
         if is_non_upload and (
@@ -290,7 +297,7 @@ class _StravaRateLimiter:
             and self._read_usage_daily >= self._read_limit_daily - margin
         ):
             return (
-                self._seconds_to_midnight_utc(),
+                self._seconds_until(self._reset_time_daily + _RESET_PADDING_S),
                 f"daily non-upload limit reached"
                 f" ({self._read_usage_daily}/{self._read_limit_daily})",
             )
@@ -301,7 +308,7 @@ class _StravaRateLimiter:
             and self._usage_15min >= self._limit_15min - margin
         ):
             return (
-                self._seconds_to_next_quarter_hour(),
+                self._seconds_until(self._reset_time_15min + _RESET_PADDING_S),
                 f"15-min limit reached ({self._usage_15min}/{self._limit_15min})",
             )
         if is_non_upload and (
@@ -310,7 +317,7 @@ class _StravaRateLimiter:
             and self._read_usage_15min >= self._read_limit_15min - margin
         ):
             return (
-                self._seconds_to_next_quarter_hour(),
+                self._seconds_until(self._reset_time_15min + _RESET_PADDING_S),
                 f"15-min non-upload limit reached"
                 f" ({self._read_usage_15min}/{self._read_limit_15min})",
             )
@@ -488,7 +495,12 @@ def _build_tcx(meta: ActivityMeta, streams: Any) -> bytes:
 
 
 class StravaConnector(ServiceConnector):
-    _max_concurrent = 2
+    _max_concurrent = _MAX_CONCURRENT
+    # Shared per client_id so all connectors under the same Strava app see the
+    # same rate-limit state.  Protected by _limiter_registry_lock for safe
+    # concurrent construction.
+    _limiter_registry: ClassVar[dict[int, _StravaRateLimiter]] = {}
+    _limiter_registry_lock: ClassVar[threading.Lock] = threading.Lock()
 
     def __init__(
         self,
@@ -504,10 +516,16 @@ class StravaConnector(ServiceConnector):
         self._athlete_name: str = ""
         self._token_generation: int = 0
         self._token_refresh_lock: asyncio.Lock = asyncio.Lock()
-        # Created once; shared across all Strava sessions for this connector's lifetime.
-        # NOTE: per-connector-instance. Two connectors sharing one client_id would need
-        # a shared limiter keyed by client_id.
-        self._rate_limiter: _StravaRateLimiter = _StravaRateLimiter()
+        # Shared limiter: all connectors with the same client_id use one instance
+        # so they see each other's usage and don't collectively exceed the quota.
+        with StravaConnector._limiter_registry_lock:
+            if credentials.client_id not in StravaConnector._limiter_registry:
+                StravaConnector._limiter_registry[credentials.client_id] = (
+                    _StravaRateLimiter()
+                )
+            self._rate_limiter = StravaConnector._limiter_registry[
+                credentials.client_id
+            ]
 
     @property
     def user_label(self) -> str:
@@ -539,7 +557,6 @@ class StravaConnector(ServiceConnector):
             await self._rate_limiter.wait_if_needed(
                 is_non_upload=is_non_upload,
                 log_fn=log_fn,
-                in_flight_margin=self._max_concurrent,
             )
             try:
                 return await _run_with_timeout(asyncio.to_thread(fn, *args, **kwargs))

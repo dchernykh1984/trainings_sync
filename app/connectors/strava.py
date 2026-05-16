@@ -25,6 +25,7 @@ from app.connectors.base import (
     ServiceConnector,
     TransientDownloadError,
     _fetch_url_bytes,
+    _redact_url,
     _run_with_timeout,
     attach_debug_logging,
 )
@@ -80,6 +81,10 @@ def _format_utc_resume_time(pause_s: float) -> str:
     return resume_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _fmt_bucket(usage: int | None, limit: int | None) -> str:
+    return f"{usage}/{limit}" if usage is not None and limit is not None else "-"
+
+
 class _StravaRateLimiter:
     """Tracks Strava API rate-limit state from response headers and throttles calls."""
 
@@ -124,11 +129,16 @@ class _StravaRateLimiter:
     def _seconds_to_midnight_utc(self) -> float:
         return max(1.0, self._next_midnight_utc_ts() - time.time())
 
-    def update_from_headers(self, response: Any) -> None:
+    def update_from_headers(
+        self, response: Any
+    ) -> tuple[bool, tuple[int | None, ...] | None]:
         """Called from session.send hook (in thread). Updates rate-limit state.
 
         Parsing and state updates happen under lock; logging happens after lock
         release to avoid holding the lock during I/O.
+
+        Returns (usage_parsed, snapshot) where snapshot holds the eight bucket
+        values captured under lock, or None when no usage headers were present.
         """
         headers = getattr(response, "headers", {})
         warnings: list[str] = []
@@ -165,9 +175,22 @@ class _StravaRateLimiter:
             if any_usage_parsed:
                 self._reset_time_15min = self._next_quarter_hour_ts()
                 self._reset_time_daily = self._next_midnight_utc_ts()
+                snapshot = (
+                    self._usage_15min,
+                    self._limit_15min,
+                    self._usage_daily,
+                    self._limit_daily,
+                    self._read_usage_15min,
+                    self._read_limit_15min,
+                    self._read_usage_daily,
+                    self._read_limit_daily,
+                )
+            else:
+                snapshot = None
 
         for w in warnings:
             _log.debug("[strava] rate limiter: %s", w)
+        return any_usage_parsed, snapshot
 
     def retry_after_for_429(
         self,
@@ -308,6 +331,8 @@ class _TimeoutHTTPAdapter(HTTPAdapter):
 def _attach_strava_rate_limiter(
     session: requests.Session,
     rate_limiter: _StravaRateLimiter,
+    log_fn: Any = None,
+    warn_fn: Any = None,
 ) -> None:
     """Wrap session.send to update rate-limit state and raise RateLimitError on 429.
 
@@ -316,15 +341,32 @@ def _attach_strava_rate_limiter(
 
     The hook does NOT sleep -- all waits happen in the async event loop via _call_api.
     Transport exceptions (ConnectionError etc.) still propagate after debug logging.
+
+    log_fn / warn_fn route through SyncLogger so messages reach sync.log.
     """
     original_send = session.send
 
     def _send(request: Any, **kwargs: Any) -> Any:
         resp = original_send(request, **kwargs)
-        rate_limiter.update_from_headers(resp)
+        usage_parsed, snapshot = rate_limiter.update_from_headers(resp)
+        if log_fn is not None and snapshot is not None:
+            u15, l15, ud, ld, ru15, rl15, rud, rld = snapshot
+            log_fn(
+                f"[strava] rate limits:"
+                f" 15min={_fmt_bucket(u15, l15)}, daily={_fmt_bucket(ud, ld)},"
+                f" read_15min={_fmt_bucket(ru15, rl15)},"
+                f" read_daily={_fmt_bucket(rud, rld)}"
+            )
         if resp.status_code == 429:
             retry_after = _parse_retry_after_optional(resp.headers) or 0.0
             raise RateLimitError("strava 429", retry_after=retry_after)
+        url = getattr(resp, "url", "")
+        if not usage_parsed and isinstance(url, str) and "/api/v3/" in url:
+            if warn_fn is not None:
+                warn_fn(
+                    "[strava] rate limit headers absent on API response:"
+                    f" {_redact_url(url)}"
+                )
         return resp
 
     session.send = _send  # type: ignore[method-assign]
@@ -332,6 +374,7 @@ def _attach_strava_rate_limiter(
 
 def _make_strava_session(
     log_fn: Any = None,
+    warn_fn: Any = None,
     rate_limiter: _StravaRateLimiter | None = None,
 ) -> requests.Session:
     session = requests.Session()
@@ -341,7 +384,9 @@ def _make_strava_session(
     if log_fn is not None:
         attach_debug_logging(session, log_fn)  # inner hook: debug log
     if rate_limiter is not None:
-        _attach_strava_rate_limiter(session, rate_limiter)  # outer hook: rate limiter
+        _attach_strava_rate_limiter(  # outer hook: rate limiter + usage log
+            session, rate_limiter, log_fn=log_fn, warn_fn=warn_fn
+        )
     return session
 
 
@@ -527,6 +572,7 @@ class StravaConnector(ServiceConnector):
         )
         log = self._tracker.sync_logger
         log_fn = log.debug if log else None
+        warn_fn = log.warning if log else None
         if log:
             log.info(f"[strava] Login: client_id={self._credentials.client_id}")
         try:
@@ -534,7 +580,7 @@ class StravaConnector(ServiceConnector):
             tmp_client = Client(
                 rate_limit_requests=False,
                 requests_session=_make_strava_session(
-                    log_fn, rate_limiter=self._rate_limiter
+                    log_fn, warn_fn=warn_fn, rate_limiter=self._rate_limiter
                 ),
             )
             token_info = await self._call_api(
@@ -554,7 +600,7 @@ class StravaConnector(ServiceConnector):
                 access_token=token_info["access_token"],
                 rate_limit_requests=False,
                 requests_session=_make_strava_session(
-                    log_fn, rate_limiter=self._rate_limiter
+                    log_fn, warn_fn=warn_fn, rate_limiter=self._rate_limiter
                 ),
             )
             try:

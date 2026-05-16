@@ -1436,11 +1436,72 @@ class TestMakeStravaSession:
             "X-RateLimit-Limit": "100,1000",
             "X-RateLimit-Usage": "5,50",
         }
+        log_calls: list[str] = []
         s = requests.Session()
         with patch.object(s, "send", return_value=fake_resp):
-            _attach_strava_rate_limiter(s, limiter)
+            _attach_strava_rate_limiter(s, limiter, log_fn=log_calls.append)
             result = s.send(MagicMock())
         assert result is fake_resp
+        assert len(log_calls) == 1
+        assert "15min=5/100" in log_calls[0]
+        assert "daily=50/1000" in log_calls[0]
+
+    def test_rate_limiter_hook_warns_when_api_response_has_no_rate_limit_headers(
+        self,
+    ) -> None:
+        from app.connectors.strava import _attach_strava_rate_limiter
+
+        limiter = _StravaRateLimiter()
+        fake_resp = MagicMock()
+        fake_resp.status_code = 200
+        fake_resp.headers = {}
+        fake_resp.url = (
+            "https://www.strava.com/api/v3/athlete/activities"
+            "?access_token=SECRET&page=1"
+        )
+        warn_calls: list[str] = []
+        log_calls: list[str] = []
+        s = requests.Session()
+        with patch.object(s, "send", return_value=fake_resp):
+            _attach_strava_rate_limiter(
+                s, limiter, log_fn=log_calls.append, warn_fn=warn_calls.append
+            )
+            s.send(MagicMock())
+        assert len(warn_calls) == 1
+        assert "/api/v3/" in warn_calls[0]
+        assert "SECRET" not in warn_calls[0]
+        assert "access_token=REDACTED" in warn_calls[0]
+        assert log_calls == []  # no usage parsed, no debug line
+
+    def test_rate_limiter_hook_no_warn_when_warn_fn_is_none(self) -> None:
+        from app.connectors.strava import _attach_strava_rate_limiter
+
+        limiter = _StravaRateLimiter()
+        fake_resp = MagicMock()
+        fake_resp.status_code = 200
+        fake_resp.headers = {}
+        fake_resp.url = "https://www.strava.com/api/v3/athlete/activities"
+        s = requests.Session()
+        with patch.object(s, "send", return_value=fake_resp):
+            _attach_strava_rate_limiter(s, limiter)  # warn_fn=None by default
+            s.send(MagicMock())  # must not raise
+
+    def test_rate_limiter_hook_no_warn_for_oauth_response_without_headers(
+        self,
+    ) -> None:
+        from app.connectors.strava import _attach_strava_rate_limiter
+
+        limiter = _StravaRateLimiter()
+        fake_resp = MagicMock()
+        fake_resp.status_code = 200
+        fake_resp.headers = {}
+        fake_resp.url = "https://www.strava.com/oauth/token"
+        warn_calls: list[str] = []
+        s = requests.Session()
+        with patch.object(s, "send", return_value=fake_resp):
+            _attach_strava_rate_limiter(s, limiter, warn_fn=warn_calls.append)
+            s.send(MagicMock())
+        assert warn_calls == []
 
 
 class TestStravaRateLimiter:
@@ -1951,9 +2012,9 @@ class TestStravaRateLimiter:
         }
         limiter.update_from_headers(resp)
 
-        # Timestamps must be updated to a future boundary (>= old value).
-        assert limiter._reset_time_15min >= old_reset_15
-        assert limiter._reset_time_daily >= old_reset_daily
+        # Timestamps updated to a future boundary (fp rounding tolerance).
+        assert limiter._reset_time_15min >= old_reset_15 - 1e-6
+        assert limiter._reset_time_daily >= old_reset_daily - 1e-6
 
     async def test_upload_recreates_bytesio_on_retry(
         self, logged_in: StravaConnector, mock_client: MagicMock

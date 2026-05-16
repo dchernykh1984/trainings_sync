@@ -5,7 +5,7 @@ import asyncio
 import getpass
 import os
 import sys
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 from app.core.cache import ActivityCache
@@ -55,6 +55,10 @@ def _parse_date(value: str) -> date:
         raise argparse.ArgumentTypeError(
             f"invalid date {value!r}: expected YYYY-MM-DD"
         ) from exc
+
+
+def _current_run_timestamp() -> str:
+    return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
@@ -171,6 +175,7 @@ async def _run_sync(
     }
 
     print(
+        f"Sync started: {_current_run_timestamp()}\n"
         f"Sync log: {sync_logger.path}\n"
         "If progress appears frozen, check the log file above for details."
     )
@@ -227,6 +232,8 @@ async def _run_sync(
                 if not t.done():
                     t.cancel()
             await asyncio.gather(*login_tasks.values(), return_exceptions=True)
+
+    print(f"Sync finished: {_current_run_timestamp()}")
 
     if download_failures:
         n = download_failures

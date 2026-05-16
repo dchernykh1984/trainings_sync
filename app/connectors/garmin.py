@@ -7,7 +7,6 @@ import tempfile
 import zipfile
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any
 
 import requests as _requests
 from garminconnect import Garmin  # type: ignore[import-untyped]
@@ -26,7 +25,7 @@ from app.connectors.base import (
 from app.credentials.base import Credentials
 from app.tracking.tracker import TaskTracker
 
-logging.getLogger("garminconnect").setLevel(logging.ERROR)
+logging.getLogger("garminconnect").setLevel(logging.CRITICAL + 1)
 
 _PREFERRED_EXTENSIONS = (".fit", ".gpx", ".tcx")
 _PAGE_SIZE = 20
@@ -34,6 +33,8 @@ _PAGE_SIZE = 20
 _UPLOAD_SETTLE_S: float = 2.0
 _PHOTO_SETTLE_S: float = 0.0
 _GARMIN_MAX_MEDIA: int = 10
+_DESCRIPTION_RETRY_ATTEMPTS: int = 3
+_DESCRIPTION_RETRY_DELAY_S: float = 2.0
 
 # Maps Strava sport_type strings to Garmin Connect typeKey values.
 _STRAVA_TO_GARMIN_TYPE: dict[str, str] = {
@@ -360,10 +361,56 @@ class GarminConnector(ServiceConnector):
                     )
                 return
 
-    async def download_activity(self, meta: ActivityMeta) -> Activity:
-        client = self._require_client()
+    async def _fetch_description(self, client: Garmin, activity_id: int) -> str | None:
         log = self._tracker.sync_logger
         account = self._credentials.login
+        for attempt in range(_DESCRIPTION_RETRY_ATTEMPTS):
+            try:
+                details = await _run_with_timeout(
+                    asyncio.to_thread(client.get_activity_details, activity_id)
+                )
+            except (
+                OSError,
+                GarminConnectConnectionError,
+                _requests.RequestException,
+                TransientDownloadError,
+            ) as exc:
+                if attempt < _DESCRIPTION_RETRY_ATTEMPTS - 1:
+                    if log:
+                        log.warning(
+                            f"[garmin] Download ({account}): {activity_id!r}"
+                            f" - description fetch attempt"
+                            f" {attempt + 1}/{_DESCRIPTION_RETRY_ATTEMPTS}"
+                            f" failed ({exc}), retrying in"
+                            f" {_DESCRIPTION_RETRY_DELAY_S:.0f}s"
+                        )
+                    await asyncio.sleep(_DESCRIPTION_RETRY_DELAY_S)
+                    continue
+                if log:
+                    log.warning(
+                        f"[garmin] Download ({account}): {activity_id!r}"
+                        f" - description unavailable: {exc}"
+                    )
+                return None
+            except Exception as exc:
+                if log:
+                    log.warning(
+                        f"[garmin] Download ({account}): {activity_id!r}"
+                        f" - description unavailable: {exc}"
+                    )
+                return None
+            else:
+                if isinstance(details, dict):
+                    return (
+                        details.get("description")
+                        or details.get("activityDescription")
+                        or None
+                    )
+                return None
+        return None  # pragma: no cover
+
+    async def download_activity(self, meta: ActivityMeta) -> Activity:
+        client = self._require_client()
         activity_id = int(meta.external_id)
         zip_task: asyncio.Task[bytes] = asyncio.create_task(
             _run_with_timeout(
@@ -374,10 +421,8 @@ class GarminConnector(ServiceConnector):
                 )
             )
         )
-        detail_task: asyncio.Task[Any] = asyncio.create_task(
-            _run_with_timeout(
-                asyncio.to_thread(client.get_activity_details, activity_id)
-            )
+        detail_task: asyncio.Task[str | None] = asyncio.create_task(
+            self._fetch_description(client, activity_id)
         )
         photos_task: asyncio.Task[list[MediaItem]] = asyncio.create_task(
             self._fetch_photos(client, activity_id)
@@ -398,21 +443,7 @@ class GarminConnector(ServiceConnector):
             photos_task.cancel()
             await asyncio.gather(detail_task, photos_task, return_exceptions=True)
             raise
-        description: str | None = None
-        try:
-            details = await detail_task
-            if isinstance(details, dict):
-                description = (
-                    details.get("description")
-                    or details.get("activityDescription")
-                    or None
-                )
-        except Exception as exc:
-            if log:
-                log.warning(
-                    f"[garmin] Download ({account}): {meta.external_id!r}"
-                    f" - description unavailable: {exc}"
-                )
+        description = await detail_task
         media = await photos_task
         with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
             names = zf.namelist()

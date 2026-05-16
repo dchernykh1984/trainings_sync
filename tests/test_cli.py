@@ -14,6 +14,7 @@ from app.cli import (
     _make_provider,
     _parse_date,
     _run,
+    _run_sync,
     _validate,
     main,
 )
@@ -660,6 +661,44 @@ class TestRunSyncErrors:
 
 
 class TestRunSyncKeepassPassword:
+    async def test_run_messages_include_timestamps_and_log_path(
+        self, capsys: pytest.CaptureFixture, tmp_path: Path
+    ) -> None:
+        config = AppConfig(cache_dir=tmp_path, connectors=(), sync_groups=())
+        args = argparse.Namespace(
+            config=tmp_path / "unused.json",
+            start=_START,
+            end=_END,
+            force=False,
+            creds_json=None,
+            creds_keepass=None,
+        )
+        sync_logger = MagicMock()
+        sync_logger.path = tmp_path / "sync.log"
+
+        with (
+            patch(
+                "app.cli._current_run_timestamp",
+                side_effect=[
+                    "2026-05-16T10:20:30+06:00",
+                    "2026-05-16T10:25:30+06:00",
+                ],
+            ),
+            patch("app.cli.build_connectors", new=AsyncMock(return_value={})),
+            patch("app.cli.SyncOrchestrator") as mock_orch,
+            patch("app.cli.ActivityCache") as mock_cache,
+            patch("app.cli.ConsoleRenderer"),
+        ):
+            mock_cache.return_value.load = MagicMock()
+            mock_orch.return_value.run = AsyncMock(return_value=0)
+            await _run_sync(args, config, sync_logger, _START, _END)
+
+        out = capsys.readouterr().out
+        assert "Sync started: 2026-05-16T10:20:30+06:00" in out
+        assert "Sync finished: 2026-05-16T10:25:30+06:00" in out
+        assert f"Sync log: {sync_logger.path}" in out
+        assert "If progress appears frozen" in out
+
     async def test_keepass_password_prompted_before_renderer(
         self, tmp_path: Path
     ) -> None:
@@ -715,7 +754,6 @@ class TestRunSyncKeepassPassword:
             mock_cache.return_value.load = MagicMock()
             mock_orch.return_value.run = AsyncMock(return_value=0)
             mock_make_provider.return_value = MagicMock()
-            from app.cli import _run_sync
 
             await _run_sync(args, config, sync_logger, _START, _END)
 

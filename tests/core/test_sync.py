@@ -1019,6 +1019,45 @@ class TestSyncExecutorTracking:
         assert "rate limited" in msg
         assert "1s" in msg
 
+    async def test_retry_attempt_start_logged_at_info(
+        self, cache: ActivityCache
+    ) -> None:
+        conn = _make_conn()
+        conn.list_activities = AsyncMock(return_value=[_meta("a1")])
+        conn.download_activity = AsyncMock(
+            side_effect=[TransientDownloadError("timeout"), _activity("a1")]
+        )
+        log = MagicMock()
+        tracker = _make_tracker()
+        tracker.sync_logger = log
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), conn)],
+            destinations=[],
+            cache=cache,
+            tracker=tracker,
+        )
+        with patch("asyncio.sleep", new=AsyncMock()):
+            await executor.run(_START, _END)
+        info_msgs = [call.args[0] for call in log.info.call_args_list]
+        assert any("attempt 2/3 starting" in m and "a1" in m for m in info_msgs)
+
+    async def test_first_attempt_start_not_logged(self, cache: ActivityCache) -> None:
+        conn = _make_conn()
+        conn.list_activities = AsyncMock(return_value=[_meta("a1")])
+        conn.download_activity = AsyncMock(return_value=_activity("a1"))
+        log = MagicMock()
+        tracker = _make_tracker()
+        tracker.sync_logger = log
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), conn)],
+            destinations=[],
+            cache=cache,
+            tracker=tracker,
+        )
+        await executor.run(_START, _END)
+        info_msgs = [call.args[0] for call in log.info.call_args_list]
+        assert not any("starting" in m for m in info_msgs)
+
     async def test_non_transient_error_does_not_trigger_padding(
         self, cache: ActivityCache
     ) -> None:

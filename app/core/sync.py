@@ -26,7 +26,6 @@ _UNKNOWN_ORDER: int = sys.maxsize
 _DOWNLOAD_ATTEMPTS: int = 3
 _DOWNLOAD_RETRY_DELAY_S: float = 60.0
 _MIN_ATTEMPT_DURATION_S: float = 30.0
-_RATE_LIMIT_PAUSE_S: float = 600.0
 
 
 def _entries_overlap(
@@ -106,7 +105,7 @@ class _RateLimitState:
     def record_429(self, retry_after: float) -> None:
         loop = asyncio.get_running_loop()
         now = loop.time()
-        pause = max(_RATE_LIMIT_PAUSE_S, retry_after)
+        pause = retry_after
         new_unlock_at = now + pause
         was_expired = self._unlock_at <= now
         if new_unlock_at > self._unlock_at:

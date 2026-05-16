@@ -18,7 +18,6 @@ from app.core.cache import ActivityCache, CacheEntry
 from app.core.planner import SourceSpec
 from app.core.sync import (
     _DOWNLOAD_ATTEMPTS,
-    _RATE_LIMIT_PAUSE_S,
     SyncExecutor,
 )
 
@@ -912,7 +911,7 @@ class TestSyncExecutorTracking:
             "asyncio.sleep", new=AsyncMock(side_effect=lambda s: sleep_calls.append(s))
         ):
             await executor.run(_START, _END)
-        assert any(abs(s - _RATE_LIMIT_PAUSE_S) < 1.0 for s in sleep_calls)
+        assert any(abs(s - 300.0) < 1.0 for s in sleep_calls)
         assert cache.has("a1", "garmin")
 
     async def test_rate_limit_error_respects_server_retry_after_when_longer(
@@ -920,7 +919,7 @@ class TestSyncExecutorTracking:
     ) -> None:
         from app.connectors.base import RateLimitError
 
-        long_retry = _RATE_LIMIT_PAUSE_S + 300.0
+        long_retry = 900.0
         conn = _make_conn()
         conn.list_activities = AsyncMock(return_value=[_meta("a1")])
         conn.download_activity = AsyncMock(
@@ -1110,14 +1109,14 @@ class TestSyncExecutorTracking:
         info_msgs = [call.args[0] for call in log.info.call_args_list]
         pause_msgs = [m for m in info_msgs if "pausing" in m]
         assert len(pause_msgs) == 1
-        assert str(int(_RATE_LIMIT_PAUSE_S)) in pause_msgs[0]
+        assert "300" in pause_msgs[0]
 
     async def test_rate_limit_pause_log_shows_server_retry_after_when_longer(
         self, cache: ActivityCache
     ) -> None:
         from app.connectors.base import RateLimitError
 
-        long_retry = _RATE_LIMIT_PAUSE_S + 300.0
+        long_retry = 900.0
         conn = _make_conn()
         conn.list_activities = AsyncMock(return_value=[_meta("a1")])
         conn.download_activity = AsyncMock(

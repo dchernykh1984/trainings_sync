@@ -26,6 +26,7 @@ _UNKNOWN_ORDER: int = sys.maxsize
 _DOWNLOAD_ATTEMPTS: int = 3
 _DOWNLOAD_RETRY_DELAY_S: float = 60.0
 _MIN_ATTEMPT_DURATION_S: float = 30.0
+_RATE_LIMIT_PAUSE_S: float = 600.0
 
 
 def _entries_overlap(
@@ -94,16 +95,34 @@ def _shadowed_by_higher_priority(
 
 
 class _RateLimitState:
-    """Per-source rate-limit deadline. Shared by all download tasks for one source."""
+    """Per-source rate-limit state shared by all download tasks for one source."""
 
     def __init__(self) -> None:
         self._unlock_at: float = 0.0
+        self._new_pause: bool = False
+        self._pause_version: int = 0
 
-    def record_429(self, retry_after: float) -> None:
+    def record_429(self) -> None:
         loop = asyncio.get_running_loop()
-        new_unlock_at = loop.time() + retry_after
+        now = loop.time()
+        new_unlock_at = now + _RATE_LIMIT_PAUSE_S
+        was_expired = self._unlock_at <= now
         if new_unlock_at > self._unlock_at:
             self._unlock_at = new_unlock_at
+            self._pause_version += 1
+            if was_expired:
+                self._new_pause = True
+
+    def take_pause_notification(self) -> bool:
+        """Returns True the first time after each new pause period starts."""
+        if self._new_pause:
+            self._new_pause = False
+            return True
+        return False
+
+    def snapshot_version(self) -> int:
+        """Returns the current pause version; changes whenever a new 429 is recorded."""
+        return self._pause_version
 
     def remaining(self) -> float:
         return max(0.0, self._unlock_at - asyncio.get_running_loop().time())
@@ -194,32 +213,33 @@ class SyncExecutor:
         *,
         pad: bool,
     ) -> tuple[Activity | None, bool]:
-        """Download inside semaphore. Returns (activity, skipped); raises on error."""
+        """Try one download. Re-checks rate limit after acquiring the semaphore."""
         loop = asyncio.get_running_loop()
-        async with sem:
-            remaining = rate_state.remaining()
-            if remaining > 0 and log:
-                log.warning(
-                    f"[download] {source_id}{account}:"
-                    f" rate limited, waiting {remaining:.0f}s"
-                )
+        while True:
             await rate_state.wait_if_limited()
-            t0 = loop.time()
+            version = rate_state.snapshot_version()
+            await sem.acquire()
             try:
-                return await connector.download_activity(item.meta), False
-            except ActivityUnavailableError:
-                return None, True
-            except RateLimitError as exc:
-                rate_state.record_429(exc.retry_after)
-                raise
-            except TransientDownloadError:
-                if pad:
-                    remaining = _MIN_ATTEMPT_DURATION_S - (loop.time() - t0)
-                    if remaining > 0:
-                        await asyncio.sleep(remaining)
-                raise
-            except Exception:
-                raise
+                if rate_state.snapshot_version() != version:
+                    continue  # new 429 since we waited; loop back to wait
+                t0 = loop.time()
+                try:
+                    return await connector.download_activity(item.meta), False
+                except ActivityUnavailableError:
+                    return None, True
+                except RateLimitError:
+                    rate_state.record_429()
+                    raise
+                except TransientDownloadError:
+                    if pad:
+                        remaining = _MIN_ATTEMPT_DURATION_S - (loop.time() - t0)
+                        if remaining > 0:
+                            await asyncio.sleep(remaining)
+                    raise
+                except Exception:
+                    raise
+            finally:
+                sem.release()
 
     async def _on_download_success(
         self,
@@ -264,8 +284,7 @@ class SyncExecutor:
             if log:
                 log.warning(
                     f"[download] {source_id}{account}:"
-                    f" {external_id!r} - rate limited,"
-                    f" retrying in {exc.retry_after:.0f}s"
+                    f" {external_id!r} - rate limited (download failed)"
                 )
             return 0.0, advanced
         if not advanced:
@@ -338,6 +357,15 @@ class SyncExecutor:
                     attempt,
                     log,
                 )
+                if (
+                    isinstance(exc, RateLimitError)
+                    and rate_state.take_pause_notification()
+                    and log
+                ):
+                    log.info(
+                        f"[download] {source_id}{account}:"
+                        f" pausing all downloads for {_RATE_LIMIT_PAUSE_S:.0f}s"
+                    )
                 continue
             await self._on_download_success(
                 activity, item.meta, source_id, account, tracking, advanced, log

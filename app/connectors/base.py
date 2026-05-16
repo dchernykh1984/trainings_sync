@@ -33,7 +33,7 @@ class RateLimitError(TransientDownloadError):
 
 
 _T = TypeVar("_T")
-_API_TIMEOUT_S: float = 120.0
+_API_TIMEOUT_S: float = 30.0
 
 
 async def _run_with_timeout(

@@ -195,6 +195,18 @@ poetry run trainings-sync \
 
 If a sync run is interrupted, simply run the same command again. Already downloaded activities are stored in the cache (`cache_dir` in config) and will not be re-downloaded.
 
+**Note on Strava rate limits:** Strava enforces API rate limits per registered app. For read-heavy
+syncs the binding constraint is typically the read limit (100 requests per 15 minutes, 1000 per day),
+but the exact values can change -- always check the sync log, which prints current usage after each
+request:
+
+```
+[strava] rate limits: 15min=190/200, daily=1850/2000, read_15min=90/100, read_daily=900/1000
+```
+
+When a limit is reached, the sync automatically pauses and resumes after the window resets. Your app's
+current limits are shown at [strava.com/settings/api](https://www.strava.com/settings/api).
+
 ## Contributing
 
 Before requesting a review, make sure the CI pipeline passes on your pull request. Once the pipeline is green, request a review from [@dchernykh1984](https://github.com/dchernykh1984).

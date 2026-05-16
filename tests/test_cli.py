@@ -697,10 +697,9 @@ class TestRunSyncKeepassPassword:
         assert "Sync started: 2026-05-16T10:20:30+06:00" in out
         assert "Sync finished: 2026-05-16T10:25:30+06:00" in out
         assert f"Sync log: {sync_logger.path}" in out
-        assert "If progress appears frozen" in out
 
     async def test_keepass_password_prompted_before_renderer(
-        self, tmp_path: Path
+        self, capsys: pytest.CaptureFixture, tmp_path: Path
     ) -> None:
         """KeePass password must be prompted before ConsoleRenderer starts."""
         strava_connector = StravaConnectorConfig(
@@ -762,6 +761,9 @@ class TestRunSyncKeepassPassword:
         assert call_order.index("env_get") < call_order.index("renderer_enter")
         kw = mock_make_provider.call_args.kwargs
         assert kw.get("keepass_password") == "env-password"
+        # Strava rate limit hint must appear when config has a Strava connector.
+        out = capsys.readouterr().out
+        assert "strava.com/settings/api" in out
 
 
 class TestParallelLogin:

@@ -10,7 +10,7 @@ import pytest
 import requests
 from stravalib.exc import ObjectNotFound
 
-from app.connectors.base import Activity, ActivityMeta
+from app.connectors.base import Activity, ActivityMeta, TransientDownloadError
 from app.connectors.strava import (
     StravaConnector,
     _make_strava_session,
@@ -544,7 +544,6 @@ class TestDownloadActivity:
     async def test_get_activity_request_error_raises_transient_download_error(
         self, logged_in: StravaConnector, mock_client: MagicMock
     ) -> None:
-        from app.connectors.base import TransientDownloadError
 
         mock_client.get_activity.side_effect = requests.ConnectionError("timeout")
         with patch(
@@ -558,7 +557,6 @@ class TestDownloadActivity:
     async def test_get_activity_streams_request_error_raises_transient_download_error(
         self, logged_in: StravaConnector, mock_client: MagicMock
     ) -> None:
-        from app.connectors.base import TransientDownloadError
 
         mock_client.get_activity_streams.side_effect = requests.ConnectionError(
             "connection reset"
@@ -614,7 +612,6 @@ class TestDownloadActivity:
     async def test_get_activity_non_429_http_error_raises_transient(
         self, logged_in: StravaConnector, mock_client: MagicMock
     ) -> None:
-        from app.connectors.base import TransientDownloadError
 
         mock_response = MagicMock()
         mock_response.status_code = 500
@@ -755,6 +752,91 @@ class TestDownloadActivity:
         ns = {"ae": "http://www.garmin.com/xmlschemas/ActivityExtension/v2"}
         watts_els = root.findall(".//ae:Watts", ns)
         assert len(watts_els) == 1  # second trackpoint has no watts
+
+    async def test_401_on_get_activity_refreshes_token_and_raises_transient(
+        self, logged_in: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        from stravalib.exc import AccessUnauthorized
+
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+        mock_response.headers = {}
+        mock_client.get_activity.side_effect = AccessUnauthorized(
+            "Unauthorized: Authorization Error", response=mock_response
+        )
+        with patch(
+            "app.connectors.strava.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            with patch.object(logged_in, "login", new=AsyncMock()) as mock_login:
+                with pytest.raises(TransientDownloadError):
+                    await logged_in.download_activity(_make_meta())
+        mock_login.assert_called_once()
+
+    async def test_401_on_get_activity_streams_refreshes_token_and_raises_transient(
+        self, logged_in: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        from stravalib.exc import AccessUnauthorized
+
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+        mock_response.headers = {}
+        mock_client.get_activity_streams.side_effect = AccessUnauthorized(
+            "Unauthorized: Authorization Error", response=mock_response
+        )
+        with patch(
+            "app.connectors.strava.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            with patch.object(logged_in, "login", new=AsyncMock()) as mock_login:
+                with pytest.raises(TransientDownloadError):
+                    await logged_in.download_activity(_make_meta())
+        mock_login.assert_called_once()
+
+    async def test_concurrent_401s_refresh_token_once(
+        self, logged_in: StravaConnector
+    ) -> None:
+        login_calls = 0
+
+        async def fake_login() -> None:
+            nonlocal login_calls
+            login_calls += 1
+            logged_in._token_generation += 1
+            await asyncio.sleep(0)  # yield so the second task tries the lock while held
+
+        gen = logged_in._token_generation
+        with patch.object(logged_in, "login", new=fake_login):
+            await asyncio.gather(
+                logged_in._refresh_token_if_needed(gen),
+                logged_in._refresh_token_if_needed(gen),
+            )
+        assert login_calls == 1
+
+    async def test_stale_gen_skips_token_refresh(
+        self, logged_in: StravaConnector
+    ) -> None:
+        from stravalib.exc import AccessUnauthorized
+
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+        mock_response.headers = {}
+        exc = AccessUnauthorized("Unauthorized", response=mock_response)
+
+        stale_gen = logged_in._token_generation
+        logged_in._token_generation += 1  # another task already refreshed
+
+        login_calls = 0
+
+        async def fake_login() -> None:
+            nonlocal login_calls
+            login_calls += 1
+
+        with patch.object(logged_in, "login", new=fake_login):
+            await logged_in._raise_for_http_error(exc, stale_gen)
+
+        assert login_calls == 0
 
     async def test_raises_when_not_logged_in(self, connector: StravaConnector) -> None:
         with pytest.raises(RuntimeError, match="login"):
@@ -1105,7 +1187,40 @@ class TestDownloadActivityPhotos:
                 await logged_in.download_activity(_make_meta())
         assert exc_info.value.retry_after == 120.0
 
-    async def test_photo_fetch_http_error_non_429_returns_empty_and_logs_warning(
+    async def test_401_on_get_activity_photos_raises_transient_and_refreshes_token(
+        self, logged_in: StravaConnector, mock_client: MagicMock
+    ) -> None:
+
+        mock_client.get_activity_streams.return_value = _make_gps_streams()
+        mock_client.get_activity.return_value.total_photo_count = 1
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+        mock_response.headers = {}
+        mock_client.get_activity_photos.side_effect = requests.HTTPError(
+            "401 Unauthorized", response=mock_response
+        )
+
+        login_calls = 0
+
+        async def fake_login() -> None:
+            nonlocal login_calls
+            login_calls += 1
+            logged_in._token_generation += 1
+
+        with (
+            patch.object(logged_in, "login", new=fake_login),
+            patch(
+                "app.connectors.strava.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=_call_sync,
+            ),
+            pytest.raises(TransientDownloadError),
+        ):
+            await logged_in.download_activity(_make_meta())
+
+        assert login_calls == 1
+
+    async def test_photo_fetch_http_error_non_429_raises_transient_and_logs_warning(
         self, logged_in_with_log: StravaConnector, mock_client: MagicMock
     ) -> None:
         mock_client.get_activity_streams.return_value = _make_gps_streams()
@@ -1116,40 +1231,44 @@ class TestDownloadActivityPhotos:
         mock_client.get_activity_photos.side_effect = requests.HTTPError(
             "403 Forbidden", response=mock_response
         )
-        with patch(
-            "app.connectors.strava.asyncio.to_thread",
-            new_callable=AsyncMock,
-            side_effect=_call_sync,
+        with (
+            patch(
+                "app.connectors.strava.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=_call_sync,
+            ),
+            pytest.raises(TransientDownloadError),
         ):
-            result = await logged_in_with_log.download_activity(_make_meta())
-        assert result.media == ()
+            await logged_in_with_log.download_activity(_make_meta())
         log = logged_in_with_log._tracker.sync_logger
         assert log is not None
         msgs = [c.args[0] for c in log.warning.call_args_list]  # type: ignore[attr-defined]
         assert any("failed to fetch photo list" in m for m in msgs)
 
-    async def test_photo_fetch_exception_returns_empty_and_logs_warning(
+    async def test_photo_fetch_exception_raises_transient_and_logs_warning(
         self, logged_in_with_log: StravaConnector, mock_client: MagicMock
     ) -> None:
         mock_client.get_activity_streams.return_value = _make_gps_streams()
         mock_client.get_activity.return_value.total_photo_count = 1
         mock_client.get_activity_photos.side_effect = OSError("API error")
 
-        with patch(
-            "app.connectors.strava.asyncio.to_thread",
-            new_callable=AsyncMock,
-            side_effect=_call_sync,
+        with (
+            patch(
+                "app.connectors.strava.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=_call_sync,
+            ),
+            pytest.raises(TransientDownloadError),
         ):
-            result = await logged_in_with_log.download_activity(_make_meta())
+            await logged_in_with_log.download_activity(_make_meta())
 
-        assert result.media == ()
         log = logged_in_with_log._tracker.sync_logger
         assert log is not None
         msgs = [c.args[0] for c in log.warning.call_args_list]  # type: ignore[attr-defined]
         assert any("failed to fetch photo list" in m for m in msgs)
         assert any("API error" in m for m in msgs)
 
-    async def test_photo_url_download_exception_skips_photo_and_logs_warning(
+    async def test_photo_url_download_exception_raises_transient_and_logs_warning(
         self, logged_in_with_log: StravaConnector, mock_client: MagicMock
     ) -> None:
         mock_client.get_activity_streams.return_value = _make_gps_streams()
@@ -1168,10 +1287,10 @@ class TestDownloadActivityPhotos:
                 "app.connectors.strava._download_bytes",
                 side_effect=OSError("download failed"),
             ),
+            pytest.raises(TransientDownloadError),
         ):
-            result = await logged_in_with_log.download_activity(_make_meta())
+            await logged_in_with_log.download_activity(_make_meta())
 
-        assert result.media == ()
         log = logged_in_with_log._tracker.sync_logger
         assert log is not None
         msgs = [c.args[0] for c in log.warning.call_args_list]  # type: ignore[attr-defined]

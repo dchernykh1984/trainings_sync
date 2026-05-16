@@ -185,6 +185,8 @@ class StravaConnector(ServiceConnector):
         self._client: Client | None = None
         self._athlete_id: str = ""
         self._athlete_name: str = ""
+        self._token_generation: int = 0
+        self._token_refresh_lock: asyncio.Lock = asyncio.Lock()
 
     @property
     def user_label(self) -> str:
@@ -244,8 +246,27 @@ class StravaConnector(ServiceConnector):
                 f"[strava] Login: success"
                 f" (athlete_id={self._athlete_id or 'unknown'}{name_part})"
             )
+        self._token_generation += 1
         await self._tracker.advance(task_name)
         await self._tracker.finish(task_name)
+
+    async def _refresh_token_if_needed(self, gen: int) -> None:
+        """Refresh token if it hasn't been refreshed since gen was captured."""
+        async with self._token_refresh_lock:
+            if self._token_generation == gen:
+                await self.login()
+
+    async def _raise_for_http_error(self, exc: requests.HTTPError, gen: int) -> None:
+        """Raise RateLimitError on 429, refresh token on 401. Returns on other codes."""
+        if exc.response is None:  # pragma: no cover
+            return
+        status = exc.response.status_code
+        if status == 429:
+            raise RateLimitError(
+                str(exc), retry_after=_parse_retry_after(exc.response.headers)
+            ) from exc
+        if status == 401:
+            await self._refresh_token_if_needed(gen)
 
     async def list_activities(self, start: date, end: date) -> list[ActivityMeta]:
         client = self._require_client()
@@ -292,35 +313,48 @@ class StravaConnector(ServiceConnector):
             for a in raw
         ]
 
-    async def _fetch_photos(self, client: Client, activity_id: int) -> list[MediaItem]:
+    async def _fetch_photo_list(
+        self, client: Client, activity_id: int, gen: int
+    ) -> list:
+        """Fetch raw photo list; raises TransientDownloadError on all errors."""
         log = self._tracker.sync_logger
         account = f" ({self.user_label})" if self.user_label else ""
         try:
-            photos: list = await _run_with_timeout(
+            return await _run_with_timeout(
                 asyncio.to_thread(
                     lambda: list(client.get_activity_photos(activity_id, size=2048))
                 )
             )
         except requests.HTTPError as exc:
-            if exc.response is not None and exc.response.status_code == 429:
-                raise RateLimitError(
-                    str(exc), retry_after=_parse_retry_after(exc.response.headers)
-                ) from exc
+            if exc.response is not None:
+                if exc.response.status_code == 429:
+                    raise RateLimitError(
+                        str(exc), retry_after=_parse_retry_after(exc.response.headers)
+                    ) from exc
+                if exc.response.status_code == 401:
+                    await self._refresh_token_if_needed(gen)
             if log:
                 log.warning(
                     f"[strava] Download{account}: {activity_id!r}"
                     f" - failed to fetch photo list: {exc}"
                 )
-            return []
+            raise TransientDownloadError(str(exc)) from exc
         except Exception as exc:
             if log:
                 log.warning(
                     f"[strava] Download{account}: {activity_id!r}"
                     f" - failed to fetch photo list: {exc}"
                 )
-            return []
+            raise TransientDownloadError(str(exc)) from exc
+
+    async def _fetch_photos(
+        self, client: Client, activity_id: int, gen: int
+    ) -> list[MediaItem]:
+        log = self._tracker.sync_logger
+        account = f" ({self.user_label})" if self.user_label else ""
+        photos = await self._fetch_photo_list(client, activity_id, gen)
         items: list[MediaItem] = []
-        for i, photo in enumerate(photos or [], 1):
+        for i, photo in enumerate(photos, 1):
             url = (photo.urls or {}).get("2048") or (photo.urls or {}).get("100")
             if not url:
                 continue
@@ -334,7 +368,7 @@ class StravaConnector(ServiceConnector):
                         f"[strava] Download{account}: {activity_id!r}"
                         f" - failed to download photo #{i}: {exc}"
                     )
-                continue
+                raise TransientDownloadError(str(exc)) from exc
             items.append(
                 MediaItem(
                     content=content,
@@ -349,19 +383,15 @@ class StravaConnector(ServiceConnector):
         client = self._require_client()
         log = self._tracker.sync_logger
         activity_id = int(meta.external_id)
+        gen = self._token_generation  # capture before any API call
 
         try:
             raw = await _run_with_timeout(
                 asyncio.to_thread(client.get_activity, activity_id)
             )
         except requests.RequestException as exc:
-            if (
-                isinstance(exc, requests.HTTPError)
-                and exc.response is not None
-                and exc.response.status_code == 429
-            ):
-                retry_after = _parse_retry_after(exc.response.headers)
-                raise RateLimitError(str(exc), retry_after=retry_after) from exc
+            if isinstance(exc, requests.HTTPError):
+                await self._raise_for_http_error(exc, gen)
             raise TransientDownloadError(str(exc)) from exc
         description: str | None = getattr(raw, "description", None) or None
 
@@ -378,17 +408,12 @@ class StravaConnector(ServiceConnector):
             no_streams = True
             streams = None
         except requests.RequestException as exc:
-            if (
-                isinstance(exc, requests.HTTPError)
-                and exc.response is not None
-                and exc.response.status_code == 429
-            ):
-                retry_after = _parse_retry_after(exc.response.headers)
-                raise RateLimitError(str(exc), retry_after=retry_after) from exc
+            if isinstance(exc, requests.HTTPError):
+                await self._raise_for_http_error(exc, gen)
             raise TransientDownloadError(str(exc)) from exc
 
         has_photos = (getattr(raw, "total_photo_count", None) or 0) > 0
-        media = await self._fetch_photos(client, activity_id) if has_photos else []
+        media = await self._fetch_photos(client, activity_id, gen) if has_photos else []
 
         if no_streams or not _stream_data(streams, "time"):
             if log:

@@ -101,17 +101,24 @@ class _RateLimitState:
         self._unlock_at: float = 0.0
         self._new_pause: bool = False
         self._pause_version: int = 0
+        self._last_pause_s: float = 0.0
 
-    def record_429(self) -> None:
+    def record_429(self, retry_after: float) -> None:
         loop = asyncio.get_running_loop()
         now = loop.time()
-        new_unlock_at = now + _RATE_LIMIT_PAUSE_S
+        pause = max(_RATE_LIMIT_PAUSE_S, retry_after)
+        new_unlock_at = now + pause
         was_expired = self._unlock_at <= now
         if new_unlock_at > self._unlock_at:
             self._unlock_at = new_unlock_at
+            self._last_pause_s = pause
             self._pause_version += 1
             if was_expired:
                 self._new_pause = True
+
+    @property
+    def last_pause_s(self) -> float:
+        return self._last_pause_s
 
     def take_pause_notification(self) -> bool:
         """Returns True the first time after each new pause period starts."""
@@ -236,8 +243,8 @@ class SyncExecutor:
                     return await connector.download_activity(item.meta), False
                 except ActivityUnavailableError:
                     return None, True
-                except RateLimitError:
-                    rate_state.record_429()
+                except RateLimitError as exc:
+                    rate_state.record_429(exc.retry_after)
                     raise
                 except TransientDownloadError:
                     if pad:
@@ -368,7 +375,7 @@ class SyncExecutor:
                 ):
                     log.info(
                         f"[download] {source_id}{account}:"
-                        f" pausing all downloads for {_RATE_LIMIT_PAUSE_S:.0f}s"
+                        f" pausing all downloads for {rate_state.last_pause_s:.0f}s"
                     )
                 continue
             await self._on_download_success(

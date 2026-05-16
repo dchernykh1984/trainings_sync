@@ -5,7 +5,6 @@ import io
 import itertools
 import logging
 import os
-import urllib.request
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from datetime import date, datetime, timedelta, timezone
@@ -23,7 +22,9 @@ from app.connectors.base import (
     RateLimitError,
     ServiceConnector,
     TransientDownloadError,
+    _fetch_url_bytes,
     _run_with_timeout,
+    attach_debug_logging,
 )
 from app.credentials.base import StravaCredentials
 from app.tracking.tracker import TaskTracker
@@ -60,17 +61,14 @@ class _TimeoutHTTPAdapter(HTTPAdapter):
         return super().send(request, **kwargs)
 
 
-def _make_strava_session() -> requests.Session:
+def _make_strava_session(log_fn=None) -> requests.Session:
     session = requests.Session()
     adapter = _TimeoutHTTPAdapter()
     session.mount("https://", adapter)
     session.mount("http://", adapter)
+    if log_fn is not None:
+        attach_debug_logging(session, log_fn)
     return session
-
-
-def _download_bytes(url: str) -> bytes:
-    with urllib.request.urlopen(url, timeout=_PHOTO_DOWNLOAD_TIMEOUT_S) as resp:  # noqa: S310
-        return resp.read()
 
 
 def _stream_data(streams: Any, key: str) -> list | None:
@@ -204,13 +202,14 @@ class StravaConnector(ServiceConnector):
             f"Strava ({self._credentials.client_id}): login", total=1
         )
         log = self._tracker.sync_logger
+        log_fn = log.debug if log else None
         if log:
             log.info(f"[strava] Login: client_id={self._credentials.client_id}")
         try:
             token_info = await _run_with_timeout(
                 asyncio.to_thread(
                     Client(
-                        requests_session=_make_strava_session()
+                        requests_session=_make_strava_session(log_fn)
                     ).refresh_access_token,
                     client_id=self._credentials.client_id,
                     client_secret=self._credentials.client_secret,
@@ -225,7 +224,7 @@ class StravaConnector(ServiceConnector):
             self._credentials = new_credentials
             self._client = Client(
                 access_token=token_info["access_token"],
-                requests_session=_make_strava_session(),
+                requests_session=_make_strava_session(log_fn),
             )
             try:
                 athlete = await _run_with_timeout(
@@ -360,7 +359,12 @@ class StravaConnector(ServiceConnector):
                 continue
             try:
                 content = await _run_with_timeout(
-                    asyncio.to_thread(_download_bytes, url)
+                    asyncio.to_thread(
+                        _fetch_url_bytes,
+                        url,
+                        _PHOTO_DOWNLOAD_TIMEOUT_S,
+                        log.debug if log else None,
+                    )
                 )
             except Exception as exc:
                 if log:

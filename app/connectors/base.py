@@ -2,13 +2,95 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+import time
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
-from typing import Literal, TypeVar
+from typing import Any, Literal, TypeVar
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
+
+import requests
 
 from app.tracking.tracker import TaskTracker
+
+_SENSITIVE_PARAMS = frozenset(
+    {
+        "access_token",
+        "client_secret",
+        "refresh_token",
+        "code",
+        "token",
+        "key",
+        "secret",
+        "X-Amz-Algorithm",
+        "X-Amz-Credential",
+        "X-Amz-Date",
+        "X-Amz-Expires",
+        "X-Amz-Signature",
+        "X-Amz-SignedHeaders",
+        "X-Amz-Security-Token",
+        "AWSAccessKeyId",
+        "Signature",
+        "Key-Pair-Id",
+        "Policy",
+    }
+)
+
+
+def _redact_url(url: str) -> str:
+    parsed = urlparse(url)
+    if not parsed.query:
+        return url
+    params = parse_qs(parsed.query, keep_blank_values=True)
+    redacted = {
+        k: ["REDACTED"] if k in _SENSITIVE_PARAMS else v for k, v in params.items()
+    }
+    return urlunparse(parsed._replace(query=urlencode(redacted, doseq=True)))
+
+
+def attach_debug_logging(session: Any, log_fn: Any) -> None:
+    """Patch session.send so every request is logged: success and network failures."""
+    original_send = session.send
+
+    def _send(request: Any, **kwargs: Any) -> Any:
+        t0 = time.monotonic()
+        try:
+            resp = original_send(request, **kwargs)
+            log_fn(
+                f"[http] {request.method} {_redact_url(request.url)}"
+                f" -> {resp.status_code} ({time.monotonic() - t0:.2f}s)"
+            )
+            return resp
+        except Exception as exc:
+            log_fn(
+                f"[http] {request.method} {_redact_url(request.url)}"
+                f" -> {type(exc).__name__} ({time.monotonic() - t0:.2f}s)"
+            )
+            raise
+
+    session.send = _send  # type: ignore[method-assign]
+
+
+def _fetch_url_bytes(url: str, timeout: float, log_fn: Any = None) -> bytes:
+    """GET url and return content bytes, logging success and failure to log_fn."""
+    t0 = time.monotonic()
+    try:
+        resp = requests.get(url, timeout=timeout)
+        resp.raise_for_status()
+        if log_fn is not None:
+            log_fn(
+                f"[http] GET {_redact_url(url)}"
+                f" -> {resp.status_code} ({time.monotonic() - t0:.2f}s)"
+            )
+        return bytes(resp.content)
+    except Exception as exc:
+        if log_fn is not None:
+            log_fn(
+                f"[http] GET {_redact_url(url)}"
+                f" -> {type(exc).__name__} ({time.monotonic() - t0:.2f}s)"
+            )
+        raise
 
 
 class ActivityUnavailableError(Exception):

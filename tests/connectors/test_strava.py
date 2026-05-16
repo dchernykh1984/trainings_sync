@@ -1089,26 +1089,6 @@ class TestDownloadActivityObjectNotFound:
         assert any("[strava]" in m and "minimal TCX fallback" in m for m in msgs)
 
 
-class TestDownloadBytes:
-    def test_reads_response_body_with_timeout(self) -> None:
-        from app.connectors.strava import _PHOTO_DOWNLOAD_TIMEOUT_S, _download_bytes
-
-        mock_resp = MagicMock()
-        mock_resp.__enter__ = lambda s: s
-        mock_resp.__exit__ = MagicMock(return_value=False)
-        mock_resp.read.return_value = b"image-data"
-
-        with patch(
-            "app.connectors.strava.urllib.request.urlopen", return_value=mock_resp
-        ) as mock_urlopen:
-            result = _download_bytes("https://example.com/photo.jpg")
-
-        assert result == b"image-data"
-        mock_urlopen.assert_called_once_with(
-            "https://example.com/photo.jpg", timeout=_PHOTO_DOWNLOAD_TIMEOUT_S
-        )
-
-
 def _make_photo(
     url: str = "https://photos.strava.com/photo.jpg", caption: str | None = None
 ) -> MagicMock:
@@ -1136,7 +1116,7 @@ class TestDownloadActivityPhotos:
                 side_effect=_call_sync,
             ),
             patch(
-                "app.connectors.strava._download_bytes",
+                "app.connectors.strava._fetch_url_bytes",
                 side_effect=[b"bytes-1", b"bytes-2"],
             ),
         ):
@@ -1284,7 +1264,7 @@ class TestDownloadActivityPhotos:
                 side_effect=_call_sync,
             ),
             patch(
-                "app.connectors.strava._download_bytes",
+                "app.connectors.strava._fetch_url_bytes",
                 side_effect=OSError("download failed"),
             ),
             pytest.raises(TransientDownloadError),
@@ -1333,7 +1313,7 @@ class TestDownloadActivityPhotos:
                 side_effect=_call_sync,
             ),
             patch(
-                "app.connectors.strava._download_bytes",
+                "app.connectors.strava._fetch_url_bytes",
                 return_value=b"photo-bytes",
             ),
         ):

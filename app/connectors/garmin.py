@@ -7,6 +7,7 @@ import tempfile
 import zipfile
 from datetime import date, datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import requests as _requests
 from garminconnect import Garmin  # type: ignore[import-untyped]
@@ -20,7 +21,9 @@ from app.connectors.base import (
     MediaItem,
     ServiceConnector,
     TransientDownloadError,
+    _fetch_url_bytes,
     _run_with_timeout,
+    attach_debug_logging,
 )
 from app.credentials.base import Credentials
 from app.tracking.tracker import TaskTracker
@@ -61,12 +64,6 @@ def _list_activity_photos(client: Garmin, activity_id: int) -> list[dict]:
     return result if isinstance(result, list) else []
 
 
-def _download_garmin_photo(url: str) -> bytes:
-    resp = _requests.get(url, timeout=30)
-    resp.raise_for_status()
-    return bytes(resp.content)
-
-
 def _upload_photo_to_activity(
     client: Garmin, activity_id: int, content: bytes, index: int
 ) -> None:
@@ -89,6 +86,20 @@ def _set_activity_description(
         json={"activityId": activity_id, "description": description},
         api=True,
     )
+
+
+def _attach_garmin_session_logging(garmin: Garmin, log_fn: Any) -> None:
+    """Attach debug HTTP logging to the post-login garminconnect sessions.
+
+    Called after client.login() completes. Garmin login strategies create
+    temporary requests/curl_cffi sessions internally that we intentionally
+    do not intercept -- monkeypatching credential-exchange internals is brittle
+    and those sessions are not relevant for debugging sync API traffic.
+    """
+    for _attr in ("cs", "_api_session"):
+        _sess = getattr(garmin.client, _attr, None)
+        if _sess is not None and hasattr(_sess, "send"):
+            attach_debug_logging(_sess, log_fn)
 
 
 async def _ids_on_date(client: Garmin, date_str: str) -> set[int]:
@@ -163,6 +174,7 @@ class GarminConnector(ServiceConnector):
             raise
         if log:
             log.info(f"[garmin] Login: success ({self._credentials.login})")
+            _attach_garmin_session_logging(client, log.debug)
         self._client = client
         await self._tracker.advance(task_name)
         await self._tracker.finish(task_name)
@@ -245,7 +257,9 @@ class GarminConnector(ServiceConnector):
                 continue
             try:
                 content = await _run_with_timeout(
-                    asyncio.to_thread(_download_garmin_photo, url)
+                    asyncio.to_thread(
+                        _fetch_url_bytes, url, 30.0, log.debug if log else None
+                    )
                 )
             except Exception as exc:
                 if log:

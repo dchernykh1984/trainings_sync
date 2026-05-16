@@ -212,9 +212,11 @@ class SyncExecutor:
         log: SyncLogger | None,
         *,
         pad: bool,
+        attempt: int = 0,
     ) -> tuple[Activity | None, bool]:
         """Try one download. Re-checks rate limit after acquiring the semaphore."""
         loop = asyncio.get_running_loop()
+        _start_logged = False
         while True:
             await rate_state.wait_if_limited()
             version = rate_state.snapshot_version()
@@ -222,6 +224,13 @@ class SyncExecutor:
             try:
                 if rate_state.snapshot_version() != version:
                     continue  # new 429 since we waited; loop back to wait
+                if attempt > 0 and not _start_logged and log:
+                    log.info(
+                        f"[download] {source_id}{account}:"
+                        f" {item.meta.external_id!r} - attempt"
+                        f" {attempt + 1}/{_DOWNLOAD_ATTEMPTS} starting"
+                    )
+                    _start_logged = True
                 t0 = loop.time()
                 try:
                     return await connector.download_activity(item.meta), False
@@ -327,12 +336,6 @@ class SyncExecutor:
         for attempt in range(_DOWNLOAD_ATTEMPTS):
             if attempt > 0:
                 await asyncio.sleep(next_sleep)
-                if log:
-                    log.info(
-                        f"[download] {source_id}{account}:"
-                        f" {item.meta.external_id!r} - attempt"
-                        f" {attempt + 1}/{_DOWNLOAD_ATTEMPTS} starting"
-                    )
             next_sleep = _DOWNLOAD_RETRY_DELAY_S
             try:
                 activity, _ = await self._attempt_download(
@@ -344,6 +347,7 @@ class SyncExecutor:
                     account,
                     log,
                     pad=not advanced,
+                    attempt=attempt,
                 )
             except TransientDownloadError as exc:
                 last_exc = exc

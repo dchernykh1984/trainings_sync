@@ -915,6 +915,30 @@ class TestSyncExecutorTracking:
         assert any(abs(s - _RATE_LIMIT_PAUSE_S) < 1.0 for s in sleep_calls)
         assert cache.has("a1", "garmin")
 
+    async def test_rate_limit_error_respects_server_retry_after_when_longer(
+        self, cache: ActivityCache
+    ) -> None:
+        from app.connectors.base import RateLimitError
+
+        long_retry = _RATE_LIMIT_PAUSE_S + 300.0
+        conn = _make_conn()
+        conn.list_activities = AsyncMock(return_value=[_meta("a1")])
+        conn.download_activity = AsyncMock(
+            side_effect=[RateLimitError("429", retry_after=long_retry), _activity("a1")]
+        )
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), conn)],
+            destinations=[],
+            cache=cache,
+        )
+        sleep_calls: list[float] = []
+        with patch(
+            "asyncio.sleep", new=AsyncMock(side_effect=lambda s: sleep_calls.append(s))
+        ):
+            await executor.run(_START, _END)
+        assert any(abs(s - long_retry) < 1.0 for s in sleep_calls)
+        assert cache.has("a1", "garmin")
+
     async def test_rate_limit_error_defers_progress_advance(
         self, cache: ActivityCache
     ) -> None:
@@ -1087,6 +1111,33 @@ class TestSyncExecutorTracking:
         pause_msgs = [m for m in info_msgs if "pausing" in m]
         assert len(pause_msgs) == 1
         assert str(int(_RATE_LIMIT_PAUSE_S)) in pause_msgs[0]
+
+    async def test_rate_limit_pause_log_shows_server_retry_after_when_longer(
+        self, cache: ActivityCache
+    ) -> None:
+        from app.connectors.base import RateLimitError
+
+        long_retry = _RATE_LIMIT_PAUSE_S + 300.0
+        conn = _make_conn()
+        conn.list_activities = AsyncMock(return_value=[_meta("a1")])
+        conn.download_activity = AsyncMock(
+            side_effect=[RateLimitError("429", retry_after=long_retry), _activity("a1")]
+        )
+        log = MagicMock()
+        tracker = _make_tracker()
+        tracker.sync_logger = log
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), conn)],
+            destinations=[],
+            cache=cache,
+            tracker=tracker,
+        )
+        with patch("asyncio.sleep", new=AsyncMock()):
+            await executor.run(_START, _END)
+        info_msgs = [call.args[0] for call in log.info.call_args_list]
+        pause_msgs = [m for m in info_msgs if "pausing" in m]
+        assert len(pause_msgs) == 1
+        assert str(int(long_retry)) in pause_msgs[0]
 
     async def test_retry_attempt_start_logged_at_info(
         self, cache: ActivityCache

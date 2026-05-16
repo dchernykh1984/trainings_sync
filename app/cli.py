@@ -174,10 +174,16 @@ async def _run_sync(
         if isinstance(c, StravaConnectorConfig)
     }
 
+    has_strava = bool(strava_cred_map)
     print(
         f"Sync started: {_current_run_timestamp()}\n"
-        f"Sync log: {sync_logger.path}\n"
-        "If progress appears frozen, check the log file above for details."
+        f"Sync log: {sync_logger.path}"
+        + (
+            "\nStrava rate limits may cause pauses in syncing - check logs and your"
+            " current limits on page https://www.strava.com/settings/api"
+            if has_strava
+            else ""
+        )
     )
     download_failures = 0
     with ConsoleRenderer() as renderer:

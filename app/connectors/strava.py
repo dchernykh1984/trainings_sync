@@ -5,6 +5,8 @@ import io
 import itertools
 import logging
 import os
+import threading
+import time
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from datetime import date, datetime, timedelta, timezone
@@ -32,15 +34,18 @@ from app.tracking.tracker import TaskTracker
 os.environ.setdefault("SILENCE_TOKEN_WARNINGS", "true")
 logging.getLogger("stravalib").setLevel(logging.ERROR)
 
+_log = logging.getLogger(__name__)
+
 _STREAM_TYPES = ["time", "latlng", "altitude", "heartrate", "cadence", "watts"]
 _GPX_NS = "http://www.topografix.com/GPX/1/1"
 _TPX_NS = "http://www.garmin.com/xmlschemas/TrackPointExtension/v1"
 _TCD_NS = "http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2"
 _AE_NS = "http://www.garmin.com/xmlschemas/ActivityExtension/v2"
 
-
 _PHOTO_DOWNLOAD_TIMEOUT_S: int = 30
 _REQUEST_TIMEOUT_S: float = 30.0
+_CALL_API_MAX_ATTEMPTS: int = 3
+_UPLOAD_POLL_INTERVAL_S: float = 1.0
 
 
 def _parse_retry_after(headers: Any, default: float = 900.0) -> float:
@@ -48,6 +53,245 @@ def _parse_retry_after(headers: Any, default: float = 900.0) -> float:
         return float(headers.get("Retry-After", default))
     except (ValueError, TypeError):
         return default
+
+
+def _parse_retry_after_optional(headers: Any) -> float | None:
+    try:
+        value = headers.get("Retry-After")
+        return float(value) if value is not None else None
+    except (ValueError, TypeError):
+        return None
+
+
+def _parse_rate_limit_pair(value: str | None) -> tuple[int, int] | None:
+    if value is None:
+        return None
+    try:
+        parts = [int(x.strip()) for x in value.split(",")]
+        if len(parts) >= 2:
+            return parts[0], parts[1]
+    except (ValueError, TypeError):
+        pass
+    return None
+
+
+def _format_utc_resume_time(pause_s: float) -> str:
+    resume_dt = datetime.fromtimestamp(time.time() + pause_s, tz=timezone.utc)
+    return resume_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+class _StravaRateLimiter:
+    """Tracks Strava API rate-limit state from response headers and throttles calls."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        # All usage/limit buckets start as None; wait_if_needed ignores unknown buckets.
+        # Missing/malformed headers keep the previous valid value; bad data never zeroes
+        # a bucket.
+        self._limit_15min: int | None = None
+        self._usage_15min: int | None = None
+        self._limit_daily: int | None = None
+        self._usage_daily: int | None = None
+        self._read_limit_15min: int | None = None
+        self._read_usage_15min: int | None = None
+        self._read_limit_daily: int | None = None
+        self._read_usage_daily: int | None = None
+        # Reset timestamps: after these pass, stale usage is zeroed under lock.
+        self._reset_time_15min: float = self._next_quarter_hour_ts()
+        self._reset_time_daily: float = self._next_midnight_utc_ts()
+
+    @staticmethod
+    def _next_quarter_hour_ts() -> float:
+        now = time.time()
+        dt = datetime.fromtimestamp(now, tz=timezone.utc)
+        seconds_into_slot = (
+            (dt.minute % 15) * 60 + dt.second + dt.microsecond / 1_000_000
+        )
+        return now + (15 * 60 - seconds_into_slot)
+
+    @staticmethod
+    def _next_midnight_utc_ts() -> float:
+        now = time.time()
+        dt = datetime.fromtimestamp(now, tz=timezone.utc)
+        tomorrow = (dt + timedelta(days=1)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        return tomorrow.timestamp()
+
+    def _seconds_to_next_quarter_hour(self) -> float:
+        return max(1.0, self._next_quarter_hour_ts() - time.time())
+
+    def _seconds_to_midnight_utc(self) -> float:
+        return max(1.0, self._next_midnight_utc_ts() - time.time())
+
+    def update_from_headers(self, response: Any) -> None:
+        """Called from session.send hook (in thread). Updates rate-limit state.
+
+        Parsing and state updates happen under lock; logging happens after lock
+        release to avoid holding the lock during I/O.
+        """
+        headers = getattr(response, "headers", {})
+        warnings: list[str] = []
+        with self._lock:
+            any_usage_parsed = False
+            for limit_hdr, usage_hdr, is_read in [
+                ("X-RateLimit-Limit", "X-RateLimit-Usage", False),
+                ("X-ReadRateLimit-Limit", "X-ReadRateLimit-Usage", True),
+            ]:
+                raw_limit = headers.get(limit_hdr)
+                limit_pair = _parse_rate_limit_pair(raw_limit)
+                if raw_limit is not None and limit_pair is None:
+                    warnings.append(f"malformed {limit_hdr}: {raw_limit!r}")
+                elif limit_pair is not None:
+                    if is_read:
+                        self._read_limit_15min, self._read_limit_daily = limit_pair
+                    else:
+                        self._limit_15min, self._limit_daily = limit_pair
+
+                raw_usage = headers.get(usage_hdr)
+                usage_pair = _parse_rate_limit_pair(raw_usage)
+                if raw_usage is not None and usage_pair is None:
+                    warnings.append(f"malformed {usage_hdr}: {raw_usage!r}")
+                elif usage_pair is not None:
+                    any_usage_parsed = True
+                    if is_read:
+                        self._read_usage_15min, self._read_usage_daily = usage_pair
+                    else:
+                        self._usage_15min, self._usage_daily = usage_pair
+
+            # Refresh reset timestamps whenever we receive fresh usage data.
+            # This prevents the stale check in wait_if_needed from immediately
+            # zeroing out usage that was just parsed from the current window.
+            if any_usage_parsed:
+                self._reset_time_15min = self._next_quarter_hour_ts()
+                self._reset_time_daily = self._next_midnight_utc_ts()
+
+        for w in warnings:
+            _log.debug("[strava] rate limiter: %s", w)
+
+    def retry_after_for_429(
+        self,
+        retry_after_header: float | None = None,
+        is_non_upload: bool = True,
+    ) -> float:
+        """Compute pause duration when a real 429 is received.
+
+        Checks daily buckets first (longer wait wins). Falls back to next
+        quarter-hour even when all buckets are unknown. Uses Retry-After header
+        as an additional lower bound.
+
+        is_non_upload mirrors the same flag in wait_if_needed: upload requests
+        (is_non_upload=False) are not subject to X-ReadRateLimit-* limits.
+        """
+        margin = 2
+        with self._lock:
+            daily_near = (
+                self._usage_daily is not None
+                and self._limit_daily is not None
+                and self._usage_daily >= self._limit_daily - margin
+            ) or (
+                is_non_upload
+                and (
+                    self._read_usage_daily is not None
+                    and self._read_limit_daily is not None
+                    and self._read_usage_daily >= self._read_limit_daily - margin
+                )
+            )
+            if daily_near:
+                pause = self._seconds_to_midnight_utc()
+            else:
+                pause = self._seconds_to_next_quarter_hour()
+        if retry_after_header is not None:
+            pause = max(pause, retry_after_header)
+        return pause
+
+    async def wait_if_needed(
+        self,
+        is_non_upload: bool,
+        log_fn: Any,
+        in_flight_margin: int,
+    ) -> None:
+        """Proactively sleep before an API call if we are near the rate limit.
+
+        is_non_upload=True  -- checks both overall and X-ReadRateLimit buckets.
+        is_non_upload=False -- checks only overall buckets (POST /uploads etc.).
+
+        Stale usage is zeroed under lock when the reset window has passed so that
+        wait_if_needed does not re-sleep after a window reset.
+        """
+        while True:
+            with self._lock:
+                now = time.time()
+                # Stale-check: zero expired window usage (mutates state under lock).
+                if now >= self._reset_time_15min:
+                    self._usage_15min = 0
+                    self._read_usage_15min = 0
+                    self._reset_time_15min = self._next_quarter_hour_ts()
+                if now >= self._reset_time_daily:
+                    self._usage_daily = 0
+                    self._read_usage_daily = 0
+                    self._reset_time_daily = self._next_midnight_utc_ts()
+
+                pause, reason = self._compute_needed_pause(
+                    is_non_upload, in_flight_margin
+                )
+
+            if pause <= 0:
+                return
+
+            if log_fn:
+                log_fn(
+                    f"[strava] {reason}, pausing {pause:.0f}s"
+                    f" until {_format_utc_resume_time(pause)}"
+                )
+            await asyncio.sleep(pause)
+            # Re-check after waking: another task may have updated state.
+
+    def _compute_needed_pause(
+        self, is_non_upload: bool, margin: int
+    ) -> tuple[float, str]:
+        """Return (pause_s, reason). Must be called under self._lock."""
+        # Daily buckets first (longer wait wins).
+        if (
+            self._usage_daily is not None
+            and self._limit_daily is not None
+            and self._usage_daily >= self._limit_daily - margin
+        ):
+            return (
+                self._seconds_to_midnight_utc(),
+                f"daily limit reached ({self._usage_daily}/{self._limit_daily})",
+            )
+        if is_non_upload and (
+            self._read_usage_daily is not None
+            and self._read_limit_daily is not None
+            and self._read_usage_daily >= self._read_limit_daily - margin
+        ):
+            return (
+                self._seconds_to_midnight_utc(),
+                f"daily non-upload limit reached"
+                f" ({self._read_usage_daily}/{self._read_limit_daily})",
+            )
+        # 15-minute buckets.
+        if (
+            self._usage_15min is not None
+            and self._limit_15min is not None
+            and self._usage_15min >= self._limit_15min - margin
+        ):
+            return (
+                self._seconds_to_next_quarter_hour(),
+                f"15-min limit reached ({self._usage_15min}/{self._limit_15min})",
+            )
+        if is_non_upload and (
+            self._read_usage_15min is not None
+            and self._read_limit_15min is not None
+            and self._read_usage_15min >= self._read_limit_15min - margin
+        ):
+            return (
+                self._seconds_to_next_quarter_hour(),
+                f"15-min non-upload limit reached"
+                f" ({self._read_usage_15min}/{self._read_limit_15min})",
+            )
+        return 0.0, ""
 
 
 class _TimeoutHTTPAdapter(HTTPAdapter):
@@ -61,13 +305,43 @@ class _TimeoutHTTPAdapter(HTTPAdapter):
         return super().send(request, **kwargs)
 
 
-def _make_strava_session(log_fn=None) -> requests.Session:
+def _attach_strava_rate_limiter(
+    session: requests.Session,
+    rate_limiter: _StravaRateLimiter,
+) -> None:
+    """Wrap session.send to update rate-limit state and raise RateLimitError on 429.
+
+    This is the outer hook; attach_debug_logging must be called first so that
+    the debug log fires before RateLimitError is raised.
+
+    The hook does NOT sleep -- all waits happen in the async event loop via _call_api.
+    Transport exceptions (ConnectionError etc.) still propagate after debug logging.
+    """
+    original_send = session.send
+
+    def _send(request: Any, **kwargs: Any) -> Any:
+        resp = original_send(request, **kwargs)
+        rate_limiter.update_from_headers(resp)
+        if resp.status_code == 429:
+            retry_after = _parse_retry_after_optional(resp.headers) or 0.0
+            raise RateLimitError("strava 429", retry_after=retry_after)
+        return resp
+
+    session.send = _send  # type: ignore[method-assign]
+
+
+def _make_strava_session(
+    log_fn: Any = None,
+    rate_limiter: _StravaRateLimiter | None = None,
+) -> requests.Session:
     session = requests.Session()
     adapter = _TimeoutHTTPAdapter()
     session.mount("https://", adapter)
     session.mount("http://", adapter)
     if log_fn is not None:
-        attach_debug_logging(session, log_fn)
+        attach_debug_logging(session, log_fn)  # inner hook: debug log
+    if rate_limiter is not None:
+        _attach_strava_rate_limiter(session, rate_limiter)  # outer hook: rate limiter
     return session
 
 
@@ -185,6 +459,10 @@ class StravaConnector(ServiceConnector):
         self._athlete_name: str = ""
         self._token_generation: int = 0
         self._token_refresh_lock: asyncio.Lock = asyncio.Lock()
+        # Created once; shared across all Strava sessions for this connector's lifetime.
+        # NOTE: per-connector-instance. Two connectors sharing one client_id would need
+        # a shared limiter keyed by client_id.
+        self._rate_limiter: _StravaRateLimiter = _StravaRateLimiter()
 
     @property
     def user_label(self) -> str:
@@ -197,6 +475,52 @@ class StravaConnector(ServiceConnector):
             raise RuntimeError("Not logged in - call login() first")
         return self._client
 
+    async def _call_api(
+        self,
+        fn: Any,
+        *args: Any,
+        is_non_upload: bool = True,
+        **kwargs: Any,
+    ) -> Any:
+        """Rate-limit-aware wrapper around every Strava API call.
+
+        Waits proactively before each attempt, retries on 429 (RateLimitError from
+        the session hook), re-raises HTTPError for 401 and other codes so call sites
+        can handle token refresh as before.
+        """
+        log = self._tracker.sync_logger
+        log_fn = log.info if log else None
+        for attempt in range(_CALL_API_MAX_ATTEMPTS):
+            await self._rate_limiter.wait_if_needed(
+                is_non_upload=is_non_upload,
+                log_fn=log_fn,
+                in_flight_margin=self._max_concurrent,
+            )
+            try:
+                return await _run_with_timeout(asyncio.to_thread(fn, *args, **kwargs))
+            except RateLimitError as exc:
+                # Raised by the session.send hook; limiter state already updated.
+                if attempt == _CALL_API_MAX_ATTEMPTS - 1:
+                    # Last attempt: raise immediately rather than sleeping for up to
+                    # 24 h and then failing anyway.
+                    raise TransientDownloadError(
+                        f"strava 429 after {_CALL_API_MAX_ATTEMPTS} retries"
+                    ) from exc
+                retry_after_header = exc.retry_after if exc.retry_after > 0 else None
+                pause = self._rate_limiter.retry_after_for_429(
+                    retry_after_header, is_non_upload=is_non_upload
+                )
+                if log:
+                    log.warning(
+                        f"[strava] 429 received, pausing {pause:.0f}s"
+                        f" until {_format_utc_resume_time(pause)}"
+                    )
+                await asyncio.sleep(pause)
+            except requests.HTTPError:
+                # 401 and other HTTP errors propagate to call-site error handling
+                # (_raise_for_http_error handles 401 token refresh).
+                raise
+
     async def login(self) -> None:
         task_name = await self._tracker.add_task(
             f"Strava ({self._credentials.client_id}): login", total=1
@@ -206,15 +530,19 @@ class StravaConnector(ServiceConnector):
         if log:
             log.info(f"[strava] Login: client_id={self._credentials.client_id}")
         try:
-            token_info = await _run_with_timeout(
-                asyncio.to_thread(
-                    Client(
-                        requests_session=_make_strava_session(log_fn)
-                    ).refresh_access_token,
-                    client_id=self._credentials.client_id,
-                    client_secret=self._credentials.client_secret,
-                    refresh_token=self._credentials.refresh_token,
-                )
+            # Inject session via constructor; stravalib uses client.protocol.rsession.
+            tmp_client = Client(
+                rate_limit_requests=False,
+                requests_session=_make_strava_session(
+                    log_fn, rate_limiter=self._rate_limiter
+                ),
+            )
+            token_info = await self._call_api(
+                tmp_client.refresh_access_token,
+                is_non_upload=False,
+                client_id=self._credentials.client_id,
+                client_secret=self._credentials.client_secret,
+                refresh_token=self._credentials.refresh_token,
             )
             new_credentials = StravaCredentials(
                 client_id=self._credentials.client_id,
@@ -224,11 +552,14 @@ class StravaConnector(ServiceConnector):
             self._credentials = new_credentials
             self._client = Client(
                 access_token=token_info["access_token"],
-                requests_session=_make_strava_session(log_fn),
+                rate_limit_requests=False,
+                requests_session=_make_strava_session(
+                    log_fn, rate_limiter=self._rate_limiter
+                ),
             )
             try:
-                athlete = await _run_with_timeout(
-                    asyncio.to_thread(self._client.get_athlete)
+                athlete = await self._call_api(
+                    self._client.get_athlete, is_non_upload=True
                 )
                 self._athlete_id = str(athlete.id) if athlete.id is not None else ""
                 parts = [athlete.firstname or "", athlete.lastname or ""]
@@ -283,8 +614,9 @@ class StravaConnector(ServiceConnector):
         try:
             it = iter(client.get_activities(after=after, before=before))
             while True:
-                batch: list = await _run_with_timeout(
-                    asyncio.to_thread(lambda: list(itertools.islice(it, _page_size)))
+                batch: list = await self._call_api(
+                    lambda: list(itertools.islice(it, _page_size)),
+                    is_non_upload=True,
                 )
                 if not batch or batch[0].id in seen_ids:
                     break
@@ -319,10 +651,9 @@ class StravaConnector(ServiceConnector):
         log = self._tracker.sync_logger
         account = f" ({self.user_label})" if self.user_label else ""
         try:
-            return await _run_with_timeout(
-                asyncio.to_thread(
-                    lambda: list(client.get_activity_photos(activity_id, size=2048))
-                )
+            return await self._call_api(
+                lambda: list(client.get_activity_photos(activity_id, size=2048)),
+                is_non_upload=True,
             )
         except requests.HTTPError as exc:
             if exc.response is not None:
@@ -390,30 +721,31 @@ class StravaConnector(ServiceConnector):
         gen = self._token_generation  # capture before any API call
 
         try:
-            raw = await _run_with_timeout(
-                asyncio.to_thread(client.get_activity, activity_id)
+            raw = await self._call_api(
+                client.get_activity, activity_id, is_non_upload=True
             )
+        except requests.HTTPError as exc:
+            await self._raise_for_http_error(exc, gen)
+            raise TransientDownloadError(str(exc)) from exc
         except requests.RequestException as exc:
-            if isinstance(exc, requests.HTTPError):
-                await self._raise_for_http_error(exc, gen)
             raise TransientDownloadError(str(exc)) from exc
         description: str | None = getattr(raw, "description", None) or None
 
         no_streams = False
         try:
-            streams = await _run_with_timeout(
-                asyncio.to_thread(
-                    client.get_activity_streams,
-                    activity_id,
-                    types=_STREAM_TYPES,
-                )
+            streams = await self._call_api(
+                client.get_activity_streams,
+                activity_id,
+                is_non_upload=True,
+                types=_STREAM_TYPES,
             )
         except ObjectNotFound:
             no_streams = True
             streams = None
+        except requests.HTTPError as exc:
+            await self._raise_for_http_error(exc, gen)
+            raise TransientDownloadError(str(exc)) from exc
         except requests.RequestException as exc:
-            if isinstance(exc, requests.HTTPError):
-                await self._raise_for_http_error(exc, gen)
             raise TransientDownloadError(str(exc)) from exc
 
         has_photos = (getattr(raw, "total_photo_count", None) or 0) > 0
@@ -459,24 +791,29 @@ class StravaConnector(ServiceConnector):
     ) -> str | None:
         client = self._require_client()
         log = self._tracker.sync_logger
-        uploader = await _run_with_timeout(
-            asyncio.to_thread(
-                client.upload_activity,
+        # Lambda recreates BytesIO on each attempt: requests consumes file-like
+        # objects when preparing multipart uploads, so a retry must start fresh.
+        uploader = await self._call_api(
+            lambda: client.upload_activity(
                 activity_file=io.BytesIO(activity.content),
                 data_type=activity.format,  # type: ignore[arg-type]
                 name=activity.name,
-            )
+            ),
+            is_non_upload=False,
         )
-        result = await _run_with_timeout(asyncio.to_thread(uploader.wait))
+        # Replace blocking uploader.wait() (uses time.sleep) with async polling
+        # so each poll goes through the rate limiter and the event loop stays live.
+        while uploader.activity_id is None:
+            await self._call_api(uploader.poll, is_non_upload=True)
+            await asyncio.sleep(_UPLOAD_POLL_INTERVAL_S)
+        uploaded_id = uploader.activity_id
         if activity.description:
-            uploaded_id = getattr(result, "id", None) if result is not None else None
             if uploaded_id:
-                await _run_with_timeout(
-                    asyncio.to_thread(
-                        client.update_activity,
-                        uploaded_id,
-                        description=activity.description,
-                    )
+                await self._call_api(
+                    client.update_activity,
+                    uploaded_id,
+                    is_non_upload=True,
+                    description=activity.description,
                 )
             elif log:
                 log.warning(

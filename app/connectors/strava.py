@@ -87,7 +87,7 @@ def _parse_rate_limit_pair(value: str | None) -> tuple[int, int] | None:
 
 def _format_utc_resume_time(pause_s: float) -> str:
     resume_dt = datetime.fromtimestamp(time.time() + pause_s, tz=timezone.utc)
-    return resume_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    return resume_dt.strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
 
 def _fmt_bucket(usage: int | None, limit: int | None) -> str:

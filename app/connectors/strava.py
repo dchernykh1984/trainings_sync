@@ -20,6 +20,7 @@ from stravalib.exc import ObjectNotFound
 from app.connectors.base import (
     Activity,
     ActivityMeta,
+    ActivityUnavailableError,
     MediaItem,
     RateLimitError,
     ServiceConnector,
@@ -707,10 +708,49 @@ class StravaConnector(ServiceConnector):
             for a in raw
         ]
 
+    async def _fetch_activity_detail(
+        self, client: Client, activity_id: int, gen: int
+    ) -> Any:
+        try:
+            return await self._call_api(
+                client.get_activity, activity_id, is_non_upload=True
+            )
+        except requests.HTTPError as exc:
+            await self._raise_for_http_error(exc, gen)
+            status = exc.response.status_code if exc.response is not None else 0
+            if status in (403, 404):
+                raise ActivityUnavailableError(str(exc)) from exc
+            raise TransientDownloadError(str(exc)) from exc
+        except requests.RequestException as exc:
+            raise TransientDownloadError(str(exc)) from exc
+
+    async def _fetch_activity_streams(
+        self, client: Client, activity_id: int, gen: int
+    ) -> tuple[Any, bool]:
+        """Returns (streams, no_streams). no_streams=True means minimal TCX fallback."""
+        try:
+            streams = await self._call_api(
+                client.get_activity_streams,
+                activity_id,
+                is_non_upload=True,
+                types=_STREAM_TYPES,
+            )
+            return streams, False
+        except ObjectNotFound:
+            return None, True
+        except requests.HTTPError as exc:
+            await self._raise_for_http_error(exc, gen)
+            status = exc.response.status_code if exc.response is not None else 0
+            if status in (403, 404):
+                return None, True
+            raise TransientDownloadError(str(exc)) from exc
+        except requests.RequestException as exc:
+            raise TransientDownloadError(str(exc)) from exc
+
     async def _fetch_photo_list(
         self, client: Client, activity_id: int, gen: int
     ) -> list:
-        """Fetch raw photo list; raises TransientDownloadError on all errors."""
+        """Fetch raw photo list. Returns [] on 403/404 (best-effort media)."""
         log = self._tracker.sync_logger
         account = f" ({self.user_label})" if self.user_label else ""
         try:
@@ -726,6 +766,14 @@ class StravaConnector(ServiceConnector):
                     ) from exc
                 if exc.response.status_code == 401:
                     await self._refresh_token_if_needed(gen)
+                if exc.response.status_code in (403, 404):
+                    if log:
+                        log.warning(
+                            f"[strava] Download{account}: {activity_id!r}"
+                            f" - photo list unavailable ({exc.response.status_code}),"
+                            f" skipping media"
+                        )
+                    return []
             if log:
                 log.warning(
                     f"[strava] Download{account}: {activity_id!r}"
@@ -760,6 +808,21 @@ class StravaConnector(ServiceConnector):
                         log.debug if log else None,
                     )
                 )
+            except requests.HTTPError as exc:
+                status = exc.response.status_code if exc.response is not None else 0
+                if status in (403, 404):
+                    if log:
+                        log.warning(
+                            f"[strava] Download{account}: {activity_id!r}"
+                            f" - photo #{i} unavailable ({status}), skipping"
+                        )
+                    continue
+                if log:
+                    log.warning(
+                        f"[strava] Download{account}: {activity_id!r}"
+                        f" - failed to download photo #{i}: {exc}"
+                    )
+                raise TransientDownloadError(str(exc)) from exc
             except Exception as exc:
                 if log:
                     log.warning(
@@ -783,33 +846,11 @@ class StravaConnector(ServiceConnector):
         activity_id = int(meta.external_id)
         gen = self._token_generation  # capture before any API call
 
-        try:
-            raw = await self._call_api(
-                client.get_activity, activity_id, is_non_upload=True
-            )
-        except requests.HTTPError as exc:
-            await self._raise_for_http_error(exc, gen)
-            raise TransientDownloadError(str(exc)) from exc
-        except requests.RequestException as exc:
-            raise TransientDownloadError(str(exc)) from exc
+        raw = await self._fetch_activity_detail(client, activity_id, gen)
         description: str | None = getattr(raw, "description", None) or None
-
-        no_streams = False
-        try:
-            streams = await self._call_api(
-                client.get_activity_streams,
-                activity_id,
-                is_non_upload=True,
-                types=_STREAM_TYPES,
-            )
-        except ObjectNotFound:
-            no_streams = True
-            streams = None
-        except requests.HTTPError as exc:
-            await self._raise_for_http_error(exc, gen)
-            raise TransientDownloadError(str(exc)) from exc
-        except requests.RequestException as exc:
-            raise TransientDownloadError(str(exc)) from exc
+        streams, no_streams = await self._fetch_activity_streams(
+            client, activity_id, gen
+        )
 
         has_photos = (getattr(raw, "total_photo_count", None) or 0) > 0
         media = await self._fetch_photos(client, activity_id, gen) if has_photos else []

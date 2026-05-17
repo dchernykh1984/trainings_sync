@@ -1,5 +1,10 @@
 # trainings-sync
 
+> [!WARNING]
+> If your Strava sync appears frozen or stalled, you have most likely hit Strava API rate limits.
+> Check the sync log file for rate limit messages and review your current usage on the [Strava API settings page](https://www.strava.com/settings/api).
+> See the [Strava rate limits documentation](https://developers.strava.com/docs/rate-limits/) for details.
+
 CLI tool for syncing training activities between Garmin Connect and a local folder (FIT/GPX/TCX). Strava upload support is also available.
 
 ## Setup

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import date
 
-from app.connectors.base import ServiceConnector
+from app.connectors.base import ActivityMeta, ServiceConnector
 from app.core.cache import ActivityCache
 from app.core.config import SyncGroupConfig
 from app.core.connector_factory import resolve_group_destinations, resolve_group_sources
@@ -28,12 +28,15 @@ class SyncOrchestrator:
         self._login_tasks = login_tasks
 
     async def run(self, start: date, end: date, *, force: bool = False) -> int:
+        list_cache: dict[tuple[str, date, date], list[ActivityMeta]] = {}
+
         # Collect unique source IDs in declaration order across all groups.
         unique_source_ids: list[str] = list(
             dict.fromkeys(src.id for group in self._groups for src in group.sources)
         )
         source_executors = [
-            self._build_source_executor(src_id) for src_id in unique_source_ids
+            self._build_source_executor(src_id, list_cache)
+            for src_id in unique_source_ids
         ]
 
         # Phase 1: download each source exactly once, in parallel.
@@ -45,7 +48,7 @@ class SyncOrchestrator:
         )
 
         # Phase 2: upload phase per group, built after source downloads complete.
-        executors = [(g, self._build_executor(g)) for g in self._groups]
+        executors = [(g, self._build_executor(g, list_cache)) for g in self._groups]
         conn_locks: dict[str, asyncio.Lock] = {
             cid: asyncio.Lock() for cid in self._connectors
         }
@@ -58,7 +61,11 @@ class SyncOrchestrator:
 
         return sum(ex.download_failures for ex in source_executors)
 
-    def _build_source_executor(self, source_id: str) -> SyncExecutor:
+    def _build_source_executor(
+        self,
+        source_id: str,
+        list_cache: dict[tuple[str, date, date], list[ActivityMeta]],
+    ) -> SyncExecutor:
         connector = self._connectors[source_id]
         return SyncExecutor(
             sources=[(SourceSpec(source_id=source_id, priority=1), connector)],
@@ -67,9 +74,14 @@ class SyncOrchestrator:
             tracker=self._tracker,
             task_prefix="",
             login_tasks=self._login_tasks,
+            list_cache=list_cache,
         )
 
-    def _build_executor(self, group: SyncGroupConfig) -> SyncExecutor:
+    def _build_executor(
+        self,
+        group: SyncGroupConfig,
+        list_cache: dict[tuple[str, date, date], list[ActivityMeta]],
+    ) -> SyncExecutor:
         return SyncExecutor(
             sources=resolve_group_sources(group, self._connectors),
             destinations=resolve_group_destinations(
@@ -79,6 +91,7 @@ class SyncOrchestrator:
             tracker=self._tracker,
             task_prefix=f"{group.id}: ",
             login_tasks=self._login_tasks,
+            list_cache=list_cache,
         )
 
     async def _download_source_phase(

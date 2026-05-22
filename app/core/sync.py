@@ -149,6 +149,7 @@ class SyncExecutor:
         tracker: TaskTracker | None = None,
         task_prefix: str = "",
         login_tasks: dict[str, asyncio.Task[None]] | None = None,
+        list_cache: dict[tuple[str, date, date], list[ActivityMeta]] | None = None,
     ) -> None:
         source_ids = [spec.source_id for spec, _ in sources]
         if len(source_ids) != len(set(source_ids)):
@@ -164,6 +165,7 @@ class SyncExecutor:
         self._tracker = tracker
         self._task_prefix = task_prefix
         self._login_tasks = login_tasks
+        self._list_cache = list_cache
         self._download_failures: int = 0
 
     @property
@@ -493,11 +495,18 @@ class SyncExecutor:
         start: date,
         end: date,
     ) -> list[ActivityMeta]:
+        if self._list_cache is not None:
+            key = (connector_id, start, end)
+            if key in self._list_cache:
+                return self._list_cache[key]
         if self._login_tasks is not None:
             login_task = self._login_tasks.get(connector_id)
             if login_task is not None:
                 await login_task
-        return await connector.list_activities(start, end)
+        result = await connector.list_activities(start, end)
+        if self._list_cache is not None:
+            self._list_cache[(connector_id, start, end)] = result
+        return result
 
     async def _do_download(
         self,
@@ -797,6 +806,33 @@ class SyncExecutor:
             f" to {dest_id} (not supported)",
         )
 
+    def _build_upload_activity(
+        self,
+        entry: CacheEntry,
+        borrowed_descriptions: dict[tuple[str, str], str] | None,
+        borrowed_media: dict[tuple[str, str], list[MediaItem]] | None,
+    ) -> Activity:
+        content = self._cache.read_content(entry)
+        description = entry.description
+        if description is None and borrowed_descriptions is not None:
+            description = borrowed_descriptions.get(
+                (entry.external_id, entry.source_id)
+            )
+        media = self._cache.read_media(entry)
+        if not media and borrowed_media is not None:
+            media = borrowed_media.get((entry.external_id, entry.source_id), [])
+        return Activity(
+            external_id=entry.external_id,
+            name=entry.name,
+            sport_type=entry.sport_type,
+            start_time=entry.start_time,
+            elapsed_s=entry.elapsed_s,
+            content=content,
+            format=entry.format,
+            description=description,
+            media=tuple(media),
+        )
+
     async def _upload_to_dest(
         self,
         dest_id: str,
@@ -809,27 +845,11 @@ class SyncExecutor:
         log = self._tracker.sync_logger if self._tracker is not None else None
         dest_label = connector.user_label
         dest_suffix = f" ({dest_label})" if dest_label else ""
+        any_uploaded = False
         try:
             for entry in entries:
-                content = self._cache.read_content(entry)
-                description = entry.description
-                if description is None and borrowed_descriptions is not None:
-                    description = borrowed_descriptions.get(
-                        (entry.external_id, entry.source_id)
-                    )
-                media = self._cache.read_media(entry)
-                if not media and borrowed_media is not None:
-                    media = borrowed_media.get((entry.external_id, entry.source_id), [])
-                activity = Activity(
-                    external_id=entry.external_id,
-                    name=entry.name,
-                    sport_type=entry.sport_type,
-                    start_time=entry.start_time,
-                    elapsed_s=entry.elapsed_s,
-                    content=content,
-                    format=entry.format,
-                    description=description,
-                    media=tuple(media),
+                activity = self._build_upload_activity(
+                    entry, borrowed_descriptions, borrowed_media
                 )
                 local_path = await connector.upload_activity(
                     activity,
@@ -840,6 +860,7 @@ class SyncExecutor:
                         entry.external_id, dest_id, len(activity.media), tracking
                     )
                 self._cache.mark_uploaded(entry, dest_id, local_path=local_path)
+                any_uploaded = True
                 if log:
                     result = local_path if local_path is not None else "ok"
                     src_label = self._source_user_label(entry.source_id)
@@ -855,8 +876,18 @@ class SyncExecutor:
             if tracking is not None:
                 await tracking[0].fail(tracking[1], error=str(exc))
             raise
+        finally:
+            if any_uploaded:
+                self._invalidate_list_cache(dest_id)
         if tracking is not None:
             await tracking[0].finish(tracking[1])
+
+    def _invalidate_list_cache(self, dest_id: str) -> None:
+        if self._list_cache is None:
+            return
+        stale = [k for k in self._list_cache if k[0] == dest_id]
+        for k in stale:
+            del self._list_cache[k]
 
     async def _tracked_compute_borrowed_media(
         self, candidates: list[CacheEntry]

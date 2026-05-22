@@ -660,8 +660,36 @@ class SyncExecutor:
                 await tracking[0].advance(tracking[1])
         return by_dest
 
-    def _compute_borrowed_media(
-        self, candidates: list[CacheEntry]
+    def _collect_donor_media(
+        self,
+        winner: CacheEntry,
+        donors: list[CacheEntry],
+        log: SyncLogger | None,
+    ) -> list[MediaItem]:
+        seen_urls: set[str] = set()
+        collected: list[MediaItem] = []
+        for donor in donors:
+            donor_media = self._cache.read_media(donor)
+            before = len(collected)
+            for item in donor_media:
+                if item.url and item.url in seen_urls:
+                    continue
+                if item.url:
+                    seen_urls.add(item.url)
+                collected.append(item)
+            added = len(collected) - before
+            if log and added:
+                log.debug(
+                    f"[upload-plan] {winner.source_id}: {winner.external_id!r}"
+                    f" borrows {added} media item(s)"
+                    f" from {donor.source_id}: {donor.external_id!r}"
+                )
+        return collected
+
+    async def _compute_borrowed_media(
+        self,
+        candidates: list[CacheEntry],
+        tracking: tuple[TaskTracker, str] | None = None,
     ) -> dict[tuple[str, str], list[MediaItem]]:
         source_priority = {spec.source_id: spec.priority for spec, _ in self._sources}
         source_order = {spec.source_id: i for i, (spec, _) in enumerate(self._sources)}
@@ -671,6 +699,8 @@ class SyncExecutor:
 
         result: dict[tuple[str, str], list[MediaItem]] = {}
         for winner in candidates:
+            if tracking is not None:
+                await tracking[0].advance(tracking[1])
             if self._cache.has_media(winner):
                 continue
             winner_key = (
@@ -699,24 +729,7 @@ class SyncExecutor:
             )
             if not donors:
                 continue
-            seen_urls: set[str] = set()
-            collected: list[MediaItem] = []
-            for donor in donors:
-                donor_media = self._cache.read_media(donor)
-                before = len(collected)
-                for item in donor_media:
-                    if item.url and item.url in seen_urls:
-                        continue
-                    if item.url:
-                        seen_urls.add(item.url)
-                    collected.append(item)
-                added = len(collected) - before
-                if log and added:
-                    log.debug(
-                        f"[upload-plan] {winner.source_id}: {winner.external_id!r}"
-                        f" borrows {added} media item(s)"
-                        f" from {donor.source_id}: {donor.external_id!r}"
-                    )
+            collected = self._collect_donor_media(winner, donors, log)
             if collected:
                 result[(winner.external_id, winner.source_id)] = collected
         return result
@@ -829,6 +842,30 @@ class SyncExecutor:
         if tracking is not None:
             await tracking[0].finish(tracking[1])
 
+    async def _tracked_compute_borrowed_media(
+        self, candidates: list[CacheEntry]
+    ) -> dict[tuple[str, str], list[MediaItem]]:
+        tracker = self._tracker
+        borrow_task: str | None = None
+        borrow_tracking: tuple[TaskTracker, str] | None = None
+        if tracker is not None and candidates:
+            borrow_task = await tracker.add_task(
+                f"{self._task_prefix}Sync: compute borrowed media",
+                total=len(candidates),
+            )
+            borrow_tracking = (tracker, borrow_task)
+        try:
+            result = await self._compute_borrowed_media(
+                candidates, tracking=borrow_tracking
+            )
+        except Exception as exc:
+            if borrow_task is not None and tracker is not None:
+                await tracker.fail(borrow_task, error=str(exc))
+            raise
+        if borrow_task is not None and tracker is not None:
+            await tracker.finish(borrow_task)
+        return result
+
     async def _do_upload(self, start: date, end: date) -> None:
         tracker = self._tracker
         candidates = self._get_candidates(start, end)
@@ -853,7 +890,7 @@ class SyncExecutor:
             return
 
         borrowed_descriptions = self._compute_borrowed_descriptions(candidates)
-        borrowed_media = self._compute_borrowed_media(candidates)
+        borrowed_media = await self._tracked_compute_borrowed_media(candidates)
 
         tracker = self._tracker
         dest_map = {dest_id: conn for dest_id, conn in self._destinations}

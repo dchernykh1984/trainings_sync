@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import bisect
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from app.connectors.base import (
@@ -697,6 +698,15 @@ class SyncExecutor:
         fallback_s = self._planner.fallback_s
         log = self._tracker.sync_logger if self._tracker is not None else None
 
+        donor_pool = sorted(
+            (e for e in candidates if self._cache.has_media(e)),
+            key=lambda e: e.start_time,
+        )
+        donor_starts: list[datetime] = [e.start_time for e in donor_pool]
+        max_donor_elapsed = max(
+            (e.elapsed_s or fallback_s for e in donor_pool), default=fallback_s
+        )
+
         result: dict[tuple[str, str], list[MediaItem]] = {}
         for winner in candidates:
             if tracking is not None:
@@ -707,12 +717,18 @@ class SyncExecutor:
                 source_priority.get(winner.source_id, _UNKNOWN_PRIORITY),
                 source_order.get(winner.source_id, _UNKNOWN_ORDER),
             )
+            winner_elapsed = winner.elapsed_s or fallback_s
+            winner_end = winner.start_time + timedelta(seconds=winner_elapsed)
+            lo = bisect.bisect_left(
+                donor_starts,
+                winner.start_time - timedelta(seconds=max_donor_elapsed),
+            )
+            hi = bisect.bisect_left(donor_starts, winner_end)
             donors = sorted(
                 (
                     other
-                    for other in candidates
+                    for other in donor_pool[lo:hi]
                     if other.source_id != winner.source_id
-                    and self._cache.has_media(other)
                     and (
                         source_priority.get(other.source_id, _UNKNOWN_PRIORITY),
                         source_order.get(other.source_id, _UNKNOWN_ORDER),

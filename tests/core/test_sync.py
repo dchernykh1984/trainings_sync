@@ -2294,6 +2294,25 @@ class TestLoginPipelining:
 
         assert call_log == ["login-d", "list-d"]
 
+    async def test_list_cache_hit_skips_connector_call(
+        self, cache: ActivityCache
+    ) -> None:
+        list_cache: dict[tuple[str, date, date], list[ActivityMeta]] = {
+            ("garmin", _START, _END): [_meta()]
+        }
+        conn = _source_conn()
+        conn.list_activities = AsyncMock(return_value=[])
+
+        executor = SyncExecutor(
+            sources=[(_spec("garmin", priority=1), conn)],
+            destinations=[],
+            cache=cache,
+            list_cache=list_cache,
+        )
+        await executor.run(_START, _END)
+
+        conn.list_activities.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # Phase API
@@ -2398,3 +2417,60 @@ class TestUploadPhase:
         await executor.upload_phase(_START, _END)
 
         assert dest.upload_activity.await_count == 2
+
+    async def test_list_cache_invalidated_after_upload_to_dest(
+        self, cache: ActivityCache
+    ) -> None:
+        cache.put(_entry("act-1", "garmin"), b"content")
+        list_cache: dict[tuple[str, date, date], list[ActivityMeta]] = {}
+        dest = _dest_conn()
+        executor = SyncExecutor(
+            sources=[(_spec("garmin", priority=1), _source_conn())],
+            destinations=[("local", dest)],
+            cache=cache,
+            list_cache=list_cache,
+        )
+
+        await executor.upload_phase(_START, _END)
+
+        dest.upload_activity.assert_awaited_once()
+        assert ("local", _START, _END) not in list_cache
+
+    async def test_stale_list_cache_not_reused_across_upload_groups(
+        self, cache: ActivityCache
+    ) -> None:
+        # Simulate two sequential upload groups sharing list_cache.
+        # Group A uploads act-1 to garmin-dest; list_cache for garmin-dest is
+        # then invalidated. Group B must re-fetch from the connector (which now
+        # returns act-1 as already present) and must NOT re-upload it.
+        cache.put(_entry("act-1", "garmin"), b"content")
+        list_cache: dict[tuple[str, date, date], list[ActivityMeta]] = {}
+
+        dest_after_group_a = [_meta("act-1")]
+
+        dest = _dest_conn()
+        # First call returns empty (act-1 not yet there); second returns act-1.
+        dest.list_activities = AsyncMock(side_effect=[[], dest_after_group_a])
+
+        # Group A upload
+        executor_a = SyncExecutor(
+            sources=[(_spec("garmin", priority=1), _source_conn())],
+            destinations=[("garmin-dest", dest)],
+            cache=cache,
+            list_cache=list_cache,
+        )
+        await executor_a.upload_phase(_START, _END)
+        assert dest.upload_activity.await_count == 1
+        assert ("garmin-dest", _START, _END) not in list_cache
+
+        # Group B upload -- same list_cache, act-1 now in dest list
+        cache.mark_refresh("garmin")  # allow re-plan
+        executor_b = SyncExecutor(
+            sources=[(_spec("garmin", priority=1), _source_conn())],
+            destinations=[("garmin-dest", dest)],
+            cache=cache,
+            list_cache=list_cache,
+        )
+        await executor_b.upload_phase(_START, _END)
+        # act-1 is now visible in the freshly fetched list -- no second upload
+        assert dest.upload_activity.await_count == 1

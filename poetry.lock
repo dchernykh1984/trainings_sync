@@ -1786,18 +1786,6 @@ files = [
 generate = ["openpyxl (==3.1.5)", "requests"]
 
 [[package]]
-name = "pytz"
-version = "2026.1.post1"
-description = "World timezone definitions, modern and historical"
-optional = false
-python-versions = "*"
-groups = ["main"]
-files = [
-    {file = "pytz-2026.1.post1-py2.py3-none-any.whl", hash = "sha256:f2fd16142fda348286a75e1a524be810bb05d444e5a081f37f7affc635035f7a"},
-    {file = "pytz-2026.1.post1.tar.gz", hash = "sha256:3378dde6a0c3d26719182142c56e60c7f9af7e968076f31aae569d72a0358ee1"},
-]
-
-[[package]]
 name = "pyyaml"
 version = "6.0.3"
 description = "YAML parser and emitter for Python"
@@ -1978,27 +1966,26 @@ files = [
 
 [[package]]
 name = "stravalib"
-version = "2.4"
+version = "2.5.0"
 description = "A Python package that makes it easy to access and download data from the Strava V3 REST API."
 optional = false
-python-versions = ">=3.10"
+python-versions = ">=3.11"
 groups = ["main"]
 files = [
-    {file = "stravalib-2.4-py3-none-any.whl", hash = "sha256:04ea866eb06d0de144e30fa11effc225295e04f2dc9503fb9a361bbd274b5241"},
-    {file = "stravalib-2.4.tar.gz", hash = "sha256:eb52a05f3a650a5afc57fc61ebd1936788b9b5b6f56e7e2b68fcdf198a57656f"},
+    {file = "stravalib-2.5.0-py3-none-any.whl", hash = "sha256:723422a3f06fd7f213b9b4b813f730a481fd0869b5b5e6a350f4823a1063d092"},
+    {file = "stravalib-2.5.0.tar.gz", hash = "sha256:d97a845a30c861bc65a854423b201497f0ea56ba5a763294b8d886269bbe6fe3"},
 ]
 
 [package.dependencies]
 arrow = "*"
 pint = "*"
 pydantic = ">=2.0"
-pytz = "*"
 requests = "*"
 
 [package.extras]
 build = ["build"]
 docs = ["autodoc_pydantic", "matplotlib", "myst-nb", "pydata-sphinx-theme", "sphinx", "sphinx-autobuild", "sphinx-inline-tabs", "sphinx_copybutton", "sphinx_design", "sphinx_remove_toctrees", "sphinxcontrib-mermaid", "sphinxext-opengraph"]
-lint = ["mypy", "pre-commit", "ruff", "types-Flask", "types-pytz", "types-requests"]
+lint = ["mypy", "pre-commit", "ruff", "types-Flask", "types-python-dateutil", "types-requests"]
 tests = ["pytest", "pytest-cov", "pytest-mock", "pytest-xdist", "responses"]
 
 [[package]]

@@ -1772,14 +1772,14 @@ testing = ["covdefaults (>=2.3)", "coverage (>=7.5.4)", "pytest (>=8.3.5)", "pyt
 
 [[package]]
 name = "python-fitparse"
-version = "2.1.6"
+version = "2.1.7"
 description = "Python library to parse ANT/Garmin .FIT files"
 optional = false
 python-versions = ">=3.8"
 groups = ["main"]
 files = [
-    {file = "python_fitparse-2.1.6-py3-none-any.whl", hash = "sha256:2bfe290f677b4381e61d5f3e3dcc3f6f0efef371a5ad27d31827af3dfe08b123"},
-    {file = "python_fitparse-2.1.6.tar.gz", hash = "sha256:538695cb0928ffe33dd802c40d2993d1ef4484fa05a9061eefcdfd47d8fad5b4"},
+    {file = "python_fitparse-2.1.7-py3-none-any.whl", hash = "sha256:23e26353e1c00ad058816c8c4d51df70a6b70b8f5f9bbc016a21a422503b010d"},
+    {file = "python_fitparse-2.1.7.tar.gz", hash = "sha256:a6d1b31d2cbe8599d083fc693863914f5afd757f8ef6d4291c489fea025bcb9c"},
 ]
 
 [package.extras]

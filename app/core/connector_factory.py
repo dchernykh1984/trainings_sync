@@ -6,9 +6,11 @@ from app.connectors.base import ServiceConnector
 from app.connectors.garmin import GarminConnector
 from app.connectors.local_folder import LocalFolderConnector
 from app.connectors.strava import StravaConnector
+from app.connectors.wellness_base import WellnessConnector
 from app.core.config import (
     AppConfig,
     GarminConnectorConfig,
+    LocalFolderConnectorConfig,
     StravaConnectorConfig,
     SyncGroupConfig,
 )
@@ -66,6 +68,53 @@ async def build_connectors(
             connector = LocalFolderConnector(folder=cfg.folder, tracker=tracker)
         result[cfg.id] = connector
 
+    return result
+
+
+async def build_wellness_connectors(
+    config: AppConfig,
+    provider: CredentialProvider,
+    tracker: TaskTracker,
+    activity_connectors: dict[str, ServiceConnector],
+) -> dict[str, WellnessConnector]:
+    from app.connectors.garmin_wellness import GarminWellnessConnector
+    from app.connectors.local_folder_wellness import LocalFolderWellnessConnector
+    from app.connectors.strava_wellness import StravaWellnessConnector
+
+    result: dict[str, WellnessConnector] = {}
+    for cfg in config.connectors:
+        if isinstance(cfg, GarminConnectorConfig):
+            activity_conn = activity_connectors.get(cfg.id)
+            if isinstance(activity_conn, GarminConnector):
+                connector: WellnessConnector = (
+                    GarminWellnessConnector.from_garmin_connector(
+                        cfg.id, activity_conn, tracker
+                    )
+                )
+            else:
+                continue
+        elif isinstance(cfg, StravaConnectorConfig):
+            activity_conn = activity_connectors.get(cfg.id)
+            if (
+                isinstance(activity_conn, StravaConnector)
+                and activity_conn._client is not None
+            ):
+                connector = StravaWellnessConnector(
+                    connector_id=cfg.id,
+                    strava_client=activity_conn._client,
+                    tracker=tracker,
+                )
+            else:
+                continue
+        elif isinstance(cfg, LocalFolderConnectorConfig):
+            connector = LocalFolderWellnessConnector(
+                connector_id=cfg.id,
+                folder=cfg.folder,
+                tracker=tracker,
+            )
+        else:
+            continue
+        result[cfg.id] = connector
     return result
 
 

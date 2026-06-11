@@ -92,6 +92,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="re-download activities even if already cached",
     )
+    parser.add_argument(
+        "--skip-wellness",
+        action="store_true",
+        help="skip wellness data sync",
+    )
     creds_group = parser.add_mutually_exclusive_group(required=False)
     creds_group.add_argument(
         "--creds-json",
@@ -152,6 +157,33 @@ def _validate(
             file=sys.stderr,
         )
         sys.exit(1)
+
+
+async def _run_wellness(
+    args: argparse.Namespace,
+    config: AppConfig,
+    sync_logger: SyncLogger,
+    tracker: TaskTracker,
+    provider: CredentialProvider,
+    connectors: dict,
+    start: date,
+    end: date,
+) -> None:
+    from app.core.connector_factory import build_wellness_connectors
+    from app.core.wellness_cache import WellnessCache
+    from app.core.wellness_orchestrator import WellnessOrchestrator
+
+    try:
+        wellness_cache = WellnessCache(config.cache_dir)
+        wellness_connectors = await build_wellness_connectors(
+            config, provider, tracker, connectors
+        )
+        wellness_orchestrator = WellnessOrchestrator(
+            wellness_connectors, wellness_cache, tracker
+        )
+        await wellness_orchestrator.run(start, end, force=args.force)
+    except Exception as exc:
+        sync_logger.warning(f"[wellness] sync failed: {exc}")
 
 
 async def _run_sync(
@@ -238,6 +270,11 @@ async def _run_sync(
                 if not t.done():
                     t.cancel()
             await asyncio.gather(*login_tasks.values(), return_exceptions=True)
+
+    if not getattr(args, "skip_wellness", False):
+        await _run_wellness(
+            args, config, sync_logger, tracker, provider, connectors, start, end
+        )
 
     print(f"Sync finished: {_current_run_timestamp()}")
 

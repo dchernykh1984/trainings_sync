@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from enum import Enum
 
 from app.tracking.tracker import TaskTracker
@@ -138,7 +138,5 @@ class WellnessConnector(ABC):
                 best = mid
                 hi = mid
             else:
-                from datetime import timedelta
-
                 lo = mid + timedelta(days=1)
         return best

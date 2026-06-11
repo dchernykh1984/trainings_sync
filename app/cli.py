@@ -178,6 +178,8 @@ async def _run_wellness(
         wellness_connectors = await build_wellness_connectors(
             config, provider, tracker, connectors
         )
+        for wc in wellness_connectors.values():
+            await wc.login()
         wellness_orchestrator = WellnessOrchestrator(
             wellness_connectors, wellness_cache, tracker
         )
@@ -271,10 +273,10 @@ async def _run_sync(
                     t.cancel()
             await asyncio.gather(*login_tasks.values(), return_exceptions=True)
 
-    if not getattr(args, "skip_wellness", False):
-        await _run_wellness(
-            args, config, sync_logger, tracker, provider, connectors, start, end
-        )
+        if not getattr(args, "skip_wellness", False):
+            await _run_wellness(
+                args, config, sync_logger, tracker, provider, connectors, start, end
+            )
 
     print(f"Sync finished: {_current_run_timestamp()}")
 

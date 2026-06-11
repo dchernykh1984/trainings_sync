@@ -376,7 +376,7 @@ class TestPushRecord:
 
 
 class TestFromGarminConnector:
-    def test_creates_from_connector(self, tracker: TaskTracker) -> None:
+    async def test_creates_from_connector(self, tracker: TaskTracker) -> None:
         from app.connectors.garmin import GarminConnector
 
         gc = GarminConnector(_CREDS, tracker)
@@ -384,6 +384,8 @@ class TestFromGarminConnector:
         gc._client = fake_client
         wc = GarminWellnessConnector.from_garmin_connector("garmin-main", gc, tracker)
         assert wc.connector_id == "garmin-main"
+        assert wc._client is None  # lazy: not set until login()
+        await wc.login()
         assert wc._client is fake_client
 
 

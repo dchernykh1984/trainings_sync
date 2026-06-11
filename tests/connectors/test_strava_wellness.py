@@ -54,10 +54,17 @@ def fake_strava_client() -> MagicMock:
 
 
 @pytest.fixture
+def fake_strava_connector(fake_strava_client: MagicMock) -> MagicMock:
+    conn = MagicMock()
+    conn._client = fake_strava_client
+    return conn
+
+
+@pytest.fixture
 def connector(
-    tracker: TaskTracker, fake_strava_client: MagicMock
+    tracker: TaskTracker, fake_strava_connector: MagicMock
 ) -> StravaWellnessConnector:
-    return StravaWellnessConnector("strava-main", fake_strava_client, tracker)
+    return StravaWellnessConnector("strava-main", fake_strava_connector, tracker)
 
 
 class TestConnectorId:
@@ -126,7 +133,9 @@ class TestFetchSnapshot:
         tracker_with_log = TaskTracker(_FakeRenderer(), sync_logger=log)
         client = MagicMock()
         client.get_athlete.side_effect = RuntimeError("fail")
-        c = StravaWellnessConnector("strava-main", client, tracker_with_log)
+        strava_conn = MagicMock()
+        strava_conn._client = client
+        c = StravaWellnessConnector("strava-main", strava_conn, tracker_with_log)
         result = await c.fetch_snapshot(WellnessDataType.ATHLETE_STATS)
         assert result is None
         log.debug.assert_called_once()

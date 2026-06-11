@@ -95,13 +95,10 @@ async def build_wellness_connectors(
                 continue
         elif isinstance(cfg, StravaConnectorConfig):
             activity_conn = activity_connectors.get(cfg.id)
-            if (
-                isinstance(activity_conn, StravaConnector)
-                and activity_conn._client is not None
-            ):
+            if isinstance(activity_conn, StravaConnector):
                 connector = StravaWellnessConnector(
                     connector_id=cfg.id,
-                    strava_client=activity_conn._client,
+                    strava_connector=activity_conn,
                     tracker=tracker,
                 )
             else:

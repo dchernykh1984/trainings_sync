@@ -196,7 +196,8 @@ poetry run trainings-sync \
 | `--creds-keepass PATH` | KeePass database (.kdbx) instead of a JSON file. Master password is read from `KEEPASS_PASSWORD` env var, or prompted from stdin. Not supported with Strava sources or destinations. |
 | `--start DATE`         | Start date (YYYY-MM-DD). Overrides the value in config. Defaults to `2000-01-01` if not set anywhere.                                                                     |
 | `--end DATE`           | End date (YYYY-MM-DD). Overrides the value in config. Defaults to today.                                                                                                  |
-| `--force`              | Re-download activities even if already cached.                                                                                                                            |
+| `--force`              | Re-download activities even if already cached. Also re-downloads all wellness data.                                                                                       |
+| `--skip-wellness`      | Skip wellness data sync (only sync training activities).                                                                                                                  |
 
 If a sync run is interrupted, simply run the same command again. Already downloaded activities are stored in the cache (`cache_dir` in config) and will not be re-downloaded.
 
@@ -211,6 +212,41 @@ request:
 
 When a limit is reached, the sync automatically pauses and resumes after the window resets. Your app's
 current limits are shown at [strava.com/settings/api](https://www.strava.com/settings/api).
+
+## Wellness data sync
+
+In addition to training activities, the tool automatically syncs wellness data from each configured service to local folder destinations. This happens on every run by default (use `--skip-wellness` to disable).
+
+### What is synced
+
+**From Garmin Connect** (stored under `{folder}/wellness/`):
+
+| Category | Data types |
+|---|---|
+| Sleep & recovery | `sleep`, `hrv`, `body_battery`, `body_battery_events`, `training_readiness`, `morning_training_readiness` |
+| Heart & blood | `heart_rates`, `resting_hr`, `spo2`, `blood_pressure` |
+| Stress | `stress_daily`, `all_day_stress`, `weekly_stress` |
+| Body composition | `body_composition`, `weigh_ins`, `daily_weigh_ins` |
+| Activity | `steps_daily`, `daily_steps_range`, `weekly_steps`, `floors`, `intensity_minutes`, `weekly_intensity_minutes`, `hydration`, `lifestyle_logging` |
+| Performance | `vo2max`, `lactate_threshold`, `training_status`, `endurance_score`, `running_tolerance`, `race_predictions`, `fitness_age`, `hill_score` |
+| Miscellaneous | `personal_records`, `user_summary`, `stats` |
+
+**From Strava** (snapshot data): `athlete_stats`, `athlete_zones`
+
+### Storage layout
+
+Each data type is stored as JSON files under:
+```
+{local_folder}/wellness/{data_type}/{YYYY-MM-DD}.json   # daily data
+{local_folder}/wellness/{data_type}/{start}_{end}.json  # range data
+{local_folder}/wellness/{data_type}/snapshot.json       # snapshot data
+```
+
+Wellness data is also cached in `{cache_dir}/wellness/` using the same layout. Re-running the tool only fetches dates not yet in the cache. Use `--force` to invalidate the cache and re-download everything.
+
+### Writable data types
+
+For Garmin, the following types support both reading and writing: `body_composition`, `weigh_ins`, `daily_weigh_ins`, `blood_pressure`, `hydration`. Writing back to Garmin from a local folder is not yet automated but the connectors implement the full interface.
 
 ## Contributing
 

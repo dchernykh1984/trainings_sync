@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 from app.connectors.wellness_base import (
@@ -63,15 +63,21 @@ class LocalFolderWellnessConnector(WellnessConnector):
         return json.loads(p.read_text(encoding="utf-8"))
 
     async def fetch_snapshot(self, data_type: WellnessDataType) -> dict | None:
-        p = self._data_path(data_type, "snapshot")
-        if not p.is_file():
+        type_dir = self._folder / "wellness" / data_type.value
+        if not type_dir.is_dir():
             return None
-        return json.loads(p.read_text(encoding="utf-8"))
+        files = sorted(type_dir.glob("*.json"), reverse=True)
+        if not files:
+            return None
+        return json.loads(files[0].read_text(encoding="utf-8"))
 
     async def push_record(
         self, data_type: WellnessDataType, d: date | None, data: dict
     ) -> None:
-        date_key = d.isoformat() if d is not None else "snapshot"
+        if d is not None:
+            date_key = d.isoformat()
+        else:
+            date_key = datetime.now().strftime("%Y-%m-%dT%H-%M-%S-%f")
         p = self._data_path(data_type, date_key)
         p.parent.mkdir(parents=True, exist_ok=True)
         tmp = p.with_suffix(".tmp")

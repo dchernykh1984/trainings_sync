@@ -105,14 +105,24 @@ class TestPushRecord:
         assert p.is_file()
         assert json.loads(p.read_text()) == data
 
-    async def test_push_snapshot_creates_snapshot_file(
+    async def test_push_snapshot_creates_timestamped_file(
         self, connector: LocalFolderWellnessConnector, folder: Path
     ) -> None:
         data: dict[str, list[object]] = {"records": []}
         await connector.push_record(WellnessDataType.PERSONAL_RECORDS, None, data)
-        p = folder / "wellness" / "personal_records" / "snapshot.json"
-        assert p.is_file()
-        assert json.loads(p.read_text()) == data
+        type_dir = folder / "wellness" / "personal_records"
+        files = list(type_dir.glob("*.json"))
+        assert len(files) == 1
+        assert json.loads(files[0].read_text()) == data
+
+    async def test_push_snapshot_preserves_history(
+        self, connector: LocalFolderWellnessConnector, folder: Path
+    ) -> None:
+        await connector.push_record(WellnessDataType.PERSONAL_RECORDS, None, {"v": 1})
+        await connector.push_record(WellnessDataType.PERSONAL_RECORDS, None, {"v": 2})
+        type_dir = folder / "wellness" / "personal_records"
+        files = list(type_dir.glob("*.json"))
+        assert len(files) == 2
 
     async def test_push_overwrites_existing(
         self, connector: LocalFolderWellnessConnector, folder: Path

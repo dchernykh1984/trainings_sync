@@ -68,11 +68,13 @@ class GarminWellnessConnector(WellnessConnector):
         credentials: Credentials,
         tracker: TaskTracker,
         client: Garmin | None = None,
+        parent_connector: GarminConnector | None = None,
     ) -> None:
         super().__init__(tracker)
         self._connector_id = connector_id
         self._credentials = credentials
         self._client: Garmin | None = client
+        self._parent_connector: GarminConnector | None = parent_connector
 
     @classmethod
     def from_garmin_connector(
@@ -81,13 +83,13 @@ class GarminWellnessConnector(WellnessConnector):
         garmin_connector: GarminConnector,
         tracker: TaskTracker,
     ) -> GarminWellnessConnector:
-        instance = cls(
+        return cls(
             connector_id=connector_id,
             credentials=garmin_connector._credentials,
             tracker=tracker,
-            client=garmin_connector._client,
+            client=None,
+            parent_connector=garmin_connector,
         )
-        return instance
 
     @property
     def connector_id(self) -> str:
@@ -99,6 +101,10 @@ class GarminWellnessConnector(WellnessConnector):
         return self._client
 
     async def login(self) -> None:
+        parent = getattr(self, "_parent_connector", None)
+        if parent is not None:
+            self._client = parent._client
+            return
         if self._client is not None:
             return
         task_name = await self._tracker.add_task(

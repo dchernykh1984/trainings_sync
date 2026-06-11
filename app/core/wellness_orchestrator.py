@@ -21,10 +21,12 @@ class WellnessOrchestrator:
         connectors: dict[str, WellnessConnector],
         cache: WellnessCache,
         tracker: TaskTracker,
+        login_tasks: dict[str, asyncio.Task[None]] | None = None,
     ) -> None:
         self._connectors = connectors
         self._cache = cache
         self._tracker = tracker
+        self._login_tasks: dict[str, asyncio.Task[None]] = login_tasks or {}
 
     async def run(self, start: date, end: date, *, force: bool = False) -> None:
         sources = {
@@ -40,13 +42,23 @@ class WellnessOrchestrator:
 
         dates = [start + timedelta(days=i) for i in range((end - start).days + 1)]
 
-        for src_id, source in sources.items():
+        for src_id in sources:
             if force:
                 self._cache.invalidate(src_id)
-            await self._download_from_source(source, src_id, dates, start, end)
 
-        for dest in destinations.values():
-            await self._upload_to_destination(dest, sources, dates, start, end)
+        await asyncio.gather(
+            *[
+                self._download_from_source(source, src_id, dates, start, end)
+                for src_id, source in sources.items()
+            ]
+        )
+
+        await asyncio.gather(
+            *[
+                self._upload_to_destination(dest, sources, dates, start, end)
+                for dest in destinations.values()
+            ]
+        )
 
     async def _download_from_source(
         self,
@@ -56,6 +68,14 @@ class WellnessOrchestrator:
         start: date,
         end: date,
     ) -> None:
+        login_task = self._login_tasks.get(connector_id)
+        if login_task is not None:
+            try:
+                await login_task
+            except Exception:
+                return
+            await source.login()
+
         supported = source.supported_types()
         if not supported:
             return

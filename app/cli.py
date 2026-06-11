@@ -159,7 +159,8 @@ def _validate(
         sys.exit(1)
 
 
-async def _run_wellness(
+async def _run_wellness_concurrent(
+    login_tasks: dict,
     args: argparse.Namespace,
     config: AppConfig,
     sync_logger: SyncLogger,
@@ -169,6 +170,7 @@ async def _run_wellness(
     start: date,
     end: date,
 ) -> None:
+    from app.connectors.local_folder_wellness import LocalFolderWellnessConnector
     from app.core.connector_factory import build_wellness_connectors
     from app.core.wellness_cache import WellnessCache
     from app.core.wellness_orchestrator import WellnessOrchestrator
@@ -179,11 +181,12 @@ async def _run_wellness(
             config, provider, tracker, connectors
         )
         for wc in wellness_connectors.values():
-            await wc.login()
-        wellness_orchestrator = WellnessOrchestrator(
-            wellness_connectors, wellness_cache, tracker
+            if isinstance(wc, LocalFolderWellnessConnector):
+                await wc.login()
+        wellness_orch = WellnessOrchestrator(
+            wellness_connectors, wellness_cache, tracker, login_tasks=login_tasks
         )
-        await wellness_orchestrator.run(start, end, force=args.force)
+        await wellness_orch.run(start, end, force=args.force)
     except Exception as exc:
         sync_logger.warning(f"[wellness] sync failed: {exc}")
 
@@ -266,17 +269,28 @@ async def _run_sync(
             login_tasks=login_tasks,
         )
         try:
-            download_failures = await orchestrator.run(start, end, force=args.force)
+            if not getattr(args, "skip_wellness", False):
+                download_failures, _ = await asyncio.gather(
+                    orchestrator.run(start, end, force=args.force),
+                    _run_wellness_concurrent(
+                        login_tasks,
+                        args,
+                        config,
+                        sync_logger,
+                        tracker,
+                        provider,
+                        connectors,
+                        start,
+                        end,
+                    ),
+                )
+            else:
+                download_failures = await orchestrator.run(start, end, force=args.force)
         finally:
             for t in login_tasks.values():
                 if not t.done():
                     t.cancel()
             await asyncio.gather(*login_tasks.values(), return_exceptions=True)
-
-        if not getattr(args, "skip_wellness", False):
-            await _run_wellness(
-                args, config, sync_logger, tracker, provider, connectors, start, end
-            )
 
     print(f"Sync finished: {_current_run_timestamp()}")
 

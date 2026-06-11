@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+from typing import TYPE_CHECKING
 
-from stravalib import Client as StravaClient
+if TYPE_CHECKING:
+    from app.connectors.strava import StravaConnector
 
 from app.connectors.wellness_base import (
     DataTypeSpec,
@@ -18,12 +20,16 @@ class StravaWellnessConnector(WellnessConnector):
     def __init__(
         self,
         connector_id: str,
-        strava_client: StravaClient,
+        strava_connector: StravaConnector,
         tracker: TaskTracker,
     ) -> None:
         super().__init__(tracker)
         self._connector_id = connector_id
-        self._client = strava_client
+        self._strava_connector = strava_connector
+
+    @property
+    def _client(self):  # type: ignore[override]
+        return self._strava_connector._client
 
     @property
     def connector_id(self) -> str:

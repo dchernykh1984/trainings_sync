@@ -12,7 +12,7 @@ from app.connectors.wellness_base import (
 from app.core.wellness_cache import WellnessCache
 from app.tracking.tracker import TaskTracker
 
-_MAX_CONCURRENT = 5
+_MAX_CONCURRENT = 10
 
 
 class WellnessOrchestrator:

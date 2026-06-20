@@ -35,4 +35,4 @@ repos:
         language: pygrep
         entry: '[^\x00-\x7f]'
         types_or: [python, yaml, markdown, toml, shell, json]
-        exclude: ^poetry\.lock$
+        exclude: ^uv\.lock$

@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -1122,6 +1123,12 @@ class SyncTab(QWidget):
     def _run_sync(self) -> None:
         gui_config = self._config_tab.current_config()
 
+        # When credentials come from KeePass, ask for the master password up
+        # front (on the GUI thread) - it is never stored anywhere.
+        proceed, keepass_password = self._prompt_keepass_password()
+        if not proceed:
+            return
+
         # Clear previous task rows
         while self._task_layout.count() > 1:  # keep the trailing stretch
             item = self._task_layout.takeAt(0)
@@ -1139,13 +1146,34 @@ class SyncTab(QWidget):
         sigs.task_failed.connect(self._on_task_failed)
         sigs.total_updated.connect(self._on_total_updated)
 
-        self._worker = SyncWorker(self._store, gui_config, renderer)
+        self._worker = SyncWorker(
+            self._store, gui_config, renderer, keepass_password=keepass_password
+        )
         self._worker.started_ts.connect(self._on_started)
         self._worker.finished_ts.connect(self._on_finished)
         self._worker.error_occurred.connect(self._on_error)
 
         self._run_btn.setEnabled(False)
         self._worker.start()
+
+    def _prompt_keepass_password(self) -> tuple[bool, str | None]:
+        """Return (proceed, password).
+
+        ``password`` is None when the source is not KeePass; ``proceed`` is
+        False only when the user cancels the master-password prompt.
+        """
+        source = self._store.load_credential_source()
+        if source.source != "keepass":
+            return True, None
+        password, ok = QInputDialog.getText(
+            self,
+            "KeePass master password",
+            f"Master password for {source.keepass_path}:",
+            QLineEdit.EchoMode.Password,
+        )
+        if not ok:
+            return False, None
+        return True, password
 
     def _on_started(self, ts: str) -> None:
         self._status.setText(f"Sync started: {ts}")

@@ -449,6 +449,16 @@ def test_task_row_mark_done_no_warnings(qtbot) -> None:
     assert row._bar.value() == row._bar.maximum()
 
 
+def test_task_row_status_label_fits_ok_tag(qtbot) -> None:
+    row = TaskRow("Task", total=5)
+    qtbot.addWidget(row)
+    row.mark_done([])
+    # The fixed status width must accommodate the full "[OK]" tag so the
+    # closing bracket is not clipped.
+    needed = row._status.fontMetrics().horizontalAdvance("[OK]")
+    assert row._status.minimumWidth() >= needed
+
+
 def test_task_row_mark_done_with_warnings(qtbot) -> None:
     row = TaskRow("Task", total=5)
     qtbot.addWidget(row)

@@ -92,12 +92,19 @@ class SyncWorker(QThread):
         from app.core.connector_factory import build_connectors
         from app.core.orchestrator import SyncOrchestrator
         from app.credentials.json_file import JsonFileProvider
+        from app.tracking.sync_logger import SyncLogger
         from app.tracking.tracker import TaskTracker
 
         app_config = self._store.to_app_config(self._gui_config)
         app_config.cache_dir.mkdir(parents=True, exist_ok=True)
 
-        tracker = TaskTracker(self._renderer)
+        start = _parse_date_or_default(self._gui_config.start, date(2000, 1, 1))
+        end = _parse_date_or_default(self._gui_config.end, date.today())
+        force = self._gui_config.force
+
+        sync_logger = SyncLogger(app_config.cache_dir / "sync.log")
+        sync_logger.run_start(start=start, end=end, force=force)
+        tracker = TaskTracker(self._renderer, sync_logger=sync_logger)
         provider = JsonFileProvider(path=self._store.credentials_path, tracker=tracker)
 
         strava_cred_map = {
@@ -131,10 +138,6 @@ class SyncWorker(QThread):
             login_tasks=login_tasks,
         )
         try:
-            start = _parse_date_or_default(self._gui_config.start, date(2000, 1, 1))
-            end = _parse_date_or_default(self._gui_config.end, date.today())
-            force = self._gui_config.force
-
             if self._gui_config.skip_wellness:
                 failures = await orchestrator.run(start, end, force=force)
             else:
@@ -149,6 +152,8 @@ class SyncWorker(QThread):
                 if not t.done():
                     t.cancel()
             await asyncio.gather(*login_tasks.values(), return_exceptions=True)
+            sync_logger.run_end()
+            sync_logger.close()
 
         return failures
 

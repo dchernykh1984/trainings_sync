@@ -160,6 +160,55 @@ def test_connector_dialog_ok_disabled_until_id_filled(qtbot) -> None:
     assert dlg._ok_btn.isEnabled()
 
 
+def test_connector_dialog_credential_combo_lists_configured_accounts(qtbot) -> None:
+    creds = [
+        CredentialEntry("Garmin Connect", "https://connect.garmin.com", "me@x", "p"),
+        CredentialEntry("Strava", "https://www.strava.com/api/v3", "cs", "rt"),
+    ]
+    dlg = ConnectorDialog(credentials=creds)
+    qtbot.addWidget(dlg)
+    services = [dlg._cred_service.itemText(i) for i in range(dlg._cred_service.count())]
+    assert services == ["Garmin Connect", "Strava"]
+    assert dlg._cred_service.isEditable()
+
+
+def test_connector_dialog_credential_combo_accepts_free_text(qtbot) -> None:
+    dlg = ConnectorDialog(credentials=[])
+    qtbot.addWidget(dlg)
+    dlg._cred_service.setCurrentText("Custom Service")
+    assert dlg.result_entry().credential_service == "Custom Service"
+
+
+def test_connector_dialog_selecting_service_autofills_account(qtbot) -> None:
+    creds = [
+        CredentialEntry("Garmin Connect", "https://connect.garmin.com", "me@x", "p"),
+    ]
+    dlg = ConnectorDialog(credentials=creds)
+    qtbot.addWidget(dlg)
+    dlg._cred_service.setCurrentText("Garmin Connect")
+    entry = dlg.result_entry()
+    assert entry.credential_url == "https://connect.garmin.com"
+    assert entry.credential_login == "me@x"
+
+
+def test_connector_dialog_prefilled_credentials_not_clobbered(qtbot) -> None:
+    # Opening an existing connector must keep its stored URL/login even when a
+    # matching service exists in the credentials list.
+    creds = [
+        CredentialEntry("Garmin Connect", "https://connect.garmin.com", "a@x", "p"),
+    ]
+    existing = ConnectorEntry(
+        id="g",
+        type="garmin",
+        credential_service="Garmin Connect",
+        credential_url="https://connect.garmin.com",
+        credential_login="b@x",
+    )
+    dlg = ConnectorDialog(entry=existing, credentials=creds)
+    qtbot.addWidget(dlg)
+    assert dlg.result_entry().credential_login == "b@x"
+
+
 # ---------------------------------------------------------------------------
 # SyncGroupDialog
 # ---------------------------------------------------------------------------

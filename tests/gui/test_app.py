@@ -20,6 +20,7 @@ from app.gui.app import (
     SyncWorker,
     TaskRow,
     _parse_date_or_default,
+    make_app_icon,
 )
 from app.gui.config_store import (
     ConfigStore,
@@ -630,3 +631,20 @@ def test_main_window_starts_wide_enough_for_sync_rows(
     # Wide default so the Sync tab's long task rows fit without a horizontal
     # scrollbar on startup.
     assert window.width() >= 1200
+
+
+def test_main_window_has_window_icon(qtbot, store: ConfigStore) -> None:
+    window = MainWindow(store)
+    qtbot.addWidget(window)
+    assert not window.windowIcon().isNull()
+
+
+# ---------------------------------------------------------------------------
+# Application icon
+# ---------------------------------------------------------------------------
+
+
+def test_make_app_icon_renders(qtbot) -> None:
+    icon = make_app_icon(64)
+    assert not icon.isNull()
+    assert not icon.pixmap(64, 64).isNull()

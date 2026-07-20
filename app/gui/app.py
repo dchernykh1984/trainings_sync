@@ -765,14 +765,21 @@ class ConfigTab(QWidget):
         row = self._conn_list.currentRow()
         if row < 0:
             return
-        name = self._config.connectors[row].id
+        deleted_id = self._config.connectors[row].id
         reply = QMessageBox.question(
-            self, "Delete connector", f"Delete connector {name!r}?"
+            self, "Delete connector", f"Delete connector {deleted_id!r}?"
         )
         if reply == QMessageBox.StandardButton.Yes:
             self._config.connectors.pop(row)
+            self._prune_connector_references(deleted_id)
             self._store.save_gui_config(self._config)
             self._refresh_connector_list()
+            self._refresh_group_list()
+
+    def _prune_connector_references(self, connector_id: str) -> None:
+        for group in self._config.sync_groups:
+            group.sources = [s for s in group.sources if s.id != connector_id]
+            group.destinations = [d for d in group.destinations if d != connector_id]
 
     # ------------------------------------------------------------------
     # Sync groups

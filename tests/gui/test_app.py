@@ -201,6 +201,27 @@ def test_connector_dialog_selecting_service_autofills_account(qtbot) -> None:
     assert entry.credential_login == "me@x"
 
 
+def test_connector_dialog_url_follows_selected_service(qtbot) -> None:
+    # The URL belongs to the account, so it must track the chosen service and
+    # never be an independent choice that could mismatch it.
+    from PySide6.QtWidgets import QLineEdit
+
+    creds = [
+        CredentialEntry("Garmin Connect", "https://connect.garmin.com", "g@x", "p"),
+        CredentialEntry("Strava", "https://www.strava.com/api/v3", "cs", "rt"),
+    ]
+    dlg = ConnectorDialog(credentials=creds)
+    qtbot.addWidget(dlg)
+    # URL is a derived read-only field, not a cross-service dropdown.
+    assert isinstance(dlg._cred_url, QLineEdit)
+    assert dlg._cred_url.isReadOnly()
+
+    dlg._cred_service.setCurrentText("Strava")
+    assert dlg.result_entry().credential_url == "https://www.strava.com/api/v3"
+    dlg._cred_service.setCurrentText("Garmin Connect")
+    assert dlg.result_entry().credential_url == "https://connect.garmin.com"
+
+
 def test_connector_dialog_prefilled_credentials_not_clobbered(qtbot) -> None:
     # Opening an existing connector must keep its stored URL/login even when a
     # matching service exists in the credentials list.

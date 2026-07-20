@@ -578,28 +578,29 @@ class ConnectorDialog(QDialog):
                 self._type.setCurrentIndex(idx)
         form.addRow("Type:", self._type)
 
-        # Credential fields (garmin + strava). These are editable combo boxes
-        # pre-populated with the accounts configured on the Credentials tab, so
-        # the user can pick a known account or still type a custom value.
+        # An account is identified by service + login; the URL belongs to that
+        # account (it comes from the credentials), so Service and Login are
+        # editable combos of the configured accounts while URL is derived from
+        # the selected account rather than chosen independently.
         self._cred_box = QGroupBox("Credentials")
         cred_form = QFormLayout(self._cred_box)
         self._cred_service = _editable_combo(
             sorted({c.service for c in self._credentials if c.service}),
             entry.credential_service if entry else "",
         )
-        self._cred_url = _editable_combo(
-            sorted({c.url for c in self._credentials if c.url}),
-            entry.credential_url if entry else "",
-        )
         self._cred_login = _editable_combo(
             sorted({c.login for c in self._credentials if c.login}),
             entry.credential_login if entry else "",
         )
-        # Selecting a known service auto-fills that account's URL and login.
+        self._cred_url = QLineEdit(entry.credential_url if entry else "")
+        self._cred_url.setReadOnly(True)
+        self._cred_url.setPlaceholderText("Filled from the selected account")
+        # Service/login changes re-derive the URL from the matching account.
         self._cred_service.currentTextChanged.connect(self._on_service_changed)
+        self._cred_login.currentTextChanged.connect(self._on_login_changed)
         cred_form.addRow("Service:", self._cred_service)
-        cred_form.addRow("URL:", self._cred_url)
         cred_form.addRow("Login (optional):", self._cred_login)
+        cred_form.addRow("URL:", self._cred_url)
 
         # Strava-only
         self._client_id_spin = QSpinBox()
@@ -640,13 +641,40 @@ class ConnectorDialog(QDialog):
         self._client_id_spin.setVisible(t == "strava")
         self._folder_box.setVisible(t == "local_folder")
 
-    def _on_service_changed(self, service: str) -> None:
-        match = next(
-            (c for c in self._credentials if c.service == service and c.service), None
+    def _account_for(self, service: str, login: str) -> CredentialEntry | None:
+        if not service:
+            return None
+        with_login = next(
+            (
+                c
+                for c in self._credentials
+                if c.service == service and (not login or c.login == login)
+            ),
+            None,
+        )
+        if with_login is not None:
+            return with_login
+        return next((c for c in self._credentials if c.service == service), None)
+
+    def _derive_url(self) -> None:
+        match = self._account_for(
+            self._cred_service.currentText().strip(),
+            self._cred_login.currentText().strip(),
         )
         if match is not None:
-            self._cred_url.setCurrentText(match.url)
+            self._cred_url.setText(match.url)
+
+    def _on_service_changed(self, service: str) -> None:
+        # Default the login to the picked service's account, then derive the URL.
+        match = self._account_for(service.strip(), "")
+        if match is not None:
+            self._cred_login.blockSignals(True)
             self._cred_login.setCurrentText(match.login)
+            self._cred_login.blockSignals(False)
+        self._derive_url()
+
+    def _on_login_changed(self, _login: str) -> None:
+        self._derive_url()
 
     def result_entry(self) -> ConnectorEntry:
         t = self._type.currentText()
@@ -654,7 +682,7 @@ class ConnectorDialog(QDialog):
             id=self._id.text().strip(),
             type=t,
             credential_service=self._cred_service.currentText().strip(),
-            credential_url=self._cred_url.currentText().strip(),
+            credential_url=self._cred_url.text().strip(),
             credential_login=self._cred_login.currentText().strip(),
             client_id=self._client_id_spin.value() if t == "strava" else 0,
             folder=self._folder.text().strip() if t == "local_folder" else "",

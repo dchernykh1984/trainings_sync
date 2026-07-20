@@ -610,3 +610,13 @@ def test_main_window_tab_order_sync_first(qtbot, store: ConfigStore) -> None:
     labels = [tabs.tabText(i) for i in range(tabs.count())]
     assert labels == ["Sync", "Configuration", "Credentials"]
     assert tabs.currentIndex() == 0  # Sync is the default active tab
+
+
+def test_main_window_starts_wide_enough_for_sync_rows(
+    qtbot, store: ConfigStore
+) -> None:
+    window = MainWindow(store)
+    qtbot.addWidget(window)
+    # Wide default so the Sync tab's long task rows fit without a horizontal
+    # scrollbar on startup.
+    assert window.width() >= 1200

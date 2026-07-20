@@ -1056,7 +1056,9 @@ class MainWindow(QMainWindow):
     def __init__(self, store: ConfigStore) -> None:
         super().__init__()
         self.setWindowTitle("Trainings Sync")
-        self.resize(800, 600)
+        # Wide enough that the Sync tab's task rows (long connector labels plus a
+        # fixed-width progress bar and counter) fit without a horizontal scroll.
+        self.resize(1200, 760)
 
         tabs = QTabWidget()
 

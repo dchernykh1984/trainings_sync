@@ -198,6 +198,70 @@ request:
 When a limit is reached, the sync automatically pauses and resumes after the window resets. Your app's
 current limits are shown at [strava.com/settings/api](https://www.strava.com/settings/api).
 
+## Desktop GUI
+
+If you would rather not edit JSON config files by hand, a desktop GUI is
+available. It exposes the same functionality as the CLI - credentials, sync
+configuration, and running a sync with live progress - through a windowed
+interface.
+
+### Launching
+
+```bash
+uv run trainings-sync-gui
+```
+
+On Linux the GUI needs a few Qt system libraries. On a headless or minimal
+install run:
+
+```bash
+sudo apt-get install -y libgl1 libegl1 libglib2.0-0 libdbus-1-3 \
+  libfontconfig1 libxkbcommon0
+```
+
+Unlike the CLI, the GUI does not take `--config` / `--creds-json` arguments.
+It stores everything in a fixed location under your home directory:
+
+```
+~/.config/trainings-sync/
+  config.json        # connectors, sync groups, options
+  credentials.json   # service credentials (plain JSON, same format as the CLI)
+  cache/             # activity + wellness cache and sync.log
+```
+
+### Credentials tab
+
+Manage the service logins used by the connectors. Use **Add** / **Edit** /
+**Delete** to maintain the list. Each entry has a *Service*, *URL*, *Login*,
+and *Password / Token*. Passwords are hidden while typing and masked in the
+table.
+
+- **Garmin:** *Login* is your Garmin email, *Password* is your Garmin password.
+- **Strava:** *Login* is your Client Secret, *Password / Token* is the refresh
+  token (see [Getting Strava credentials](#getting-strava-credentials) above).
+
+### Configuration tab
+
+Build the sync configuration visually:
+
+- **Connectors** - add each data source/destination. Pick a type (`garmin`,
+  `strava`, or `local_folder`); the dialog shows only the fields that type
+  needs. For Garmin/Strava the *Service* and *URL* must match a credentials
+  entry; for a local folder just provide the path. Deleting a connector also
+  removes it from any sync group that referenced it.
+- **Sync Groups** - define what syncs where. Add sources (each with a priority;
+  higher priority wins when the same activity exists in several sources) and
+  destinations, both chosen from the connectors you defined.
+- **Options** - optional custom start/end dates, *Force re-download* (ignore the
+  cache), and *Skip wellness sync*. Click **Save configuration** to persist.
+
+### Sync tab
+
+Click **Run Sync** to start. A progress bar appears for every task, mirroring
+the console output. If the run fails, the error is shown in a dialog; use
+**Show full log** to open the full `sync.log` for the traceback and details.
+The sync runs in the background, so the window stays responsive.
+
 ## Wellness data sync
 
 In addition to training activities, the tool automatically syncs wellness data from each configured service to local folder destinations. This happens on every run by default (use `--skip-wellness` to disable).

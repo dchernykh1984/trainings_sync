@@ -10,6 +10,7 @@ import pytest
 from PySide6.QtCore import Qt
 
 from app.gui.app import (
+    ConfigTab,
     ConnectorDialog,
     CredentialDialog,
     CredentialsTab,
@@ -386,6 +387,47 @@ def test_log_dialog_uses_fixed_pitch_font(qtbot, tmp_path: Path) -> None:
     edit = dlg.findChildren(QTextEdit)[0]
     mono = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
     assert edit.font().family() == mono.family()
+
+
+# ---------------------------------------------------------------------------
+# ConfigTab
+# ---------------------------------------------------------------------------
+
+
+def test_config_tab_delete_connector_prunes_group_references(
+    qtbot, monkeypatch, store: ConfigStore
+) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    store.save_gui_config(
+        GuiConfig(
+            connectors=[
+                ConnectorEntry(id="garmin", type="garmin"),
+                ConnectorEntry(id="local", type="local_folder", folder="/data"),
+            ],
+            sync_groups=[
+                SyncGroupEntry(
+                    id="g",
+                    sources=[GroupSourceEntry("garmin", 1)],
+                    destinations=["local"],
+                )
+            ],
+        )
+    )
+    tab = ConfigTab(store)
+    qtbot.addWidget(tab)
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *a, **k: QMessageBox.StandardButton.Yes,
+    )
+    tab._conn_list.setCurrentRow(0)  # garmin
+    tab._delete_connector()
+
+    reloaded = store.load_gui_config()
+    assert [c.id for c in reloaded.connectors] == ["local"]
+    assert reloaded.sync_groups[0].sources == []
+    assert reloaded.sync_groups[0].destinations == ["local"]
 
 
 # ---------------------------------------------------------------------------

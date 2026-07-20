@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QDate, Qt, QThread, Signal
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QFontDatabase
 
 if TYPE_CHECKING:
     from app.core.config import AppConfig
@@ -828,7 +828,7 @@ class LogDialog(QDialog):
         layout = QVBoxLayout(self)
         text = QTextEdit()
         text.setReadOnly(True)
-        text.setFontFamily("monospace")
+        text.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
         if log_path.exists():
             text.setPlainText(log_path.read_text(encoding="utf-8", errors="replace"))
         else:

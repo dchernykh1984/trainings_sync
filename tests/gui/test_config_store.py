@@ -14,6 +14,7 @@ from app.core.config import (
     StravaConnectorConfig,
 )
 from app.gui.config_store import (
+    CONNECTOR_TYPES,
     ConfigStore,
     ConnectorEntry,
     CredentialEntry,
@@ -566,6 +567,21 @@ def test_connector_to_app_unknown_type_raises() -> None:
     c = ConnectorEntry(id="x", type="unknown")
     with pytest.raises(ValueError, match="unknown connector type"):
         _connector_to_app(c)
+
+
+def test_every_connector_type_is_convertible() -> None:
+    # Extensibility guard: every type the GUI offers must be buildable into an
+    # AppConfig connector, so a newly-added type cannot be silently unhandled.
+    for connector_type in CONNECTOR_TYPES:
+        entry = ConnectorEntry(
+            id="x",
+            type=connector_type,
+            credential_service="svc",
+            credential_url="url",
+            folder="/tmp/data",
+        )
+        _connector_to_app(entry)  # must not raise
+        _serialize_connector(entry)  # must not raise
 
 
 def test_group_to_app() -> None:

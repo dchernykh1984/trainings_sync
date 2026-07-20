@@ -62,6 +62,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.gui.config_store import (
+    CONNECTOR_TYPES,
     ConfigStore,
     ConnectorEntry,
     CredentialEntry,
@@ -570,7 +571,7 @@ class ConnectorDialog(QDialog):
         form.addRow("ID:", self._id)
 
         self._type = QComboBox()
-        self._type.addItems(["garmin", "strava", "local_folder"])
+        self._type.addItems(list(CONNECTOR_TYPES))
         if entry:
             idx = self._type.findText(entry.type)
             if idx >= 0:

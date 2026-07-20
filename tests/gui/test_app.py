@@ -713,6 +713,67 @@ def test_sync_worker_keepass_rejects_strava_connectors(
 
 
 # ---------------------------------------------------------------------------
+# SyncTab - KeePass master-password prompt
+# ---------------------------------------------------------------------------
+
+
+def _make_sync_tab(store: ConfigStore):
+    from app.gui.app import SyncTab
+
+    return SyncTab(store, ConfigTab(store))
+
+
+def test_sync_tab_prompts_keepass_password(qtbot, monkeypatch, store) -> None:
+    from PySide6.QtWidgets import QInputDialog
+
+    store.save_credential_source(
+        CredentialSource(source="keepass", keepass_path="/x.kdbx")
+    )
+    tab = _make_sync_tab(store)
+    qtbot.addWidget(tab)
+    monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("secret-pw", True))
+    monkeypatch.setattr(SyncWorker, "start", lambda self: None)
+
+    tab._run_sync()
+    assert tab._worker is not None
+    assert tab._worker._keepass_password == "secret-pw"
+
+
+def test_sync_tab_keepass_cancel_aborts_run(qtbot, monkeypatch, store) -> None:
+    from PySide6.QtWidgets import QInputDialog
+
+    store.save_credential_source(
+        CredentialSource(source="keepass", keepass_path="/x.kdbx")
+    )
+    tab = _make_sync_tab(store)
+    qtbot.addWidget(tab)
+    started: list[bool] = []
+    monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("", False))
+    monkeypatch.setattr(SyncWorker, "start", lambda self: started.append(True))
+
+    tab._run_sync()
+    assert tab._worker is None
+    assert started == []
+
+
+def test_sync_tab_json_source_does_not_prompt(qtbot, monkeypatch, store) -> None:
+    from PySide6.QtWidgets import QInputDialog
+
+    tab = _make_sync_tab(store)
+    qtbot.addWidget(tab)
+
+    def _boom(*_a: object, **_k: object) -> object:
+        raise AssertionError("must not prompt for the JSON source")
+
+    monkeypatch.setattr(QInputDialog, "getText", _boom)
+    monkeypatch.setattr(SyncWorker, "start", lambda self: None)
+
+    tab._run_sync()
+    assert tab._worker is not None
+    assert tab._worker._keepass_password is None
+
+
+# ---------------------------------------------------------------------------
 # MainWindow
 # ---------------------------------------------------------------------------
 

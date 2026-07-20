@@ -223,8 +223,11 @@ class TaskRow(QWidget):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(4, 2, 4, 2)
 
-        self._status = QLabel("[~]")  # [~]
-        self._status.setFixedWidth(24)
+        self._status = QLabel("[~]")
+        # Size to the widest tag ("[OK]") so the closing bracket is never
+        # clipped, regardless of the platform font.
+        ok_width = self._status.fontMetrics().horizontalAdvance("[OK]")
+        self._status.setFixedWidth(ok_width + 8)
         layout.addWidget(self._status)
 
         self._label = QLabel(name)

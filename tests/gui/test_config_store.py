@@ -17,6 +17,7 @@ from app.gui.config_store import (
     ConfigStore,
     ConnectorEntry,
     CredentialEntry,
+    CredentialSource,
     GroupSourceEntry,
     GuiConfig,
     SyncGroupEntry,
@@ -126,6 +127,33 @@ def test_load_credentials_from_rejects_non_array(
     src.write_text(json.dumps({"service": "x"}), encoding="utf-8")
     with pytest.raises(ValueError, match="must contain a JSON array"):
         store.load_credentials_from(src)
+
+
+# ---------------------------------------------------------------------------
+# Credential source
+# ---------------------------------------------------------------------------
+
+
+def test_credential_source_defaults_to_json(store: ConfigStore) -> None:
+    cs = store.load_credential_source()
+    assert cs.source == "json"
+    assert cs.keepass_path == ""
+
+
+def test_save_and_load_credential_source(store: ConfigStore) -> None:
+    store.save_credential_source(
+        CredentialSource(source="keepass", keepass_path="/home/me/db.kdbx")
+    )
+    cs = store.load_credential_source()
+    assert cs.source == "keepass"
+    assert cs.keepass_path == "/home/me/db.kdbx"
+
+
+def test_credential_source_is_separate_from_gui_config(store: ConfigStore) -> None:
+    # Saving the GUI config must not clobber the credential-source file.
+    store.save_credential_source(CredentialSource(source="keepass", keepass_path="/x"))
+    store.save_gui_config(GuiConfig())
+    assert store.load_credential_source().source == "keepass"
 
 
 # ---------------------------------------------------------------------------

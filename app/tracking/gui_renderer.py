@@ -12,7 +12,6 @@ class _RendererSignals(QObject):
     progress_updated = Signal(str, int)  # name, progress
     task_done = Signal(str, list)  # name, warnings
     task_failed = Signal(str, str)  # name, error
-    task_warning = Signal(str, str)  # name, message
     total_updated = Signal(str, int)  # name, new_total
 
 
@@ -39,7 +38,7 @@ class GuiRenderer(ProgressRenderer):
         self._signals.task_failed.emit(task.name, task.error or "")
 
     def on_task_warning(self, task: Task, message: str) -> None:
-        self._signals.task_warning.emit(task.name, message)
+        pass  # warnings are accumulated in task.warnings and shown at on_task_done
 
     def on_total_updated(self, task: Task) -> None:
         self._signals.total_updated.emit(task.name, task.total or 0)

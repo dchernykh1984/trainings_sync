@@ -196,6 +196,28 @@ def test_sync_group_dialog_prefilled(qtbot) -> None:
     assert entry.destinations == ["local"]
 
 
+def test_sync_group_dialog_ignores_duplicate_source(qtbot) -> None:
+    dlg = SyncGroupDialog(connector_ids=["garmin", "strava"])
+    qtbot.addWidget(dlg)
+    dlg._src_add_combo.setCurrentText("garmin")
+    qtbot.mouseClick(dlg._src_add_btn, Qt.MouseButton.LeftButton)
+    qtbot.mouseClick(dlg._src_add_btn, Qt.MouseButton.LeftButton)
+
+    entry = dlg.result_entry()
+    assert [s.id for s in entry.sources] == ["garmin"]
+
+
+def test_sync_group_dialog_ignores_duplicate_destination(qtbot) -> None:
+    dlg = SyncGroupDialog(connector_ids=["garmin", "strava"])
+    qtbot.addWidget(dlg)
+    dlg._dst_add_combo.setCurrentText("strava")
+    qtbot.mouseClick(dlg._dst_add_btn, Qt.MouseButton.LeftButton)
+    qtbot.mouseClick(dlg._dst_add_btn, Qt.MouseButton.LeftButton)
+
+    entry = dlg.result_entry()
+    assert entry.destinations == ["strava"]
+
+
 def test_sync_group_dialog_source_id_with_colon(qtbot) -> None:
     # Connector ids may contain a colon; the source must round-trip intact.
     existing = SyncGroupEntry(

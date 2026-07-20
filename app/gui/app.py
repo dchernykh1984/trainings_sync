@@ -563,10 +563,22 @@ class SyncGroupDialog(QDialog):
         item.setData(Qt.ItemDataRole.UserRole, (cid, priority))
         return item
 
+    def _source_ids(self) -> set[str]:
+        return {
+            self._sources_widget.item(i).data(Qt.ItemDataRole.UserRole)[0]
+            for i in range(self._sources_widget.count())
+        }
+
+    def _destination_ids(self) -> set[str]:
+        return {
+            self._destinations_widget.item(i).text()
+            for i in range(self._destinations_widget.count())
+        }
+
     def _add_source(self) -> None:
         cid = self._src_add_combo.currentText()
         pri = self._src_priority.value()
-        if cid:
+        if cid and cid not in self._source_ids():
             self._sources_widget.addItem(self._make_source_item(cid, pri))
 
     def _remove_source(self) -> None:
@@ -576,7 +588,7 @@ class SyncGroupDialog(QDialog):
 
     def _add_destination(self) -> None:
         cid = self._dst_add_combo.currentText()
-        if cid:
+        if cid and cid not in self._destination_ids():
             self._destinations_widget.addItem(cid)
 
     def _remove_destination(self) -> None:

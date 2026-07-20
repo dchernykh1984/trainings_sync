@@ -32,6 +32,19 @@ class CredentialEntry:
 
 
 @dataclass
+class CredentialSource:
+    """Which backend the sync reads credentials from.
+
+    ``source`` is "json" (the built-in credentials.json managed in the GUI) or
+    "keepass" (an external .kdbx read via its path). The KeePass master password
+    is never stored here - it is prompted at sync time.
+    """
+
+    source: str = "json"  # "json" | "keepass"
+    keepass_path: str = ""
+
+
+@dataclass
 class ConnectorEntry:
     id: str
     type: str  # "garmin" | "strava" | "local_folder"
@@ -92,6 +105,29 @@ class ConfigStore:
     @property
     def _config_path(self) -> Path:
         return self._dir / "config.json"
+
+    @property
+    def _credential_source_path(self) -> Path:
+        return self._dir / "credential_source.json"
+
+    # ------------------------------------------------------------------
+    # Credential source (JSON store vs KeePass)
+    # ------------------------------------------------------------------
+
+    def load_credential_source(self) -> CredentialSource:
+        if not self._credential_source_path.exists():
+            return CredentialSource()
+        raw = json.loads(self._credential_source_path.read_text(encoding="utf-8"))
+        return CredentialSource(
+            source=raw.get("source", "json"),
+            keepass_path=raw.get("keepass_path", ""),
+        )
+
+    def save_credential_source(self, source: CredentialSource) -> None:
+        _atomic_write(
+            self._credential_source_path,
+            {"source": source.source, "keepass_path": source.keepass_path},
+        )
 
     # ------------------------------------------------------------------
     # Credentials

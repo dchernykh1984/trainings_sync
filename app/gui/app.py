@@ -86,11 +86,13 @@ class SyncWorker(QThread):
         config_store: ConfigStore,
         gui_config: GuiConfig,
         renderer: GuiRenderer,
+        keepass_password: str | None = None,
     ) -> None:
         super().__init__()
         self._store = config_store
         self._gui_config = gui_config
         self._renderer = renderer
+        self._keepass_password = keepass_password
 
     def run(self) -> None:
         ts_start = datetime.now().astimezone().isoformat(timespec="seconds")
@@ -122,9 +124,7 @@ class SyncWorker(QThread):
         sync_logger.run_start(start=start, end=end, force=force)
         try:
             tracker = TaskTracker(self._renderer, sync_logger=sync_logger)
-            provider = JsonFileProvider(
-                path=self._store.credentials_path, tracker=tracker
-            )
+            provider = self._build_provider(app_config, tracker)
 
             strava_cred_map = {
                 c.id: c.credential
@@ -135,10 +135,11 @@ class SyncWorker(QThread):
             def _on_token_refresh(
                 connector_id: str, new_creds: object, _label: str
             ) -> None:
-                provider.update_refresh_token(
-                    strava_cred_map[connector_id],
-                    new_creds.refresh_token,  # type: ignore[attr-defined]
-                )
+                if isinstance(provider, JsonFileProvider):
+                    provider.update_refresh_token(
+                        strava_cred_map[connector_id],
+                        new_creds.refresh_token,  # type: ignore[attr-defined]
+                    )
 
             cache = ActivityCache(app_config.cache_dir)
             cache.load()
@@ -214,6 +215,28 @@ class SyncWorker(QThread):
             await wellness_orch.run(start, end, force=self._gui_config.force)
         except Exception:  # noqa: S110
             pass  # wellness failures are non-fatal, mirroring CLI behaviour
+
+    def _build_provider(
+        self, app_config: AppConfig, tracker: TaskTracker
+    ) -> CredentialProvider:
+        from app.core.config import StravaConnectorConfig
+        from app.credentials.json_file import JsonFileProvider
+
+        source = self._store.load_credential_source()
+        if source.source == "keepass":
+            from app.credentials.keepass import KeePassProvider
+
+            if any(isinstance(c, StravaConnectorConfig) for c in app_config.connectors):
+                raise ValueError(
+                    "KeePass credential source does not support Strava connectors; "
+                    "use the built-in JSON store for Strava"
+                )
+            return KeePassProvider(
+                path=Path(source.keepass_path).expanduser(),
+                password=self._keepass_password or "",
+                tracker=tracker,
+            )
+        return JsonFileProvider(path=self._store.credentials_path, tracker=tracker)
 
 
 def _parse_date_or_default(value: str, default: date) -> date:

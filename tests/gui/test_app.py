@@ -680,6 +680,38 @@ def test_sync_worker_logs_and_closes_logger_on_setup_failure(
     assert "Sync run finished" in log_text  # run_end() ran in the finally block
 
 
+def test_sync_worker_keepass_rejects_strava_connectors(
+    qtbot, store: ConfigStore
+) -> None:
+    # KeePass cannot persist Strava refresh tokens, so the combination is
+    # refused (mirroring the CLI's --creds-keepass restriction).
+    store.save_credential_source(
+        CredentialSource(source="keepass", keepass_path="/x/db.kdbx")
+    )
+    gui_config = GuiConfig(
+        connectors=[
+            ConnectorEntry(
+                id="strava",
+                type="strava",
+                credential_service="Strava",
+                credential_url="https://www.strava.com/api/v3",
+                client_id=1,
+            )
+        ],
+        sync_groups=[
+            SyncGroupEntry(
+                id="g",
+                sources=[GroupSourceEntry("strava", 1)],
+                destinations=[],
+            )
+        ],
+    )
+    worker = SyncWorker(store, gui_config, GuiRenderer(), keepass_password="pw")
+
+    with pytest.raises(ValueError, match="does not support Strava"):
+        asyncio.run(worker._async_sync())
+
+
 # ---------------------------------------------------------------------------
 # MainWindow
 # ---------------------------------------------------------------------------

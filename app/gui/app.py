@@ -1012,9 +1012,12 @@ class MainWindow(QMainWindow):
         self._config_tab = ConfigTab(store)
         self._sync_tab = SyncTab(store, self._config_tab)
 
-        tabs.addTab(self._creds_tab, "Credentials")
-        tabs.addTab(self._config_tab, "Configuration")
+        # Ordered by how often each is used after initial setup: Sync (every
+        # run) first, Configuration (occasional) next, Credentials (rarely
+        # changed) last.
         tabs.addTab(self._sync_tab, "Sync")
+        tabs.addTab(self._config_tab, "Configuration")
+        tabs.addTab(self._creds_tab, "Credentials")
 
         self.setCentralWidget(tabs)
 

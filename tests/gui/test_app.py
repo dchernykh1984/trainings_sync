@@ -481,3 +481,12 @@ def test_main_window_tab_labels(qtbot, store: ConfigStore) -> None:
     assert "Credentials" in labels
     assert "Configuration" in labels
     assert "Sync" in labels
+
+
+def test_main_window_tab_order_sync_first(qtbot, store: ConfigStore) -> None:
+    window = MainWindow(store)
+    qtbot.addWidget(window)
+    tabs = window.centralWidget()
+    labels = [tabs.tabText(i) for i in range(tabs.count())]
+    assert labels == ["Sync", "Configuration", "Credentials"]
+    assert tabs.currentIndex() == 0  # Sync is the default active tab

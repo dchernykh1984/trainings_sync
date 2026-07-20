@@ -301,6 +301,46 @@ def test_credentials_tab_masks_password(qtbot, store: ConfigStore) -> None:
     assert "supersecret" not in displayed
 
 
+def test_credentials_tab_load_from_file(
+    qtbot, monkeypatch, store: ConfigStore, tmp_path: Path
+) -> None:
+    import json as _json
+
+    from PySide6.QtWidgets import QFileDialog
+
+    src = tmp_path / "creds.json"
+    src.write_text(
+        _json.dumps(
+            [{"service": "Strava", "url": "u", "login": "cs", "password": "rt"}]
+        ),
+        encoding="utf-8",
+    )
+    tab = CredentialsTab(store)
+    qtbot.addWidget(tab)
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(src), ""))
+    tab._load_from_file()
+
+    assert tab._table.rowCount() == 1
+    assert tab._table.item(0, 0).text() == "Strava"
+    # The imported credentials are persisted to the fixed store location.
+    assert store.load_credentials()[0].service == "Strava"
+
+
+def test_credentials_tab_load_from_file_cancelled_is_noop(
+    qtbot, monkeypatch, store: ConfigStore
+) -> None:
+    from PySide6.QtWidgets import QFileDialog
+
+    store.save_credentials([CredentialEntry("Keep", "u", "l", "p")])
+    tab = CredentialsTab(store)
+    qtbot.addWidget(tab)
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: ("", ""))
+    tab._load_from_file()
+
+    assert tab._table.rowCount() == 1
+    assert tab._table.item(0, 0).text() == "Keep"
+
+
 # ---------------------------------------------------------------------------
 # TaskRow
 # ---------------------------------------------------------------------------

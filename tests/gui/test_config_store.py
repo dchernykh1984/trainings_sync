@@ -94,6 +94,40 @@ def test_save_credentials_overwrites(store: ConfigStore) -> None:
     assert loaded[0].service == "B"
 
 
+def test_load_credentials_from_arbitrary_path(
+    store: ConfigStore, tmp_path: Path
+) -> None:
+    src = tmp_path / "creds.json"
+    src.write_text(
+        json.dumps(
+            [
+                {
+                    "service": "Garmin Connect",
+                    "url": "https://connect.garmin.com",
+                    "login": "me@example.com",
+                    "password": "s3cr3t",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    loaded = store.load_credentials_from(src)
+    assert loaded == [
+        CredentialEntry(
+            "Garmin Connect", "https://connect.garmin.com", "me@example.com", "s3cr3t"
+        )
+    ]
+
+
+def test_load_credentials_from_rejects_non_array(
+    store: ConfigStore, tmp_path: Path
+) -> None:
+    src = tmp_path / "creds.json"
+    src.write_text(json.dumps({"service": "x"}), encoding="utf-8")
+    with pytest.raises(ValueError, match="must contain a JSON array"):
+        store.load_credentials_from(src)
+
+
 # ---------------------------------------------------------------------------
 # GuiConfig - load / save
 # ---------------------------------------------------------------------------

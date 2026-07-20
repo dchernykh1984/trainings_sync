@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QDateEdit,
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -351,15 +352,35 @@ class CredentialsTab(QWidget):
         self._add_btn = QPushButton("Add")
         self._edit_btn = QPushButton("Edit")
         self._delete_btn = QPushButton("Delete")
+        self._load_btn = QPushButton("Load from file...")
         for btn in (self._add_btn, self._edit_btn, self._delete_btn):
             btn_row.addWidget(btn)
         btn_row.addStretch()
+        btn_row.addWidget(self._load_btn)
         layout.addLayout(btn_row)
 
         self._add_btn.clicked.connect(self._add)
         self._edit_btn.clicked.connect(self._edit)
         self._delete_btn.clicked.connect(self._delete)
+        self._load_btn.clicked.connect(self._load_from_file)
 
+        self._refresh_table()
+
+    def _load_from_file(self) -> None:
+        path_str, _ = QFileDialog.getOpenFileName(
+            self, "Load credentials", "", "JSON files (*.json);;All files (*)"
+        )
+        if not path_str:
+            return
+        try:
+            entries = self._store.load_credentials_from(Path(path_str))
+        except (OSError, ValueError, KeyError) as exc:
+            QMessageBox.critical(
+                self, "Load failed", f"Could not load credentials:\n{exc}"
+            )
+            return
+        self._entries = entries
+        self._store.save_credentials(self._entries)
         self._refresh_table()
 
     def _refresh_table(self) -> None:

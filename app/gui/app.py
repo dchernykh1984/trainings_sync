@@ -48,6 +48,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QRadioButton,
     QScrollArea,
     QSizePolicy,
     QSpinBox,
@@ -63,6 +64,7 @@ from app.gui.config_store import (
     ConfigStore,
     ConnectorEntry,
     CredentialEntry,
+    CredentialSource,
     GroupSourceEntry,
     GuiConfig,
     SyncGroupEntry,
@@ -364,6 +366,28 @@ class CredentialsTab(QWidget):
 
         layout = QVBoxLayout(self)
 
+        # Credential source selector: built-in JSON store vs external KeePass.
+        src_row = QHBoxLayout()
+        self._src_json_radio = QRadioButton("Built-in JSON store")
+        self._src_keepass_radio = QRadioButton("KeePass database")
+        src_row.addWidget(QLabel("Credential source:"))
+        src_row.addWidget(self._src_json_radio)
+        src_row.addWidget(self._src_keepass_radio)
+        src_row.addStretch()
+        layout.addLayout(src_row)
+
+        # KeePass file chooser (only relevant when KeePass is the source).
+        self._keepass_row = QWidget()
+        kp_layout = QHBoxLayout(self._keepass_row)
+        kp_layout.setContentsMargins(0, 0, 0, 0)
+        self._keepass_path = QLineEdit()
+        self._keepass_path.setPlaceholderText("Path to .kdbx file")
+        self._keepass_browse = QPushButton("Browse...")
+        kp_layout.addWidget(QLabel("KeePass file:"))
+        kp_layout.addWidget(self._keepass_path)
+        kp_layout.addWidget(self._keepass_browse)
+        layout.addWidget(self._keepass_row)
+
         self._table = QTableWidget(0, 4)
         self._table.setHorizontalHeaderLabels(["Service", "URL", "Login", "Password"])
         self._table.horizontalHeader().setSectionResizeMode(
@@ -389,7 +413,54 @@ class CredentialsTab(QWidget):
         self._delete_btn.clicked.connect(self._delete)
         self._load_btn.clicked.connect(self._load_from_file)
 
+        # Load the persisted source and reflect it in the widgets.
+        source = store.load_credential_source()
+        self._keepass_path.setText(source.keepass_path)
+        self._src_keepass_radio.setChecked(source.source == "keepass")
+        self._src_json_radio.setChecked(source.source != "keepass")
+        self._apply_source_state()
+
+        self._src_keepass_radio.toggled.connect(self._on_source_changed)
+        self._keepass_path.textChanged.connect(self._save_source)
+        self._keepass_browse.clicked.connect(self._browse_keepass)
+
         self._refresh_table()
+
+    # ------------------------------------------------------------------
+    # Credential source
+    # ------------------------------------------------------------------
+
+    def _apply_source_state(self) -> None:
+        is_keepass = self._src_keepass_radio.isChecked()
+        self._keepass_row.setVisible(is_keepass)
+        # The GUI does not edit KeePass entries; disable JSON management for it.
+        for w in (
+            self._table,
+            self._add_btn,
+            self._edit_btn,
+            self._delete_btn,
+            self._load_btn,
+        ):
+            w.setEnabled(not is_keepass)
+
+    def _on_source_changed(self) -> None:
+        self._apply_source_state()
+        self._save_source()
+
+    def _save_source(self) -> None:
+        source = "keepass" if self._src_keepass_radio.isChecked() else "json"
+        self._store.save_credential_source(
+            CredentialSource(
+                source=source, keepass_path=self._keepass_path.text().strip()
+            )
+        )
+
+    def _browse_keepass(self) -> None:
+        path_str, _ = QFileDialog.getOpenFileName(
+            self, "Select KeePass database", "", "KeePass (*.kdbx);;All files (*)"
+        )
+        if path_str:
+            self._keepass_path.setText(path_str)
 
     def _load_from_file(self) -> None:
         path_str, _ = QFileDialog.getOpenFileName(

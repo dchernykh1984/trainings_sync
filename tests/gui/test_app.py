@@ -26,6 +26,7 @@ from app.gui.config_store import (
     ConfigStore,
     ConnectorEntry,
     CredentialEntry,
+    CredentialSource,
     GroupSourceEntry,
     GuiConfig,
     SyncGroupEntry,
@@ -389,6 +390,44 @@ def test_credentials_tab_load_from_file_cancelled_is_noop(
 
     assert tab._table.rowCount() == 1
     assert tab._table.item(0, 0).text() == "Keep"
+
+
+def test_credentials_tab_defaults_to_json_source(qtbot, store: ConfigStore) -> None:
+    tab = CredentialsTab(store)
+    qtbot.addWidget(tab)
+    assert tab._src_json_radio.isChecked()
+    assert tab._keepass_row.isHidden()
+    assert tab._table.isEnabled()
+
+
+def test_credentials_tab_selecting_keepass_persists_and_disables_json(
+    qtbot, store: ConfigStore
+) -> None:
+    tab = CredentialsTab(store)
+    qtbot.addWidget(tab)
+    tab._src_keepass_radio.setChecked(True)
+    tab._keepass_path.setText("/home/me/db.kdbx")
+
+    # JSON management is disabled and the KeePass path row is shown.
+    assert not tab._table.isEnabled()
+    assert not tab._add_btn.isEnabled()
+    assert not tab._keepass_row.isHidden()
+
+    # The choice is persisted.
+    cs = store.load_credential_source()
+    assert cs.source == "keepass"
+    assert cs.keepass_path == "/home/me/db.kdbx"
+
+
+def test_credentials_tab_loads_saved_keepass_source(qtbot, store: ConfigStore) -> None:
+    store.save_credential_source(
+        CredentialSource(source="keepass", keepass_path="/x/db.kdbx")
+    )
+    tab = CredentialsTab(store)
+    qtbot.addWidget(tab)
+    assert tab._src_keepass_radio.isChecked()
+    assert tab._keepass_path.text() == "/x/db.kdbx"
+    assert not tab._table.isEnabled()
 
 
 # ---------------------------------------------------------------------------

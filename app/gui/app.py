@@ -3,13 +3,26 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import sys
 from datetime import date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QDate, Qt, QThread, Signal
-from PySide6.QtGui import QAction, QFontDatabase
+from PySide6.QtCore import QDate, QPointF, QRectF, Qt, QThread, Signal
+from PySide6.QtGui import (
+    QAction,
+    QBrush,
+    QColor,
+    QFontDatabase,
+    QIcon,
+    QLinearGradient,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+    QPolygonF,
+)
 
 if TYPE_CHECKING:
     from app.core.config import AppConfig
@@ -1051,6 +1064,94 @@ class SyncTab(QWidget):
 
 
 # ---------------------------------------------------------------------------
+# Application icon
+# ---------------------------------------------------------------------------
+
+
+def make_app_icon(size: int = 256) -> QIcon:
+    """Render the app icon: circular sync arrows over a heartbeat line.
+
+    The two arrows convey syncing between services; the pulse line signals
+    that the data being synced is training/activity data.
+    """
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pixmap)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+    # Rounded-square background with a vertical gradient.
+    bg = QLinearGradient(0, 0, 0, size)
+    bg.setColorAt(0.0, QColor("#37a1f0"))
+    bg.setColorAt(1.0, QColor("#1667c8"))
+    radius = size * 0.22
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QBrush(bg))
+    p.drawRoundedRect(QRectF(0, 0, size, size), radius, radius)
+
+    c = size / 2.0
+    r = size * 0.27
+    pen_w = size * 0.075
+    white = QColor("#ffffff")
+
+    pen = QPen(white, pen_w)
+    pen.setCapStyle(Qt.PenCapStyle.FlatCap)
+    p.setPen(pen)
+    p.setBrush(Qt.BrushStyle.NoBrush)
+
+    # Two opposing arcs forming the circular sync symbol.
+    rect = QRectF(c - r, c - r, 2 * r, 2 * r)
+    gap = 34  # degrees left open at each arrowhead
+    span = 180 - gap
+    start_a = 118
+    start_b = start_a + 180
+    p.drawArc(rect, int(start_a * 16), int(span * 16))
+    p.drawArc(rect, int(start_b * 16), int(span * 16))
+
+    def arrowhead(angle_deg: float) -> None:
+        a = math.radians(angle_deg)
+        px = c + r * math.cos(a)
+        py = c - r * math.sin(a)
+        # Tangent for counter-clockwise travel in screen coords (y points down).
+        tx, ty = -math.sin(a), -math.cos(a)
+        nx, ny = -ty, tx
+        s = pen_w * 1.6
+        tip = QPointF(px + tx * s, py + ty * s)
+        base_l = QPointF(px + nx * s * 0.95, py + ny * s * 0.95)
+        base_r = QPointF(px - nx * s * 0.95, py - ny * s * 0.95)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(white))
+        p.drawPolygon(QPolygonF([tip, base_l, base_r]))
+        p.setPen(pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+
+    # Arrowheads at the leading (counter-clockwise) end of each arc.
+    arrowhead(start_a + span)
+    arrowhead(start_b + span)
+
+    # Heartbeat / pulse line across the middle to signal "training".
+    pulse = QPen(white, pen_w * 0.85)
+    pulse.setCapStyle(Qt.PenCapStyle.RoundCap)
+    pulse.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    p.setPen(pulse)
+    path = QPainterPath()
+    points = [
+        (c - r * 0.72, c),
+        (c - r * 0.30, c),
+        (c - r * 0.12, c - r * 0.55),
+        (c + r * 0.05, c + r * 0.55),
+        (c + r * 0.28, c),
+        (c + r * 0.72, c),
+    ]
+    path.moveTo(*points[0])
+    for pt in points[1:]:
+        path.lineTo(*pt)
+    p.drawPath(path)
+
+    p.end()
+    return QIcon(pixmap)
+
+
+# ---------------------------------------------------------------------------
 # Main window
 # ---------------------------------------------------------------------------
 
@@ -1059,6 +1160,7 @@ class MainWindow(QMainWindow):
     def __init__(self, store: ConfigStore) -> None:
         super().__init__()
         self.setWindowTitle("Trainings Sync")
+        self.setWindowIcon(make_app_icon())
         # Wide enough that the Sync tab's task rows (long connector labels plus a
         # fixed-width progress bar and counter) fit without a horizontal scroll.
         self.resize(1200, 760)
@@ -1092,6 +1194,7 @@ class MainWindow(QMainWindow):
 
 def main() -> None:
     app = QApplication(sys.argv)
+    app.setWindowIcon(make_app_icon())
     store = ConfigStore()
     window = MainWindow(store)
     window.show()

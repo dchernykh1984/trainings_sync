@@ -249,6 +249,18 @@ table.
 **Load from file...** imports an existing CLI-style credentials JSON file (the
 same format as `--creds-json`), replacing the current list.
 
+**Credential source.** At the top of the tab you can choose where the sync
+reads credentials from:
+
+- **Built-in JSON store** (default) - the table described above, managed in the
+  GUI and saved to `credentials.json`.
+- **KeePass database** - point the sync at an external `.kdbx` file. Entries are
+  matched by URL (and login, if set) and are edited in KeePass itself, so the
+  table is disabled in this mode. The **master password is asked for each time
+  you run a sync** and is never stored on disk. As with the CLI's
+  `--creds-keepass`, Strava is not supported with KeePass (its refresh token
+  cannot be written back); use the JSON store for Strava.
+
 ### Configuration tab
 
 Build the sync configuration visually:

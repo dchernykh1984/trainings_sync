@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QProgressBar,
@@ -493,9 +494,6 @@ class SyncGroupDialog(QDialog):
         src_box = QGroupBox("Sources (connector id : priority)")
         src_layout = QVBoxLayout(src_box)
         self._sources_widget = QListWidget()
-        if entry:
-            for s in entry.sources:
-                self._sources_widget.addItem(f"{s.id}:{s.priority}")
         src_layout.addWidget(self._sources_widget)
         src_btn_row = QHBoxLayout()
         self._src_add_combo = QComboBox()
@@ -513,6 +511,11 @@ class SyncGroupDialog(QDialog):
         src_btn_row.addWidget(self._src_add_btn)
         src_btn_row.addWidget(self._src_del_btn)
         src_layout.addLayout(src_btn_row)
+
+        if entry:
+            for s in entry.sources:
+                self._sources_widget.addItem(self._make_source_item(s.id, s.priority))
+
         root.addWidget(src_box)
 
         # Destinations
@@ -543,11 +546,17 @@ class SyncGroupDialog(QDialog):
         btns.rejected.connect(self.reject)
         root.addWidget(btns)
 
+    @staticmethod
+    def _make_source_item(cid: str, priority: int) -> QListWidgetItem:
+        item = QListWidgetItem(f"{cid} : {priority}")
+        item.setData(Qt.ItemDataRole.UserRole, (cid, priority))
+        return item
+
     def _add_source(self) -> None:
         cid = self._src_add_combo.currentText()
         pri = self._src_priority.value()
         if cid:
-            self._sources_widget.addItem(f"{cid}:{pri}")
+            self._sources_widget.addItem(self._make_source_item(cid, pri))
 
     def _remove_source(self) -> None:
         row = self._sources_widget.currentRow()
@@ -567,11 +576,8 @@ class SyncGroupDialog(QDialog):
     def result_entry(self) -> SyncGroupEntry:
         sources = []
         for i in range(self._sources_widget.count()):
-            text = self._sources_widget.item(i).text()
-            cid, _, pri_str = text.partition(":")
-            sources.append(
-                GroupSourceEntry(id=cid.strip(), priority=int(pri_str or "1"))
-            )
+            cid, priority = self._sources_widget.item(i).data(Qt.ItemDataRole.UserRole)
+            sources.append(GroupSourceEntry(id=cid, priority=priority))
         destinations = [
             self._destinations_widget.item(i).text()
             for i in range(self._destinations_widget.count())

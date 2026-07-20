@@ -192,6 +192,20 @@ def test_sync_group_dialog_prefilled(qtbot) -> None:
     assert entry.destinations == ["local"]
 
 
+def test_sync_group_dialog_source_id_with_colon(qtbot) -> None:
+    # Connector ids may contain a colon; the source must round-trip intact.
+    existing = SyncGroupEntry(
+        id="grp",
+        sources=[GroupSourceEntry("garmin:eu", 3)],
+        destinations=[],
+    )
+    dlg = SyncGroupDialog(connector_ids=["garmin:eu"], entry=existing)
+    qtbot.addWidget(dlg)
+    entry = dlg.result_entry()
+    assert entry.sources[0].id == "garmin:eu"
+    assert entry.sources[0].priority == 3
+
+
 # ---------------------------------------------------------------------------
 # CredentialsTab
 # ---------------------------------------------------------------------------

@@ -314,6 +314,13 @@ class CredentialDialog(QDialog):
         btns.rejected.connect(self.reject)
         form.addRow(btns)
 
+        self._ok_btn = btns.button(QDialogButtonBox.StandardButton.Ok)
+        self._service.textChanged.connect(self._validate)
+        self._validate()
+
+    def _validate(self) -> None:
+        self._ok_btn.setEnabled(bool(self._service.text().strip()))
+
     def result_entry(self) -> CredentialEntry:
         return CredentialEntry(
             service=self._service.text().strip(),
@@ -461,8 +468,15 @@ class ConnectorDialog(QDialog):
         btns.rejected.connect(self.reject)
         root.addWidget(btns)
 
+        self._ok_btn = btns.button(QDialogButtonBox.StandardButton.Ok)
+        self._id.textChanged.connect(self._validate)
+        self._validate()
+
         self._type.currentTextChanged.connect(self._on_type_changed)
         self._on_type_changed(self._type.currentText())
+
+    def _validate(self) -> None:
+        self._ok_btn.setEnabled(bool(self._id.text().strip()))
 
     def _on_type_changed(self, t: str) -> None:
         self._cred_box.setVisible(t in ("garmin", "strava"))
@@ -556,6 +570,13 @@ class SyncGroupDialog(QDialog):
         btns.accepted.connect(self.accept)
         btns.rejected.connect(self.reject)
         root.addWidget(btns)
+
+        self._ok_btn = btns.button(QDialogButtonBox.StandardButton.Ok)
+        self._id.textChanged.connect(self._validate)
+        self._validate()
+
+    def _validate(self) -> None:
+        self._ok_btn.setEnabled(bool(self._id.text().strip()))
 
     @staticmethod
     def _make_source_item(cid: str, priority: int) -> QListWidgetItem:

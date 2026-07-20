@@ -89,6 +89,14 @@ def test_credential_dialog_password_echo_hidden(qtbot) -> None:
     assert pw.echoMode() == QLineEdit.EchoMode.Password
 
 
+def test_credential_dialog_ok_disabled_until_service_filled(qtbot) -> None:
+    dlg = CredentialDialog()
+    qtbot.addWidget(dlg)
+    assert not dlg._ok_btn.isEnabled()
+    dlg._service.setText("Garmin Connect")
+    assert dlg._ok_btn.isEnabled()
+
+
 # ---------------------------------------------------------------------------
 # ConnectorDialog
 # ---------------------------------------------------------------------------
@@ -140,6 +148,14 @@ def test_connector_dialog_type_change_shows_strava_client_id(qtbot) -> None:
     qtbot.addWidget(dlg)
     dlg._type.setCurrentText("strava")
     assert not dlg._client_id_spin.isHidden()
+
+
+def test_connector_dialog_ok_disabled_until_id_filled(qtbot) -> None:
+    dlg = ConnectorDialog()
+    qtbot.addWidget(dlg)
+    assert not dlg._ok_btn.isEnabled()
+    dlg._id.setText("garmin")
+    assert dlg._ok_btn.isEnabled()
 
 
 # ---------------------------------------------------------------------------
@@ -194,6 +210,14 @@ def test_sync_group_dialog_prefilled(qtbot) -> None:
     entry = dlg.result_entry()
     assert entry.id == "grp"
     assert entry.destinations == ["local"]
+
+
+def test_sync_group_dialog_ok_disabled_until_id_filled(qtbot) -> None:
+    dlg = SyncGroupDialog(connector_ids=["garmin"])
+    qtbot.addWidget(dlg)
+    assert not dlg._ok_btn.isEnabled()
+    dlg._id.setText("my-group")
+    assert dlg._ok_btn.isEnabled()
 
 
 def test_sync_group_dialog_ignores_duplicate_source(qtbot) -> None:

@@ -229,6 +229,12 @@ It stores everything in a fixed location under your home directory:
   cache/             # activity + wellness cache and sync.log
 ```
 
+The window has three tabs, ordered by how often you use them: **Sync**
+(the default landing tab), **Configuration**, and **Credentials**. If you
+already have CLI config/creds files (for example under `config/`), you can
+import them instead of re-entering everything - see the *Load from file...*
+buttons below. The walkthrough that follows is in first-time setup order.
+
 ### Credentials tab
 
 Manage the service logins used by the connectors. Use **Add** / **Edit** /
@@ -239,6 +245,9 @@ table.
 - **Garmin:** *Login* is your Garmin email, *Password* is your Garmin password.
 - **Strava:** *Login* is your Client Secret, *Password / Token* is the refresh
   token (see [Getting Strava credentials](#getting-strava-credentials) above).
+
+**Load from file...** imports an existing CLI-style credentials JSON file (the
+same format as `--creds-json`), replacing the current list.
 
 ### Configuration tab
 
@@ -254,6 +263,10 @@ Build the sync configuration visually:
   destinations, both chosen from the connectors you defined.
 - **Options** - optional custom start/end dates, *Force re-download* (ignore the
   cache), and *Skip wellness sync*. Click **Save configuration** to persist.
+
+**Load from file...** imports an existing config JSON file - both the GUI's own
+`config.json` and a CLI config file work (the CLI-only `cache_dir` field is
+ignored). It replaces the whole configuration.
 
 ### Sync tab
 

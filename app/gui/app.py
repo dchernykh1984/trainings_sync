@@ -220,6 +220,15 @@ def _parse_date_or_default(value: str, default: date) -> date:
     return default
 
 
+def _editable_combo(values: list[str], current: str) -> QComboBox:
+    """A combo box pre-filled with known values that still accepts free text."""
+    combo = QComboBox()
+    combo.setEditable(True)
+    combo.addItems(values)
+    combo.setCurrentText(current)
+    return combo
+
+
 # ---------------------------------------------------------------------------
 # TaskRow - one row per sync task shown in the Sync tab
 # ---------------------------------------------------------------------------
@@ -451,11 +460,13 @@ class ConnectorDialog(QDialog):
     def __init__(
         self,
         entry: ConnectorEntry | None = None,
+        credentials: list[CredentialEntry] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Add Connector" if entry is None else "Edit Connector")
         self.setMinimumWidth(440)
+        self._credentials = credentials or []
 
         root = QVBoxLayout(self)
         form = QFormLayout()
@@ -471,12 +482,25 @@ class ConnectorDialog(QDialog):
                 self._type.setCurrentIndex(idx)
         form.addRow("Type:", self._type)
 
-        # Credential fields (garmin + strava)
+        # Credential fields (garmin + strava). These are editable combo boxes
+        # pre-populated with the accounts configured on the Credentials tab, so
+        # the user can pick a known account or still type a custom value.
         self._cred_box = QGroupBox("Credentials")
         cred_form = QFormLayout(self._cred_box)
-        self._cred_service = QLineEdit(entry.credential_service if entry else "")
-        self._cred_url = QLineEdit(entry.credential_url if entry else "")
-        self._cred_login = QLineEdit(entry.credential_login if entry else "")
+        self._cred_service = _editable_combo(
+            sorted({c.service for c in self._credentials if c.service}),
+            entry.credential_service if entry else "",
+        )
+        self._cred_url = _editable_combo(
+            sorted({c.url for c in self._credentials if c.url}),
+            entry.credential_url if entry else "",
+        )
+        self._cred_login = _editable_combo(
+            sorted({c.login for c in self._credentials if c.login}),
+            entry.credential_login if entry else "",
+        )
+        # Selecting a known service auto-fills that account's URL and login.
+        self._cred_service.currentTextChanged.connect(self._on_service_changed)
         cred_form.addRow("Service:", self._cred_service)
         cred_form.addRow("URL:", self._cred_url)
         cred_form.addRow("Login (optional):", self._cred_login)
@@ -520,14 +544,22 @@ class ConnectorDialog(QDialog):
         self._client_id_spin.setVisible(t == "strava")
         self._folder_box.setVisible(t == "local_folder")
 
+    def _on_service_changed(self, service: str) -> None:
+        match = next(
+            (c for c in self._credentials if c.service == service and c.service), None
+        )
+        if match is not None:
+            self._cred_url.setCurrentText(match.url)
+            self._cred_login.setCurrentText(match.login)
+
     def result_entry(self) -> ConnectorEntry:
         t = self._type.currentText()
         return ConnectorEntry(
             id=self._id.text().strip(),
             type=t,
-            credential_service=self._cred_service.text().strip(),
-            credential_url=self._cred_url.text().strip(),
-            credential_login=self._cred_login.text().strip(),
+            credential_service=self._cred_service.currentText().strip(),
+            credential_url=self._cred_url.currentText().strip(),
+            credential_login=self._cred_login.currentText().strip(),
             client_id=self._client_id_spin.value() if t == "strava" else 0,
             folder=self._folder.text().strip() if t == "local_folder" else "",
         )
@@ -813,7 +845,7 @@ class ConfigTab(QWidget):
             self._conn_list.addItem(f"[{c.type}] {c.id}")
 
     def _add_connector(self) -> None:
-        dlg = ConnectorDialog(parent=self)
+        dlg = ConnectorDialog(credentials=self._store.load_credentials(), parent=self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self._config.connectors.append(dlg.result_entry())
             self._store.save_gui_config(self._config)
@@ -823,7 +855,11 @@ class ConfigTab(QWidget):
         row = self._conn_list.currentRow()
         if row < 0:
             return
-        dlg = ConnectorDialog(entry=self._config.connectors[row], parent=self)
+        dlg = ConnectorDialog(
+            entry=self._config.connectors[row],
+            credentials=self._store.load_credentials(),
+            parent=self,
+        )
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self._config.connectors[row] = dlg.result_entry()
             self._store.save_gui_config(self._config)

@@ -331,6 +331,17 @@ def test_log_dialog_existing_file(qtbot, tmp_path: Path) -> None:
     assert any("line1" in w.toPlainText() for w in texts)
 
 
+def test_log_dialog_uses_fixed_pitch_font(qtbot, tmp_path: Path) -> None:
+    from PySide6.QtGui import QFontDatabase
+    from PySide6.QtWidgets import QTextEdit
+
+    dlg = LogDialog(log_path=tmp_path / "sync.log")
+    qtbot.addWidget(dlg)
+    edit = dlg.findChildren(QTextEdit)[0]
+    mono = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+    assert edit.font().family() == mono.family()
+
+
 # ---------------------------------------------------------------------------
 # SyncWorker
 # ---------------------------------------------------------------------------

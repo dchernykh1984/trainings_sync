@@ -709,13 +709,6 @@ class ConfigTab(QWidget):
         self._start_date = QDateEdit()
         self._start_date.setCalendarPopup(True)
         self._start_date.setDisplayFormat("yyyy-MM-dd")
-        if self._config.start:
-            d = date.fromisoformat(self._config.start)
-            self._start_date.setDate(QDate(d.year, d.month, d.day))
-            self._use_start.setChecked(True)
-        else:
-            self._start_date.setDate(QDate.currentDate())
-        self._start_date.setEnabled(self._use_start.isChecked())
         self._use_start.toggled.connect(self._start_date.setEnabled)
         date_row_start.addWidget(self._use_start)
         date_row_start.addWidget(self._start_date)
@@ -726,35 +719,73 @@ class ConfigTab(QWidget):
         self._end_date = QDateEdit()
         self._end_date.setCalendarPopup(True)
         self._end_date.setDisplayFormat("yyyy-MM-dd")
-        if self._config.end:
-            d2 = date.fromisoformat(self._config.end)
-            self._end_date.setDate(QDate(d2.year, d2.month, d2.day))
-            self._use_end.setChecked(True)
-        else:
-            self._end_date.setDate(QDate.currentDate())
-        self._end_date.setEnabled(self._use_end.isChecked())
         self._use_end.toggled.connect(self._end_date.setEnabled)
         date_row_end.addWidget(self._use_end)
         date_row_end.addWidget(self._end_date)
         opt_layout.addRow("End:", date_row_end)
 
         self._force_cb = QCheckBox("Force re-download (ignore cache)")
-        self._force_cb.setChecked(self._config.force)
         opt_layout.addRow(self._force_cb)
 
         self._skip_wellness_cb = QCheckBox("Skip wellness sync")
-        self._skip_wellness_cb.setChecked(self._config.skip_wellness)
         opt_layout.addRow(self._skip_wellness_cb)
 
+        btn_box = QHBoxLayout()
         save_btn = QPushButton("Save configuration")
         save_btn.clicked.connect(self._save)
-        opt_layout.addRow(save_btn)
+        self._load_btn = QPushButton("Load from file...")
+        self._load_btn.clicked.connect(self._load_from_file)
+        btn_box.addWidget(save_btn)
+        btn_box.addWidget(self._load_btn)
+        btn_box.addStretch()
+        opt_layout.addRow(btn_box)
 
         root.addWidget(opt_box)
         root.addStretch()
 
+        self._reload_view()
+
+    def _reload_view(self) -> None:
         self._refresh_connector_list()
         self._refresh_group_list()
+        self._apply_options_from_config()
+
+    def _apply_options_from_config(self) -> None:
+        if self._config.start:
+            d = date.fromisoformat(self._config.start)
+            self._start_date.setDate(QDate(d.year, d.month, d.day))
+            self._use_start.setChecked(True)
+        else:
+            self._start_date.setDate(QDate.currentDate())
+            self._use_start.setChecked(False)
+        self._start_date.setEnabled(self._use_start.isChecked())
+        if self._config.end:
+            d2 = date.fromisoformat(self._config.end)
+            self._end_date.setDate(QDate(d2.year, d2.month, d2.day))
+            self._use_end.setChecked(True)
+        else:
+            self._end_date.setDate(QDate.currentDate())
+            self._use_end.setChecked(False)
+        self._end_date.setEnabled(self._use_end.isChecked())
+        self._force_cb.setChecked(self._config.force)
+        self._skip_wellness_cb.setChecked(self._config.skip_wellness)
+
+    def _load_from_file(self) -> None:
+        path_str, _ = QFileDialog.getOpenFileName(
+            self, "Load configuration", "", "JSON files (*.json);;All files (*)"
+        )
+        if not path_str:
+            return
+        try:
+            config = self._store.load_gui_config_from(Path(path_str))
+        except (OSError, ValueError, KeyError) as exc:
+            QMessageBox.critical(
+                self, "Load failed", f"Could not load configuration:\n{exc}"
+            )
+            return
+        self._config = config
+        self._store.save_gui_config(self._config)
+        self._reload_view()
 
     # ------------------------------------------------------------------
     # Connectors

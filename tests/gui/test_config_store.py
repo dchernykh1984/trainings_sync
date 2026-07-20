@@ -207,6 +207,68 @@ def test_save_gui_config_includes_nonempty_dates(store: ConfigStore) -> None:
     assert raw["end"] == "2026-06-30"
 
 
+def test_load_gui_config_from_arbitrary_path(
+    store: ConfigStore, tmp_path: Path
+) -> None:
+    src = tmp_path / "config.json"
+    src.write_text(
+        json.dumps(
+            {
+                "connectors": [
+                    {"id": "local", "type": "local_folder", "folder": "/data"}
+                ],
+                "sync_groups": [
+                    {
+                        "id": "g",
+                        "sources": [{"id": "local", "priority": 1}],
+                        "destinations": [],
+                    }
+                ],
+                "start": "2025-01-01",
+                "force": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg = store.load_gui_config_from(src)
+    assert cfg.connectors[0].id == "local"
+    assert cfg.sync_groups[0].id == "g"
+    assert cfg.start == "2025-01-01"
+    assert cfg.force is True
+
+
+def test_load_gui_config_from_ignores_cli_cache_dir(
+    store: ConfigStore, tmp_path: Path
+) -> None:
+    # A CLI config file carries a cache_dir field the GUI does not use.
+    src = tmp_path / "cli-config.json"
+    src.write_text(
+        json.dumps(
+            {
+                "cache_dir": "/some/cli/cache",
+                "connectors": [
+                    {"id": "local", "type": "local_folder", "folder": "/data"}
+                ],
+                "sync_groups": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg = store.load_gui_config_from(src)
+    assert cfg.connectors[0].id == "local"
+    # The GUI keeps its fixed cache location regardless of the CLI field.
+    assert store.to_app_config(cfg).cache_dir == store.cache_dir
+
+
+def test_load_gui_config_from_rejects_non_object(
+    store: ConfigStore, tmp_path: Path
+) -> None:
+    src = tmp_path / "config.json"
+    src.write_text(json.dumps([1, 2, 3]), encoding="utf-8")
+    with pytest.raises(ValueError, match="must contain a JSON object"):
+        store.load_gui_config_from(src)
+
+
 # ---------------------------------------------------------------------------
 # to_app_config conversion
 # ---------------------------------------------------------------------------

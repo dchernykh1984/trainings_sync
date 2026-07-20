@@ -113,6 +113,15 @@ def test_connector_dialog_garmin_default(qtbot) -> None:
     assert entry.id == ""
 
 
+def test_connector_dialog_type_dropdown_matches_supported_types(qtbot) -> None:
+    from app.gui.config_store import CONNECTOR_TYPES
+
+    dlg = ConnectorDialog()
+    qtbot.addWidget(dlg)
+    items = [dlg._type.itemText(i) for i in range(dlg._type.count())]
+    assert items == list(CONNECTOR_TYPES)
+
+
 def test_connector_dialog_prefilled_strava(qtbot) -> None:
     existing = ConnectorEntry(
         id="strava",

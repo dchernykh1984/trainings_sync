@@ -17,6 +17,13 @@ from app.credentials.base import CredentialRequest
 
 _DEFAULT_CONFIG_DIR = Path.home() / ".config" / "trainings-sync"
 
+# Single source of truth for the connector types the GUI supports. The GUI's
+# type dropdown is built from this, and every entry must be handled by
+# _connector_to_app / _serialize_connector below. To add a new connector,
+# append its type here and extend those two functions (the round-trip test
+# test_every_connector_type_is_convertible enforces the latter).
+CONNECTOR_TYPES: tuple[str, ...] = ("garmin", "strava", "local_folder")
+
 
 # ---------------------------------------------------------------------------
 # GUI data models

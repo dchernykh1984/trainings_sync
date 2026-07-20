@@ -218,6 +218,8 @@ def _serialize_connector(c: ConnectorEntry) -> dict:
         d["client_id"] = c.client_id
         d["credential_service"] = c.credential_service
         d["credential_url"] = c.credential_url
+        if c.credential_login:
+            d["credential_login"] = c.credential_login
     elif c.type == "local_folder":
         d["folder"] = c.folder
     return d
@@ -250,6 +252,7 @@ def _connector_to_app(
             credential=CredentialRequest(
                 service=c.credential_service,
                 url=c.credential_url,
+                login=c.credential_login or None,
             ),
         )
     if c.type == "local_folder":

@@ -129,16 +129,18 @@ class ConfigStore:
         if not self._config_path.exists():
             return GuiConfig()
         raw: dict = json.loads(self._config_path.read_text(encoding="utf-8"))
-        connectors = [_parse_connector_entry(c) for c in raw.get("connectors", [])]
-        sync_groups = [_parse_group_entry(g) for g in raw.get("sync_groups", [])]
-        return GuiConfig(
-            connectors=connectors,
-            sync_groups=sync_groups,
-            start=raw.get("start", ""),
-            end=raw.get("end", ""),
-            force=raw.get("force", False),
-            skip_wellness=raw.get("skip_wellness", False),
-        )
+        return _parse_gui_config(raw)
+
+    def load_gui_config_from(self, path: Path) -> GuiConfig:
+        """Parse a config JSON file at an arbitrary path.
+
+        Accepts both the GUI's own ``config.json`` and CLI config files; the
+        CLI-only ``cache_dir`` field is ignored (the GUI uses a fixed cache).
+        """
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            raise ValueError("config file must contain a JSON object")
+        return _parse_gui_config(raw)
 
     def save_gui_config(self, config: GuiConfig) -> None:
         data: dict = {
@@ -188,6 +190,17 @@ def _parse_credential_entry(raw: dict) -> CredentialEntry:
         url=raw["url"],
         login=raw["login"],
         password=raw["password"],
+    )
+
+
+def _parse_gui_config(raw: dict) -> GuiConfig:
+    return GuiConfig(
+        connectors=[_parse_connector_entry(c) for c in raw.get("connectors", [])],
+        sync_groups=[_parse_group_entry(g) for g in raw.get("sync_groups", [])],
+        start=raw.get("start", ""),
+        end=raw.get("end", ""),
+        force=raw.get("force", False),
+        skip_wellness=raw.get("skip_wellness", False),
     )
 
 

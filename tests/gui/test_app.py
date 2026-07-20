@@ -342,6 +342,86 @@ def test_credentials_tab_load_from_file_cancelled_is_noop(
 
 
 # ---------------------------------------------------------------------------
+# ConfigTab - load from file
+# ---------------------------------------------------------------------------
+
+# Format mirrors config/config.strava-and-garmin.json but with fake values.
+_SAMPLE_CONFIG = {
+    "cache_dir": ".cache",
+    "start": "2026-06-10",
+    "connectors": [
+        {
+            "id": "garmin",
+            "type": "garmin",
+            "credential_service": "Garmin Connect",
+            "credential_url": "https://connect.garmin.com",
+            "credential_login": "rider@example.com",
+        },
+        {
+            "id": "strava",
+            "type": "strava",
+            "client_id": 12345,
+            "credential_service": "Strava",
+            "credential_url": "https://www.strava.com/api/v3",
+        },
+        {"id": "local", "type": "local_folder", "folder": "/tmp/trainings"},
+    ],
+    "sync_groups": [
+        {
+            "id": "strava-to-garmin",
+            "sources": [{"id": "strava", "priority": 1}],
+            "destinations": ["garmin"],
+        },
+        {
+            "id": "garmin-and-strava-to-local",
+            "sources": [
+                {"id": "garmin", "priority": 1},
+                {"id": "strava", "priority": 2},
+            ],
+            "destinations": ["local"],
+        },
+    ],
+}
+
+
+def test_config_tab_load_from_file(
+    qtbot, monkeypatch, store: ConfigStore, tmp_path: Path
+) -> None:
+    import json as _json
+
+    from PySide6.QtWidgets import QFileDialog
+
+    src = tmp_path / "config.strava-and-garmin.json"
+    src.write_text(_json.dumps(_SAMPLE_CONFIG), encoding="utf-8")
+
+    tab = ConfigTab(store)
+    qtbot.addWidget(tab)
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(src), ""))
+    tab._load_from_file()
+
+    assert tab._conn_list.count() == 3
+    assert tab._grp_list.count() == 2
+    assert tab._use_start.isChecked()
+    assert tab._start_date.date().toString("yyyy-MM-dd") == "2026-06-10"
+    # The imported config is persisted to the fixed store location.
+    reloaded = store.load_gui_config()
+    assert [c.id for c in reloaded.connectors] == ["garmin", "strava", "local"]
+
+
+def test_config_tab_load_from_file_cancelled_is_noop(
+    qtbot, monkeypatch, store: ConfigStore
+) -> None:
+    from PySide6.QtWidgets import QFileDialog
+
+    tab = ConfigTab(store)
+    qtbot.addWidget(tab)
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: ("", ""))
+    tab._load_from_file()
+
+    assert tab._conn_list.count() == 0
+
+
+# ---------------------------------------------------------------------------
 # TaskRow
 # ---------------------------------------------------------------------------
 

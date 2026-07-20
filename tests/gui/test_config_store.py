@@ -378,6 +378,45 @@ def test_serialize_connector_strava() -> None:
     assert "folder" not in d
 
 
+def test_serialize_connector_strava_with_login() -> None:
+    c = ConnectorEntry(
+        id="s",
+        type="strava",
+        credential_service="Strava",
+        credential_url="https://www.strava.com/api/v3",
+        client_id=12345,
+        credential_login="my_client_secret",
+    )
+    d = _serialize_connector(c)
+    assert d["credential_login"] == "my_client_secret"
+
+
+def test_to_app_config_strava_connector_with_login(store: ConfigStore) -> None:
+    cfg = GuiConfig(
+        connectors=[
+            ConnectorEntry(
+                id="s",
+                type="strava",
+                credential_service="Strava",
+                credential_url="https://www.strava.com/api/v3",
+                client_id=99,
+                credential_login="my_client_secret",
+            )
+        ],
+        sync_groups=[
+            SyncGroupEntry(
+                id="grp",
+                sources=[GroupSourceEntry(id="s", priority=1)],
+                destinations=[],
+            )
+        ],
+    )
+    app_cfg = store.to_app_config(cfg)
+    strava = app_cfg.connectors[0]
+    assert isinstance(strava, StravaConnectorConfig)
+    assert strava.credential.login == "my_client_secret"
+
+
 def test_serialize_connector_local_folder() -> None:
     c = ConnectorEntry(id="l", type="local_folder", folder="/data")
     d = _serialize_connector(c)

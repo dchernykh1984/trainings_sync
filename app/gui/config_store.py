@@ -100,16 +100,14 @@ class ConfigStore:
     def load_credentials(self) -> list[CredentialEntry]:
         if not self.credentials_path.exists():
             return []
-        raw: list[dict] = json.loads(self.credentials_path.read_text(encoding="utf-8"))
-        return [
-            CredentialEntry(
-                service=e["service"],
-                url=e["url"],
-                login=e["login"],
-                password=e["password"],
-            )
-            for e in raw
-        ]
+        return self.load_credentials_from(self.credentials_path)
+
+    def load_credentials_from(self, path: Path) -> list[CredentialEntry]:
+        """Parse a credentials JSON file (CLI/GUI format) at an arbitrary path."""
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+        if not isinstance(raw, list):
+            raise ValueError("credentials file must contain a JSON array")
+        return [_parse_credential_entry(e) for e in raw]
 
     def save_credentials(self, entries: list[CredentialEntry]) -> None:
         data = [
@@ -182,6 +180,15 @@ def _atomic_write(path: Path, data: object) -> None:
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     tmp.replace(path)
+
+
+def _parse_credential_entry(raw: dict) -> CredentialEntry:
+    return CredentialEntry(
+        service=raw["service"],
+        url=raw["url"],
+        login=raw["login"],
+        password=raw["password"],
+    )
 
 
 def _parse_connector_entry(raw: dict) -> ConnectorEntry:

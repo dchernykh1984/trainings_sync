@@ -104,58 +104,64 @@ class SyncWorker(QThread):
 
         sync_logger = SyncLogger(app_config.cache_dir / "sync.log")
         sync_logger.run_start(start=start, end=end, force=force)
-        tracker = TaskTracker(self._renderer, sync_logger=sync_logger)
-        provider = JsonFileProvider(path=self._store.credentials_path, tracker=tracker)
-
-        strava_cred_map = {
-            c.id: c.credential
-            for c in app_config.connectors
-            if isinstance(c, StravaConnectorConfig)
-        }
-
-        def _on_token_refresh(
-            connector_id: str, new_creds: object, _label: str
-        ) -> None:
-            provider.update_refresh_token(
-                strava_cred_map[connector_id],
-                new_creds.refresh_token,  # type: ignore[attr-defined]
+        try:
+            tracker = TaskTracker(self._renderer, sync_logger=sync_logger)
+            provider = JsonFileProvider(
+                path=self._store.credentials_path, tracker=tracker
             )
 
-        cache = ActivityCache(app_config.cache_dir)
-        cache.load()
+            strava_cred_map = {
+                c.id: c.credential
+                for c in app_config.connectors
+                if isinstance(c, StravaConnectorConfig)
+            }
 
-        connectors = await build_connectors(
-            app_config, provider, tracker, on_strava_token_refresh=_on_token_refresh
-        )
-        login_tasks = {
-            cid: asyncio.create_task(c.login()) for cid, c in connectors.items()
-        }
-        orchestrator = SyncOrchestrator(
-            groups=app_config.sync_groups,
-            connectors=connectors,
-            cache=cache,
-            tracker=tracker,
-            login_tasks=login_tasks,
-        )
-        try:
-            if self._gui_config.skip_wellness:
-                failures = await orchestrator.run(start, end, force=force)
-            else:
-                failures, _ = await asyncio.gather(
-                    orchestrator.run(start, end, force=force),
-                    self._run_wellness(
-                        app_config, provider, tracker, connectors, login_tasks
-                    ),
+            def _on_token_refresh(
+                connector_id: str, new_creds: object, _label: str
+            ) -> None:
+                provider.update_refresh_token(
+                    strava_cred_map[connector_id],
+                    new_creds.refresh_token,  # type: ignore[attr-defined]
                 )
+
+            cache = ActivityCache(app_config.cache_dir)
+            cache.load()
+
+            connectors = await build_connectors(
+                app_config, provider, tracker, on_strava_token_refresh=_on_token_refresh
+            )
+            login_tasks = {
+                cid: asyncio.create_task(c.login()) for cid, c in connectors.items()
+            }
+            orchestrator = SyncOrchestrator(
+                groups=app_config.sync_groups,
+                connectors=connectors,
+                cache=cache,
+                tracker=tracker,
+                login_tasks=login_tasks,
+            )
+            try:
+                if self._gui_config.skip_wellness:
+                    failures = await orchestrator.run(start, end, force=force)
+                else:
+                    failures, _ = await asyncio.gather(
+                        orchestrator.run(start, end, force=force),
+                        self._run_wellness(
+                            app_config, provider, tracker, connectors, login_tasks
+                        ),
+                    )
+            finally:
+                for t in login_tasks.values():
+                    if not t.done():
+                        t.cancel()
+                await asyncio.gather(*login_tasks.values(), return_exceptions=True)
+            return failures
+        except Exception as exc:
+            sync_logger.error(f"Unexpected error: {exc}", exc_info=True)
+            raise
         finally:
-            for t in login_tasks.values():
-                if not t.done():
-                    t.cancel()
-            await asyncio.gather(*login_tasks.values(), return_exceptions=True)
             sync_logger.run_end()
             sync_logger.close()
-
-        return failures
 
     async def _run_wellness(
         self,

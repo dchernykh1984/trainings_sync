@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import date
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from app.gui.app import (
     LogDialog,
     MainWindow,
     SyncGroupDialog,
+    SyncWorker,
     TaskRow,
     _parse_date_or_default,
 )
@@ -23,8 +25,10 @@ from app.gui.config_store import (
     ConnectorEntry,
     CredentialEntry,
     GroupSourceEntry,
+    GuiConfig,
     SyncGroupEntry,
 )
+from app.tracking.gui_renderer import GuiRenderer
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -325,6 +329,37 @@ def test_log_dialog_existing_file(qtbot, tmp_path: Path) -> None:
 
     texts = dlg.findChildren(QTextEdit)
     assert any("line1" in w.toPlainText() for w in texts)
+
+
+# ---------------------------------------------------------------------------
+# SyncWorker
+# ---------------------------------------------------------------------------
+
+
+def test_sync_worker_logs_and_closes_logger_on_setup_failure(
+    qtbot, monkeypatch, store: ConfigStore
+) -> None:
+    # An error raised while building the pipeline must still be written to
+    # sync.log and the logger must be closed (no dangling file handler).
+    import app.core.connector_factory as connector_factory
+
+    async def _boom(*_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("kaboom during build")
+
+    monkeypatch.setattr(connector_factory, "build_connectors", _boom)
+
+    gui_config = GuiConfig(
+        connectors=[ConnectorEntry(id="g", type="garmin")],
+        sync_groups=[],
+    )
+    worker = SyncWorker(store, gui_config, GuiRenderer())
+
+    with pytest.raises(RuntimeError, match="kaboom during build"):
+        asyncio.run(worker._async_sync())
+
+    log_text = (store.cache_dir / "sync.log").read_text(encoding="utf-8")
+    assert "kaboom during build" in log_text
+    assert "Sync run finished" in log_text  # run_end() ran in the finally block
 
 
 # ---------------------------------------------------------------------------

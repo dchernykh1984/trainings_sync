@@ -336,6 +336,13 @@ class TaskRow(QWidget):
 # ---------------------------------------------------------------------------
 
 
+# Known service endpoints offered as URL suggestions when adding a credential.
+_KNOWN_CREDENTIAL_URLS = (
+    "https://connect.garmin.com",
+    "https://www.strava.com/api/v3",
+)
+
+
 class CredentialDialog(QDialog):
     def __init__(
         self,
@@ -359,7 +366,10 @@ class CredentialDialog(QDialog):
         form.addRow("Source:", src_row)
 
         self._service = QLineEdit(entry.service if entry else "")
-        self._url = QLineEdit(entry.url if entry else "")
+        self._url = QComboBox()
+        self._url.setEditable(True)
+        self._url.addItems(_KNOWN_CREDENTIAL_URLS)
+        self._url.setCurrentText(entry.url if entry else "")
         self._login = QLineEdit(entry.login if entry else "")
         form.addRow("Service:", self._service)
         form.addRow("URL:", self._url)
@@ -428,14 +438,14 @@ class CredentialDialog(QDialog):
         if self._keepass_radio.isChecked():
             return CredentialEntry(
                 service=self._service.text().strip(),
-                url=self._url.text().strip(),
+                url=self._url.currentText().strip(),
                 login=self._login.text().strip(),
                 source="keepass",
                 keepass_path=self._keepass_path.text().strip(),
             )
         return CredentialEntry(
             service=self._service.text().strip(),
-            url=self._url.text().strip(),
+            url=self._url.currentText().strip(),
             login=self._login.text().strip(),
             password=self._password.text(),
             source="manual",

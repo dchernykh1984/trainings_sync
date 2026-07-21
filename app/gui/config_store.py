@@ -32,19 +32,28 @@ CONNECTOR_TYPES: tuple[str, ...] = ("garmin", "strava", "local_folder")
 
 @dataclass
 class CredentialEntry:
+    """A single credential account.
+
+    Each account carries its own source: "manual" keeps the password inline;
+    "keepass" resolves the password from an external ``.kdbx`` at sync time
+    (matched by url/login) and stores only the file path here - never the
+    KeePass master password.
+    """
+
     service: str
     url: str
     login: str
-    password: str
+    password: str = ""  # manual source only
+    source: str = "manual"  # "manual" | "keepass"
+    keepass_path: str = ""  # keepass source only
 
 
 @dataclass
 class CredentialSource:
-    """Which backend the sync reads credentials from.
+    """Deprecated global credential-source toggle.
 
-    ``source`` is "json" (the built-in credentials.json managed in the GUI) or
-    "keepass" (an external .kdbx read via its path). The KeePass master password
-    is never stored here - it is prompted at sync time.
+    Superseded by the per-credential ``CredentialEntry.source``; kept
+    temporarily until the global selector is removed.
     """
 
     source: str = "json"  # "json" | "keepass"
@@ -153,16 +162,9 @@ class ConfigStore:
         return [_parse_credential_entry(e) for e in raw]
 
     def save_credentials(self, entries: list[CredentialEntry]) -> None:
-        data = [
-            {
-                "service": e.service,
-                "url": e.url,
-                "login": e.login,
-                "password": e.password,
-            }
-            for e in entries
-        ]
-        _atomic_write(self.credentials_path, data)
+        _atomic_write(
+            self.credentials_path, [_serialize_credential(e) for e in entries]
+        )
 
     # ------------------------------------------------------------------
     # GUI config
@@ -228,12 +230,30 @@ def _atomic_write(path: Path, data: object) -> None:
 
 
 def _parse_credential_entry(raw: dict) -> CredentialEntry:
+    # `source`/`keepass_path` are absent in CLI/legacy files -> treated as
+    # manual credentials, keeping backward compatibility with `--creds-json`.
     return CredentialEntry(
         service=raw["service"],
         url=raw["url"],
         login=raw["login"],
-        password=raw["password"],
+        password=raw.get("password", ""),
+        source=raw.get("source", "manual"),
+        keepass_path=raw.get("keepass_path", ""),
     )
+
+
+def _serialize_credential(e: CredentialEntry) -> dict:
+    d: dict = {
+        "service": e.service,
+        "url": e.url,
+        "login": e.login,
+        "source": e.source,
+    }
+    if e.source == "keepass":
+        d["keepass_path"] = e.keepass_path
+    else:
+        d["password"] = e.password
+    return d
 
 
 def _parse_gui_config(raw: dict) -> GuiConfig:

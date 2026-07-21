@@ -237,44 +237,46 @@ buttons below. The walkthrough that follows is in first-time setup order.
 
 ### Credentials tab
 
-Manage the service logins used by the connectors. Use **Add** / **Edit** /
-**Delete** to maintain the list. Each entry has a *Service*, *URL*, *Login*,
-and *Password / Token*. Passwords are hidden while typing and masked in the
-table.
+Manage the accounts the connectors use. Use **Add** / **Edit** / **Delete** to
+maintain the list. Each account has a *Service*, *URL*, *Login*, and a
+per-account **source** shown in the table:
 
-- **Garmin:** *Login* is your Garmin email, *Password* is your Garmin password.
-- **Strava:** *Login* is your Client Secret, *Password / Token* is the refresh
-  token (see [Getting Strava credentials](#getting-strava-credentials) above).
+- **Enter manually** - you type the *Password / Token* in; it is stored in
+  `credentials.json` (hidden while typing, masked in the table).
+- **From KeePass file** - you point the account at a `.kdbx` file instead of
+  typing a password. The entry is matched in the database by *URL* (and *Login*,
+  if set); only the file path is stored, never the KeePass master password.
+
+For Garmin, *Login* is your Garmin email and the password is your Garmin
+password. For Strava, *Login* is your Client Secret and the password is the
+refresh token (see [Getting Strava credentials](#getting-strava-credentials)).
+Strava must use a **manual** account - its refresh token is rotated and written
+back, which a read-only KeePass file cannot store.
 
 **Load from file...** imports an existing CLI-style credentials JSON file (the
-same format as `--creds-json`), replacing the current list.
+same format as `--creds-json`) as manual accounts, replacing the current list.
 
-**Credential source.** At the top of the tab you can choose where the sync
-reads credentials from:
-
-- **Built-in JSON store** (default) - the table described above, managed in the
-  GUI and saved to `credentials.json`.
-- **KeePass database** - point the sync at an external `.kdbx` file. Entries are
-  matched by URL (and login, if set) and are edited in KeePass itself, so the
-  table is disabled in this mode. The **master password is asked for each time
-  you run a sync** and is never stored on disk. As with the CLI's
-  `--creds-keepass`, Strava is not supported with KeePass (its refresh token
-  cannot be written back); use the JSON store for Strava.
+A credential that is referenced by a connector cannot be deleted; the GUI names
+the connectors so you can detach it first.
 
 ### Configuration tab
 
 Build the sync configuration visually:
 
-- **Connectors** - add each data source/destination. Pick a type (`garmin`,
-  `strava`, or `local_folder`); the dialog shows only the fields that type
-  needs. For Garmin/Strava the *Service* and *URL* must match a credentials
-  entry; for a local folder just provide the path. Deleting a connector also
-  removes it from any sync group that referenced it.
+- **Connectors** - add each data source/destination. Give it a **Name** (used to
+  reference it from sync groups) and a **Type** (`garmin`, `strava`, or
+  `local_folder`). For Garmin/Strava pick a **Credentials** account from the
+  dropdown (populated from the Credentials tab) - its URL and login come from
+  that account. For a local folder just provide the path. A connector used by a
+  sync group cannot be deleted until you remove it from those groups.
 - **Sync Groups** - define what syncs where. Add sources (each with a priority;
   higher priority wins when the same activity exists in several sources) and
   destinations, both chosen from the connectors you defined.
 - **Options** - optional custom start/end dates, *Force re-download* (ignore the
   cache), and *Skip wellness sync*. Click **Save configuration** to persist.
+
+When a sync run uses any KeePass-backed account, the GUI asks for each `.kdbx`
+file's master password once, at **Run Sync** - the passwords are never stored.
 
 **Load from file...** imports an existing config JSON file - both the GUI's own
 `config.json` and a CLI config file work (the CLI-only `cache_dir` field is

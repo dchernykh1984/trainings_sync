@@ -20,6 +20,18 @@ from app.gui.config_store import CredentialEntry
 from app.tracking.tracker import TaskTracker
 
 
+def find_credential(
+    entries: list[CredentialEntry], service: str, url: str, login: str | None
+) -> CredentialEntry | None:
+    """Find the credential a connector references (service + url + login)."""
+    matches = [
+        e
+        for e in entries
+        if e.service == service and url in e.url and (not login or e.login == login)
+    ]
+    return matches[0] if matches else None
+
+
 class GuiCredentialProvider(CredentialProvider):
     def __init__(
         self,
@@ -44,14 +56,9 @@ class GuiCredentialProvider(CredentialProvider):
         return await self._get_manual(request, entry)
 
     def _match(self, request: CredentialRequest) -> CredentialEntry | None:
-        matches = [
-            e
-            for e in self._entries
-            if e.service == request.service
-            and request.url in e.url
-            and (request.login is None or e.login == request.login)
-        ]
-        return matches[0] if matches else None
+        return find_credential(
+            self._entries, request.service, request.url, request.login
+        )
 
     def _keepass_provider(self, path: str) -> CredentialProvider:
         if path not in self._keepass_cache:

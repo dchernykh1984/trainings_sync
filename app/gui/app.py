@@ -669,7 +669,11 @@ class ConnectorDialog(QDialog):
 
     def result_entry(self) -> ConnectorEntry:
         t = self._type.currentText()
-        cred: CredentialEntry | None = self._cred_combo.currentData()
+        # Credentials only apply to garmin/strava - a local folder must not carry
+        # a credential, or it would spuriously "use" one and block its deletion.
+        cred: CredentialEntry | None = (
+            self._cred_combo.currentData() if t in ("garmin", "strava") else None
+        )
         return ConnectorEntry(
             id=self._id.text().strip(),
             type=t,

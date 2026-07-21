@@ -213,6 +213,22 @@ def test_connector_dialog_local_folder(qtbot) -> None:
     assert entry.folder == "/data"
 
 
+def test_connector_dialog_local_folder_carries_no_credential(qtbot) -> None:
+    # Even with credentials configured (and auto-selected in the combo), a
+    # local_folder connector must not reference any credential.
+    creds = [
+        CredentialEntry("Garmin Connect", "https://connect.garmin.com", "me@x", "p")
+    ]
+    dlg = ConnectorDialog(credentials=creds)
+    qtbot.addWidget(dlg)
+    dlg._type.setCurrentText("local_folder")
+    dlg._folder.setText("/data")
+    entry = dlg.result_entry()
+    assert entry.credential_service == ""
+    assert entry.credential_url == ""
+    assert entry.credential_login == ""
+
+
 def test_connector_dialog_type_change_hides_cred_box(qtbot) -> None:
     dlg = ConnectorDialog()
     qtbot.addWidget(dlg)

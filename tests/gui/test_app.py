@@ -673,11 +673,7 @@ def test_log_dialog_uses_fixed_pitch_font(qtbot, tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_config_tab_delete_connector_prunes_group_references(
-    qtbot, monkeypatch, store: ConfigStore
-) -> None:
-    from PySide6.QtWidgets import QMessageBox
-
+def _config_with_group(store: ConfigStore) -> None:
     store.save_gui_config(
         GuiConfig(
             connectors=[
@@ -693,20 +689,48 @@ def test_config_tab_delete_connector_prunes_group_references(
             ],
         )
     )
+
+
+def test_config_tab_delete_connector_used_in_group_is_blocked(
+    qtbot, monkeypatch, store: ConfigStore
+) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    _config_with_group(store)
+    tab = ConfigTab(store)
+    qtbot.addWidget(tab)
+    warned: dict[str, str] = {}
+    monkeypatch.setattr(
+        QMessageBox, "warning", lambda _s, title, text, *a, **k: warned.update(t=text)
+    )
+    tab._conn_list.setCurrentRow(0)  # garmin - used as a source in group "g"
+    tab._delete_connector()
+
+    # The connector is kept and the warning names the offending group.
+    assert [c.id for c in store.load_gui_config().connectors] == ["garmin", "local"]
+    assert "'g'" in warned["t"]
+
+
+def test_config_tab_delete_unused_connector_succeeds(
+    qtbot, monkeypatch, store: ConfigStore
+) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    _config_with_group(store)
+    # Remove the group so "local" becomes unused.
+    cfg = store.load_gui_config()
+    cfg.sync_groups = []
+    store.save_gui_config(cfg)
+
     tab = ConfigTab(store)
     qtbot.addWidget(tab)
     monkeypatch.setattr(
-        QMessageBox,
-        "question",
-        lambda *a, **k: QMessageBox.StandardButton.Yes,
+        QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes
     )
-    tab._conn_list.setCurrentRow(0)  # garmin
+    tab._conn_list.setCurrentRow(1)  # local
     tab._delete_connector()
 
-    reloaded = store.load_gui_config()
-    assert [c.id for c in reloaded.connectors] == ["local"]
-    assert reloaded.sync_groups[0].sources == []
-    assert reloaded.sync_groups[0].destinations == ["local"]
+    assert [c.id for c in store.load_gui_config().connectors] == ["garmin"]
 
 
 # ---------------------------------------------------------------------------

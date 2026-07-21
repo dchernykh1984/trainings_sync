@@ -954,21 +954,32 @@ class ConfigTab(QWidget):
         row = self._conn_list.currentRow()
         if row < 0:
             return
-        deleted_id = self._config.connectors[row].id
+        connector_id = self._config.connectors[row].id
+        using_groups = self._groups_using_connector(connector_id)
+        if using_groups:
+            groups = ", ".join(repr(g) for g in using_groups)
+            QMessageBox.warning(
+                self,
+                "Connector in use",
+                f"Connector {connector_id!r} is used in sync group(s): {groups}.\n\n"
+                "Remove it from those groups before deleting the connector.",
+            )
+            return
         reply = QMessageBox.question(
-            self, "Delete connector", f"Delete connector {deleted_id!r}?"
+            self, "Delete connector", f"Delete connector {connector_id!r}?"
         )
         if reply == QMessageBox.StandardButton.Yes:
             self._config.connectors.pop(row)
-            self._prune_connector_references(deleted_id)
             self._store.save_gui_config(self._config)
             self._refresh_connector_list()
-            self._refresh_group_list()
 
-    def _prune_connector_references(self, connector_id: str) -> None:
-        for group in self._config.sync_groups:
-            group.sources = [s for s in group.sources if s.id != connector_id]
-            group.destinations = [d for d in group.destinations if d != connector_id]
+    def _groups_using_connector(self, connector_id: str) -> list[str]:
+        return [
+            g.id
+            for g in self._config.sync_groups
+            if connector_id in {s.id for s in g.sources}
+            or connector_id in g.destinations
+        ]
 
     # ------------------------------------------------------------------
     # Sync groups

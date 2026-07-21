@@ -1,0 +1,16 @@
+name: pr-build
+
+# Fast smoke build on pull requests (Linux x64 only), via the reusable build.
+on:
+  pull_request:
+
+concurrency:
+  group: pr-build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    uses: ./.github/workflows/build.yml

@@ -3,6 +3,12 @@ name: release-please
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to (re)build and upload assets for (backfill)."
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -10,8 +16,28 @@ permissions:
 
 jobs:
   release-please:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.rp.outputs.release_created }}
+      tag_name: ${{ steps.rp.outputs.tag_name }}
     steps:
-      - uses: googleapis/release-please-action@v4
+      - id: rp
+        uses: googleapis/release-please-action@v4
         with:
           release-type: python
+
+  # Build the full platform matrix and upload the portable apps to the release,
+  # in the same run (a GITHUB_TOKEN-created release cannot trigger a separate
+  # workflow). Also runnable manually to backfill assets for an existing tag.
+  release-build:
+    needs: release-please
+    if: >-
+      always() &&
+      ((github.event_name == 'push' && needs.release-please.outputs.release_created == 'true')
+      || github.event_name == 'workflow_dispatch')
+    permissions:
+      contents: write
+    uses: ./.github/workflows/build.yml
+    with:
+      release_tag: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || needs.release-please.outputs.tag_name }}

@@ -788,7 +788,8 @@ class SyncGroupDialog(QDialog):
     def _add_source(self) -> None:
         cid = self._src_add_combo.currentText()
         pri = self._src_priority.value()
-        if cid and cid not in self._source_ids():
+        # A connector cannot be both a source and a destination of one group.
+        if cid and cid not in self._source_ids() and cid not in self._destination_ids():
             self._sources_widget.addItem(self._make_source_item(cid, pri))
 
     def _remove_source(self) -> None:
@@ -798,7 +799,7 @@ class SyncGroupDialog(QDialog):
 
     def _add_destination(self) -> None:
         cid = self._dst_add_combo.currentText()
-        if cid and cid not in self._destination_ids():
+        if cid and cid not in self._destination_ids() and cid not in self._source_ids():
             self._destinations_widget.addItem(cid)
 
     def _remove_destination(self) -> None:

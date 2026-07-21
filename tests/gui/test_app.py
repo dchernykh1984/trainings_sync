@@ -238,6 +238,30 @@ def test_connector_dialog_local_folder(qtbot) -> None:
     assert entry.folder == "/data"
 
 
+def test_connector_dialog_folder_browse_fills_path(qtbot, monkeypatch) -> None:
+    from PySide6.QtWidgets import QFileDialog
+
+    dlg = ConnectorDialog()
+    qtbot.addWidget(dlg)
+    dlg._type.setCurrentText("local_folder")
+    monkeypatch.setattr(
+        QFileDialog, "getExistingDirectory", lambda *a, **k: "/chosen/folder"
+    )
+    dlg._browse_folder()
+    assert dlg._folder.text() == "/chosen/folder"
+
+
+def test_connector_dialog_folder_browse_cancel_keeps_path(qtbot, monkeypatch) -> None:
+    from PySide6.QtWidgets import QFileDialog
+
+    dlg = ConnectorDialog()
+    qtbot.addWidget(dlg)
+    dlg._folder.setText("/keep")
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", lambda *a, **k: "")
+    dlg._browse_folder()
+    assert dlg._folder.text() == "/keep"
+
+
 def test_connector_dialog_local_folder_carries_no_credential(qtbot) -> None:
     # Even with credentials configured (and auto-selected in the combo), a
     # local_folder connector must not reference any credential.

@@ -105,6 +105,16 @@ def test_credential_dialog_defaults_to_manual_source(qtbot) -> None:
     assert dlg._keepass_row.isHidden()
 
 
+def test_credential_dialog_service_field_labeled_account_name(qtbot) -> None:
+    from PySide6.QtWidgets import QLabel
+
+    dlg = CredentialDialog()
+    qtbot.addWidget(dlg)
+    labels = [w.text() for w in dlg.findChildren(QLabel)]
+    assert "Account name:" in labels
+    assert "Service:" not in labels
+
+
 def test_credential_dialog_url_dropdown_presets_and_free_text(qtbot) -> None:
     dlg = CredentialDialog()
     qtbot.addWidget(dlg)

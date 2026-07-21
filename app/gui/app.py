@@ -371,7 +371,7 @@ class CredentialDialog(QDialog):
         self._url.addItems(_KNOWN_CREDENTIAL_URLS)
         self._url.setCurrentText(entry.url if entry else "")
         self._login = QLineEdit(entry.login if entry else "")
-        form.addRow("Service:", self._service)
+        form.addRow("Account name:", self._service)
         form.addRow("URL:", self._url)
         form.addRow("Login:", self._login)
 

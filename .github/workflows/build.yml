@@ -12,6 +12,11 @@ on:
   release:
     types: [published]
 
+# Cancel superseded pull-request builds, but never interrupt a release build.
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: write # upload release assets
 

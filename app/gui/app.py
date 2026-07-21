@@ -786,7 +786,11 @@ class SyncGroupDialog(QDialog):
         self._validate()
 
     def _validate(self) -> None:
-        self._ok_btn.setEnabled(bool(self._id.text().strip()))
+        # A group needs a name and at least one source (the CLI rejects a group
+        # with no sources).
+        has_name = bool(self._id.text().strip())
+        has_source = self._sources_widget.count() > 0
+        self._ok_btn.setEnabled(has_name and has_source)
 
     @staticmethod
     def _make_source_item(cid: str, priority: int) -> QListWidgetItem:
@@ -812,11 +816,13 @@ class SyncGroupDialog(QDialog):
         # A connector cannot be both a source and a destination of one group.
         if cid and cid not in self._source_ids() and cid not in self._destination_ids():
             self._sources_widget.addItem(self._make_source_item(cid, pri))
+            self._validate()
 
     def _remove_source(self) -> None:
         row = self._sources_widget.currentRow()
         if row >= 0:
             self._sources_widget.takeItem(row)
+            self._validate()
 
     def _add_destination(self) -> None:
         cid = self._dst_add_combo.currentText()

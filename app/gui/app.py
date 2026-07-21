@@ -1049,10 +1049,21 @@ class ConfigTab(QWidget):
             dst_str = ", ".join(g.destinations)
             self._grp_list.addItem(f"{g.id}  [{src_str}] -> [{dst_str}]")
 
+    def _group_name_taken(self, name: str, exclude_index: int | None) -> bool:
+        return any(
+            g.id == name
+            for i, g in enumerate(self._config.sync_groups)
+            if i != exclude_index
+        )
+
     def _add_group(self) -> None:
         dlg = SyncGroupDialog(connector_ids=self._connector_ids(), parent=self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            self._config.sync_groups.append(dlg.result_entry())
+            entry = dlg.result_entry()
+            if self._group_name_taken(entry.id, exclude_index=None):
+                self._warn_duplicate_group(entry.id)
+                return
+            self._config.sync_groups.append(entry)
             self._store.save_gui_config(self._config)
             self._refresh_group_list()
 
@@ -1066,9 +1077,20 @@ class ConfigTab(QWidget):
             parent=self,
         )
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            self._config.sync_groups[row] = dlg.result_entry()
+            entry = dlg.result_entry()
+            if self._group_name_taken(entry.id, exclude_index=row):
+                self._warn_duplicate_group(entry.id)
+                return
+            self._config.sync_groups[row] = entry
             self._store.save_gui_config(self._config)
             self._refresh_group_list()
+
+    def _warn_duplicate_group(self, name: str) -> None:
+        QMessageBox.warning(
+            self,
+            "Duplicate group",
+            f"A sync group named {name!r} already exists. Group names must be unique.",
+        )
 
     def _delete_group(self) -> None:
         row = self._grp_list.currentRow()

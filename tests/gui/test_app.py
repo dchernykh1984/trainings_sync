@@ -817,6 +817,45 @@ def test_config_tab_edit_connector_keeping_own_name_is_allowed(
     assert saved[0].folder == "/b"
 
 
+class _FakeGroupDialog:
+    def __init__(self, entry: SyncGroupEntry) -> None:
+        self._entry = entry
+
+    def exec(self) -> int:
+        from PySide6.QtWidgets import QDialog
+
+        return QDialog.DialogCode.Accepted
+
+    def result_entry(self) -> SyncGroupEntry:
+        return self._entry
+
+
+def test_config_tab_add_group_rejects_duplicate_name(
+    qtbot, monkeypatch, store: ConfigStore
+) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    import app.gui.app as gui_app
+
+    store.save_gui_config(
+        GuiConfig(
+            connectors=[ConnectorEntry(id="local", type="local_folder", folder="/x")],
+            sync_groups=[SyncGroupEntry(id="g", sources=[], destinations=[])],
+        )
+    )
+    tab = ConfigTab(store)
+    qtbot.addWidget(tab)
+
+    dupe = SyncGroupEntry(id="g", sources=[], destinations=[])
+    monkeypatch.setattr(gui_app, "SyncGroupDialog", lambda **kw: _FakeGroupDialog(dupe))
+    warned: list[bool] = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warned.append(True))
+    tab._add_group()
+
+    assert warned == [True]
+    assert [g.id for g in store.load_gui_config().sync_groups] == ["g"]
+
+
 def test_config_tab_delete_connector_used_in_group_is_blocked(
     qtbot, monkeypatch, store: ConfigStore
 ) -> None:

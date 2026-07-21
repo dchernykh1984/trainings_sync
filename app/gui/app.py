@@ -519,11 +519,32 @@ class CredentialsTab(QWidget):
         row = self._table.currentRow()
         if row < 0:
             return
-        dlg = CredentialDialog(entry=self._entries[row], parent=self)
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            self._entries[row] = dlg.result_entry()
-            self._store.save_credentials(self._entries)
-            self._refresh_table()
+        old = self._entries[row]
+        dlg = CredentialDialog(entry=old, parent=self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        new = dlg.result_entry()
+        identity_changed = (old.service, old.url, old.login) != (
+            new.service,
+            new.url,
+            new.login,
+        )
+        if identity_changed:
+            using = self._connectors_using_credential(old)
+            if using:
+                connectors = ", ".join(repr(c) for c in using)
+                QMessageBox.warning(
+                    self,
+                    "Credential in use",
+                    f"Credential {old.service!r} is used by connector(s): "
+                    f"{connectors}.\n\nChanging its service, URL, or login would "
+                    "detach them. Update those connectors first, or edit only the "
+                    "password / KeePass file.",
+                )
+                return
+        self._entries[row] = new
+        self._store.save_credentials(self._entries)
+        self._refresh_table()
 
     def _delete(self) -> None:
         row = self._table.currentRow()

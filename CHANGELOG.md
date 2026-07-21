@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/dchernykh1984/trainings_sync/compare/v0.1.0...v0.1.1) (2026-07-21)
+
+
+### Bug Fixes
+
+* reliable release builds (linux-aarch64 on ubuntu-24.04, drop Intel macOS) ([ce4415f](https://github.com/dchernykh1984/trainings_sync/commit/ce4415fc916794c3b7f3624b59b059b9dcf5e2ee))
+
 ## 0.1.0 (2026-07-21)
 
 

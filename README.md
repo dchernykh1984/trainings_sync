@@ -238,8 +238,9 @@ buttons below. The walkthrough that follows is in first-time setup order.
 ### Credentials tab
 
 Manage the accounts the connectors use. Use **Add** / **Edit** / **Delete** to
-maintain the list. Each account has a *Service*, *URL*, *Login*, and a
-per-account **source** shown in the table:
+maintain the list. Each account has an *Account name*, a *URL* (chosen from the
+known service endpoints or typed in), a *Login*, and a per-account **source**
+shown in the table:
 
 - **Enter manually** - you type the *Password / Token* in; it is stored in
   `credentials.json` (hidden while typing, masked in the table).
@@ -267,8 +268,9 @@ Build the sync configuration visually:
   reference it from sync groups) and a **Type** (`garmin`, `strava`, or
   `local_folder`). For Garmin/Strava pick a **Credentials** account from the
   dropdown (populated from the Credentials tab) - its URL and login come from
-  that account. For a local folder just provide the path. A connector used by a
-  sync group cannot be deleted until you remove it from those groups.
+  that account. For a local folder pick the directory with **Browse...** (or type
+  the path). A connector used by a sync group cannot be deleted until you remove
+  it from those groups.
 - **Sync Groups** - define what syncs where. Add sources (each with a priority;
   higher priority wins when the same activity exists in several sources) and
   destinations, both chosen from the connectors you defined.

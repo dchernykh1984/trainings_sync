@@ -754,6 +754,69 @@ def _config_with_group(store: ConfigStore) -> None:
     )
 
 
+class _FakeConnectorDialog:
+    def __init__(self, entry: ConnectorEntry) -> None:
+        self._entry = entry
+
+    def exec(self) -> int:
+        from PySide6.QtWidgets import QDialog
+
+        return QDialog.DialogCode.Accepted
+
+    def result_entry(self) -> ConnectorEntry:
+        return self._entry
+
+
+def test_config_tab_add_connector_rejects_duplicate_name(
+    qtbot, monkeypatch, store: ConfigStore
+) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    import app.gui.app as gui_app
+
+    store.save_gui_config(
+        GuiConfig(connectors=[ConnectorEntry(id="garmin", type="local_folder")])
+    )
+    tab = ConfigTab(store)
+    qtbot.addWidget(tab)
+
+    dupe = ConnectorEntry(id="garmin", type="local_folder", folder="/x")
+    monkeypatch.setattr(
+        gui_app, "ConnectorDialog", lambda **kw: _FakeConnectorDialog(dupe)
+    )
+    warned: list[bool] = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warned.append(True))
+    tab._add_connector()
+
+    assert warned == [True]
+    assert [c.id for c in store.load_gui_config().connectors] == ["garmin"]
+
+
+def test_config_tab_edit_connector_keeping_own_name_is_allowed(
+    qtbot, monkeypatch, store: ConfigStore
+) -> None:
+    import app.gui.app as gui_app
+
+    store.save_gui_config(
+        GuiConfig(
+            connectors=[ConnectorEntry(id="garmin", type="local_folder", folder="/a")]
+        )
+    )
+    tab = ConfigTab(store)
+    qtbot.addWidget(tab)
+
+    updated = ConnectorEntry(id="garmin", type="local_folder", folder="/b")
+    monkeypatch.setattr(
+        gui_app, "ConnectorDialog", lambda **kw: _FakeConnectorDialog(updated)
+    )
+    tab._conn_list.setCurrentRow(0)
+    tab._edit_connector()
+
+    saved = store.load_gui_config().connectors
+    assert len(saved) == 1
+    assert saved[0].folder == "/b"
+
+
 def test_config_tab_delete_connector_used_in_group_is_blocked(
     qtbot, monkeypatch, store: ConfigStore
 ) -> None:

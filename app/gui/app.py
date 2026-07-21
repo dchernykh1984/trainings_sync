@@ -960,10 +960,29 @@ class ConfigTab(QWidget):
         for c in self._config.connectors:
             self._conn_list.addItem(f"[{c.type}] {c.id}")
 
+    def _connector_name_taken(self, name: str, exclude_index: int | None) -> bool:
+        return any(
+            c.id == name
+            for i, c in enumerate(self._config.connectors)
+            if i != exclude_index
+        )
+
+    def _warn_duplicate_name(self, name: str) -> None:
+        QMessageBox.warning(
+            self,
+            "Duplicate name",
+            f"A connector named {name!r} already exists. "
+            "Connector names must be unique.",
+        )
+
     def _add_connector(self) -> None:
         dlg = ConnectorDialog(credentials=self._store.load_credentials(), parent=self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            self._config.connectors.append(dlg.result_entry())
+            entry = dlg.result_entry()
+            if self._connector_name_taken(entry.id, exclude_index=None):
+                self._warn_duplicate_name(entry.id)
+                return
+            self._config.connectors.append(entry)
             self._store.save_gui_config(self._config)
             self._refresh_connector_list()
 
@@ -977,7 +996,11 @@ class ConfigTab(QWidget):
             parent=self,
         )
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            self._config.connectors[row] = dlg.result_entry()
+            entry = dlg.result_entry()
+            if self._connector_name_taken(entry.id, exclude_index=row):
+                self._warn_duplicate_name(entry.id)
+                return
+            self._config.connectors[row] = entry
             self._store.save_gui_config(self._config)
             self._refresh_connector_list()
 

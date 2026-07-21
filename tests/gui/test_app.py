@@ -371,12 +371,27 @@ def test_sync_group_dialog_prefilled(qtbot) -> None:
     assert entry.destinations == ["local"]
 
 
-def test_sync_group_dialog_ok_disabled_until_id_filled(qtbot) -> None:
+def test_sync_group_dialog_ok_needs_name_and_source(qtbot) -> None:
     dlg = SyncGroupDialog(connector_ids=["garmin"])
     qtbot.addWidget(dlg)
     assert not dlg._ok_btn.isEnabled()
     dlg._id.setText("my-group")
+    assert not dlg._ok_btn.isEnabled()  # still no source
+    dlg._src_add_combo.setCurrentText("garmin")
+    qtbot.mouseClick(dlg._src_add_btn, Qt.MouseButton.LeftButton)
     assert dlg._ok_btn.isEnabled()
+
+
+def test_sync_group_dialog_ok_disabled_after_removing_last_source(qtbot) -> None:
+    existing = SyncGroupEntry(
+        id="g", sources=[GroupSourceEntry("garmin", 1)], destinations=[]
+    )
+    dlg = SyncGroupDialog(connector_ids=["garmin"], entry=existing)
+    qtbot.addWidget(dlg)
+    assert dlg._ok_btn.isEnabled()
+    dlg._sources_widget.setCurrentRow(0)
+    qtbot.mouseClick(dlg._src_del_btn, Qt.MouseButton.LeftButton)
+    assert not dlg._ok_btn.isEnabled()
 
 
 def test_sync_group_dialog_ignores_duplicate_source(qtbot) -> None:

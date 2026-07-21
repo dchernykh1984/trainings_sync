@@ -394,6 +394,7 @@ class CredentialDialog(QDialog):
 
         self._ok_btn = btns.button(QDialogButtonBox.StandardButton.Ok)
         self._service.textChanged.connect(self._validate)
+        self._keepass_path.textChanged.connect(self._validate)
         self._keepass_radio.toggled.connect(self._on_source_changed)
         self._keepass_browse.clicked.connect(self._browse_keepass)
 
@@ -418,7 +419,10 @@ class CredentialDialog(QDialog):
             self._keepass_path.setText(path_str)
 
     def _validate(self) -> None:
-        self._ok_btn.setEnabled(bool(self._service.text().strip()))
+        ok = bool(self._service.text().strip())
+        if self._keepass_radio.isChecked():
+            ok = ok and bool(self._keepass_path.text().strip())
+        self._ok_btn.setEnabled(ok)
 
     def result_entry(self) -> CredentialEntry:
         if self._keepass_radio.isChecked():

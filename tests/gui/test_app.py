@@ -126,6 +126,17 @@ def test_credential_dialog_keepass_switches_fields(qtbot) -> None:
     assert dlg._password.isHidden()
 
 
+def test_credential_dialog_keepass_requires_path(qtbot) -> None:
+    dlg = CredentialDialog()
+    qtbot.addWidget(dlg)
+    dlg._service.setText("Garmin Connect")
+    assert dlg._ok_btn.isEnabled()  # manual: service is enough
+    dlg._keepass_radio.setChecked(True)
+    assert not dlg._ok_btn.isEnabled()  # keepass without a file path
+    dlg._keepass_path.setText("/x/db.kdbx")
+    assert dlg._ok_btn.isEnabled()
+
+
 def test_credential_dialog_keepass_result(qtbot) -> None:
     dlg = CredentialDialog()
     qtbot.addWidget(dlg)

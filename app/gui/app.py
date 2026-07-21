@@ -486,6 +486,7 @@ class CredentialsTab(QWidget):
         self._edit_btn.clicked.connect(self._edit)
         self._delete_btn.clicked.connect(self._delete)
         self._load_btn.clicked.connect(self._load_from_file)
+        self._table.itemDoubleClicked.connect(self._edit)
 
         self._refresh_table()
 
@@ -896,6 +897,7 @@ class ConfigTab(QWidget):
         self._conn_add.clicked.connect(self._add_connector)
         self._conn_edit.clicked.connect(self._edit_connector)
         self._conn_del.clicked.connect(self._delete_connector)
+        self._conn_list.itemDoubleClicked.connect(self._edit_connector)
 
         # Sync groups
         grp_box = QGroupBox("Sync Groups")
@@ -915,6 +917,7 @@ class ConfigTab(QWidget):
         self._grp_add.clicked.connect(self._add_group)
         self._grp_edit.clicked.connect(self._edit_group)
         self._grp_del.clicked.connect(self._delete_group)
+        self._grp_list.itemDoubleClicked.connect(self._edit_group)
 
         # Options
         opt_box = QGroupBox("Options")

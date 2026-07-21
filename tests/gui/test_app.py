@@ -42,6 +42,21 @@ def store(tmp_path: Path) -> ConfigStore:
     return ConfigStore(config_dir=tmp_path / "cfg")
 
 
+class _RejectingDialog:
+    """Records the entry it was opened with, then cancels (no changes)."""
+
+    def __init__(self, opened: dict, entry: object) -> None:
+        opened["entry"] = entry
+
+    def exec(self) -> int:
+        from PySide6.QtWidgets import QDialog
+
+        return QDialog.DialogCode.Rejected
+
+    def result_entry(self) -> object:  # pragma: no cover - never called on reject
+        raise AssertionError("result_entry must not be read after cancel")
+
+
 # ---------------------------------------------------------------------------
 # _parse_date_or_default
 # ---------------------------------------------------------------------------
@@ -540,6 +555,25 @@ def test_credentials_tab_edit_no_selection_does_nothing(
     tab._table.clearSelection()
     # Should not raise
     tab._edit()
+
+
+def test_credentials_tab_double_click_opens_edit(
+    qtbot, monkeypatch, store: ConfigStore
+) -> None:
+    import app.gui.app as gui_app
+
+    store.save_credentials([CredentialEntry("Acc", "u", "l", "p")])
+    tab = CredentialsTab(store)
+    qtbot.addWidget(tab)
+    opened: dict = {}
+    monkeypatch.setattr(
+        gui_app,
+        "CredentialDialog",
+        lambda **kw: _RejectingDialog(opened, kw.get("entry")),
+    )
+    tab._table.selectRow(0)
+    tab._table.itemDoubleClicked.emit(tab._table.item(0, 0))
+    assert opened["entry"].service == "Acc"
 
 
 class _FakeCredentialDialog:
@@ -1041,6 +1075,55 @@ def test_config_tab_add_group_rejects_duplicate_name(
 
     assert warned == [True]
     assert [g.id for g in store.load_gui_config().sync_groups] == ["g"]
+
+
+def test_config_tab_double_click_connector_opens_edit(
+    qtbot, monkeypatch, store: ConfigStore
+) -> None:
+    import app.gui.app as gui_app
+
+    store.save_gui_config(
+        GuiConfig(connectors=[ConnectorEntry(id="garmin", type="local_folder")])
+    )
+    tab = ConfigTab(store)
+    qtbot.addWidget(tab)
+    opened: dict = {}
+    monkeypatch.setattr(
+        gui_app,
+        "ConnectorDialog",
+        lambda **kw: _RejectingDialog(opened, kw.get("entry")),
+    )
+    tab._conn_list.setCurrentRow(0)
+    tab._conn_list.itemDoubleClicked.emit(tab._conn_list.item(0))
+    assert opened["entry"].id == "garmin"
+
+
+def test_config_tab_double_click_group_opens_edit(
+    qtbot, monkeypatch, store: ConfigStore
+) -> None:
+    import app.gui.app as gui_app
+
+    store.save_gui_config(
+        GuiConfig(
+            connectors=[ConnectorEntry(id="local", type="local_folder", folder="/x")],
+            sync_groups=[
+                SyncGroupEntry(
+                    id="g", sources=[GroupSourceEntry("local", 1)], destinations=[]
+                )
+            ],
+        )
+    )
+    tab = ConfigTab(store)
+    qtbot.addWidget(tab)
+    opened: dict = {}
+    monkeypatch.setattr(
+        gui_app,
+        "SyncGroupDialog",
+        lambda **kw: _RejectingDialog(opened, kw.get("entry")),
+    )
+    tab._grp_list.setCurrentRow(0)
+    tab._grp_list.itemDoubleClicked.emit(tab._grp_list.item(0))
+    assert opened["entry"].id == "g"
 
 
 def test_config_tab_delete_connector_used_in_group_is_blocked(

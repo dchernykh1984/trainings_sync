@@ -433,8 +433,26 @@ def test_credentials_tab_masks_password(qtbot, store: ConfigStore) -> None:
     store.save_credentials([CredentialEntry("S", "U", "L", "supersecret")])
     tab = CredentialsTab(store)
     qtbot.addWidget(tab)
-    displayed = tab._table.item(0, 3).text()
+    # Column 4 is the secret / KeePass file column.
+    displayed = tab._table.item(0, 4).text()
     assert "supersecret" not in displayed
+
+
+def test_credentials_tab_shows_source_column(qtbot, store: ConfigStore) -> None:
+    store.save_credentials(
+        [
+            CredentialEntry("Manual", "u", "l", "p"),
+            CredentialEntry(
+                "Kp", "u", "l", source="keepass", keepass_path="/x/db.kdbx"
+            ),
+        ]
+    )
+    tab = CredentialsTab(store)
+    qtbot.addWidget(tab)
+    assert tab._table.item(0, 3).text() == "manual"
+    assert tab._table.item(1, 3).text() == "keepass"
+    # A KeePass credential shows its file path (no secret to mask).
+    assert tab._table.item(1, 4).text() == "/x/db.kdbx"
 
 
 def test_credentials_tab_load_from_file(
@@ -475,44 +493,6 @@ def test_credentials_tab_load_from_file_cancelled_is_noop(
 
     assert tab._table.rowCount() == 1
     assert tab._table.item(0, 0).text() == "Keep"
-
-
-def test_credentials_tab_defaults_to_json_source(qtbot, store: ConfigStore) -> None:
-    tab = CredentialsTab(store)
-    qtbot.addWidget(tab)
-    assert tab._src_json_radio.isChecked()
-    assert tab._keepass_row.isHidden()
-    assert tab._table.isEnabled()
-
-
-def test_credentials_tab_selecting_keepass_persists_and_disables_json(
-    qtbot, store: ConfigStore
-) -> None:
-    tab = CredentialsTab(store)
-    qtbot.addWidget(tab)
-    tab._src_keepass_radio.setChecked(True)
-    tab._keepass_path.setText("/home/me/db.kdbx")
-
-    # JSON management is disabled and the KeePass path row is shown.
-    assert not tab._table.isEnabled()
-    assert not tab._add_btn.isEnabled()
-    assert not tab._keepass_row.isHidden()
-
-    # The choice is persisted.
-    cs = store.load_credential_source()
-    assert cs.source == "keepass"
-    assert cs.keepass_path == "/home/me/db.kdbx"
-
-
-def test_credentials_tab_loads_saved_keepass_source(qtbot, store: ConfigStore) -> None:
-    store.save_credential_source(
-        CredentialSource(source="keepass", keepass_path="/x/db.kdbx")
-    )
-    tab = CredentialsTab(store)
-    qtbot.addWidget(tab)
-    assert tab._src_keepass_radio.isChecked()
-    assert tab._keepass_path.text() == "/x/db.kdbx"
-    assert not tab._table.isEnabled()
 
 
 # ---------------------------------------------------------------------------

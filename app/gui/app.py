@@ -652,8 +652,12 @@ class ConnectorDialog(QDialog):
         # Local folder
         self._folder_box = QGroupBox("Local folder")
         folder_form = QFormLayout(self._folder_box)
+        folder_row = QHBoxLayout()
         self._folder = QLineEdit(entry.folder if entry else "")
-        folder_form.addRow("Path:", self._folder)
+        self._folder_browse = QPushButton("Browse...")
+        folder_row.addWidget(self._folder)
+        folder_row.addWidget(self._folder_browse)
+        folder_form.addRow("Path:", folder_row)
 
         form.addRow(self._cred_box)
         form.addRow(self._folder_box)
@@ -669,8 +673,14 @@ class ConnectorDialog(QDialog):
         self._ok_btn = btns.button(QDialogButtonBox.StandardButton.Ok)
         self._id.textChanged.connect(self._validate)
         self._cred_combo.currentIndexChanged.connect(self._validate)
+        self._folder_browse.clicked.connect(self._browse_folder)
         self._type.currentTextChanged.connect(self._on_type_changed)
         self._on_type_changed(self._type.currentText())
+
+    def _browse_folder(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "Select folder")
+        if path:
+            self._folder.setText(path)
 
     def _select_credential(self, entry: ConnectorEntry | None) -> None:
         if entry is None:

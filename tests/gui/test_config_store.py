@@ -28,6 +28,7 @@ from app.gui.config_store import (
     _parse_connector_entry,
     _parse_group_entry,
     _serialize_connector,
+    _serialize_credential,
     _serialize_group,
 )
 
@@ -94,6 +95,58 @@ def test_save_credentials_overwrites(store: ConfigStore) -> None:
     loaded = store.load_credentials()
     assert len(loaded) == 1
     assert loaded[0].service == "B"
+
+
+def test_manual_credential_defaults_to_manual_source(store: ConfigStore) -> None:
+    store.save_credentials([CredentialEntry("S", "U", "L", "P")])
+    loaded = store.load_credentials()[0]
+    assert loaded.source == "manual"
+    assert loaded.password == "P"
+    assert loaded.keepass_path == ""
+
+
+def test_keepass_credential_round_trips_without_password(store: ConfigStore) -> None:
+    entry = CredentialEntry(
+        "Garmin Connect",
+        "https://connect.garmin.com",
+        "me@x",
+        source="keepass",
+        keepass_path="/home/me/db.kdbx",
+    )
+    store.save_credentials([entry])
+    loaded = store.load_credentials()[0]
+    assert loaded == entry
+    assert loaded.password == ""
+
+
+def test_serialize_credential_manual_has_password_no_path() -> None:
+    d = _serialize_credential(CredentialEntry("S", "U", "L", "secret"))
+    assert d["source"] == "manual"
+    assert d["password"] == "secret"
+    assert "keepass_path" not in d
+
+
+def test_serialize_credential_keepass_has_path_no_password() -> None:
+    d = _serialize_credential(
+        CredentialEntry("S", "U", "L", source="keepass", keepass_path="/x.kdbx")
+    )
+    assert d["source"] == "keepass"
+    assert d["keepass_path"] == "/x.kdbx"
+    assert "password" not in d
+
+
+def test_legacy_credential_without_source_parses_as_manual(
+    store: ConfigStore, tmp_path: Path
+) -> None:
+    # A CLI creds.json has no "source" field.
+    src = tmp_path / "creds.json"
+    src.write_text(
+        json.dumps([{"service": "S", "url": "U", "login": "L", "password": "P"}]),
+        encoding="utf-8",
+    )
+    loaded = store.load_credentials_from(src)[0]
+    assert loaded.source == "manual"
+    assert loaded.password == "P"
 
 
 def test_load_credentials_from_arbitrary_path(

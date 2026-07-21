@@ -259,15 +259,6 @@ def _parse_date_or_default(value: str, default: date) -> date:
     return default
 
 
-def _editable_combo(values: list[str], current: str) -> QComboBox:
-    """A combo box pre-filled with known values that still accepts free text."""
-    combo = QComboBox()
-    combo.setEditable(True)
-    combo.addItems(values)
-    combo.setCurrentText(current)
-    return combo
-
-
 # ---------------------------------------------------------------------------
 # TaskRow - one row per sync task shown in the Sync tab
 # ---------------------------------------------------------------------------
@@ -566,8 +557,9 @@ class ConnectorDialog(QDialog):
         root = QVBoxLayout(self)
         form = QFormLayout()
 
+        # "Name" is the connector's identifier - referenced by sync groups.
         self._id = QLineEdit(entry.id if entry else "")
-        form.addRow("ID:", self._id)
+        form.addRow("Name:", self._id)
 
         self._type = QComboBox()
         self._type.addItems(list(CONNECTOR_TYPES))
@@ -577,29 +569,16 @@ class ConnectorDialog(QDialog):
                 self._type.setCurrentIndex(idx)
         form.addRow("Type:", self._type)
 
-        # An account is identified by service + login; the URL belongs to that
-        # account (it comes from the credentials), so Service and Login are
-        # editable combos of the configured accounts while URL is derived from
-        # the selected account rather than chosen independently.
+        # Credentials come from the Credentials tab - the connector just picks an
+        # account, and its service/url/login are taken from that account.
         self._cred_box = QGroupBox("Credentials")
         cred_form = QFormLayout(self._cred_box)
-        self._cred_service = _editable_combo(
-            sorted({c.service for c in self._credentials if c.service}),
-            entry.credential_service if entry else "",
-        )
-        self._cred_login = _editable_combo(
-            sorted({c.login for c in self._credentials if c.login}),
-            entry.credential_login if entry else "",
-        )
-        self._cred_url = QLineEdit(entry.credential_url if entry else "")
-        self._cred_url.setReadOnly(True)
-        self._cred_url.setPlaceholderText("Filled from the selected account")
-        # Service/login changes re-derive the URL from the matching account.
-        self._cred_service.currentTextChanged.connect(self._on_service_changed)
-        self._cred_login.currentTextChanged.connect(self._on_login_changed)
-        cred_form.addRow("Service:", self._cred_service)
-        cred_form.addRow("Login (optional):", self._cred_login)
-        cred_form.addRow("URL:", self._cred_url)
+        self._cred_combo = QComboBox()
+        for cred in self._credentials:
+            label = f"{cred.service} ({cred.login})" if cred.login else cred.service
+            self._cred_combo.addItem(label, cred)
+        self._select_credential(entry)
+        cred_form.addRow("Credentials:", self._cred_combo)
 
         # Strava-only
         self._client_id_spin = QSpinBox()
@@ -627,62 +606,45 @@ class ConnectorDialog(QDialog):
 
         self._ok_btn = btns.button(QDialogButtonBox.StandardButton.Ok)
         self._id.textChanged.connect(self._validate)
-        self._validate()
-
+        self._cred_combo.currentIndexChanged.connect(self._validate)
         self._type.currentTextChanged.connect(self._on_type_changed)
         self._on_type_changed(self._type.currentText())
 
+    def _select_credential(self, entry: ConnectorEntry | None) -> None:
+        if entry is None:
+            return
+        from app.gui.credential_provider import find_credential
+
+        match = find_credential(
+            self._credentials,
+            entry.credential_service,
+            entry.credential_url,
+            entry.credential_login or None,
+        )
+        if match is not None:
+            self._cred_combo.setCurrentIndex(self._credentials.index(match))
+
     def _validate(self) -> None:
-        self._ok_btn.setEnabled(bool(self._id.text().strip()))
+        has_name = bool(self._id.text().strip())
+        needs_cred = self._type.currentText() in ("garmin", "strava")
+        cred_ok = not needs_cred or self._cred_combo.currentData() is not None
+        self._ok_btn.setEnabled(has_name and cred_ok)
 
     def _on_type_changed(self, t: str) -> None:
         self._cred_box.setVisible(t in ("garmin", "strava"))
         self._client_id_spin.setVisible(t == "strava")
         self._folder_box.setVisible(t == "local_folder")
-
-    def _account_for(self, service: str, login: str) -> CredentialEntry | None:
-        if not service:
-            return None
-        with_login = next(
-            (
-                c
-                for c in self._credentials
-                if c.service == service and (not login or c.login == login)
-            ),
-            None,
-        )
-        if with_login is not None:
-            return with_login
-        return next((c for c in self._credentials if c.service == service), None)
-
-    def _derive_url(self) -> None:
-        match = self._account_for(
-            self._cred_service.currentText().strip(),
-            self._cred_login.currentText().strip(),
-        )
-        if match is not None:
-            self._cred_url.setText(match.url)
-
-    def _on_service_changed(self, service: str) -> None:
-        # Default the login to the picked service's account, then derive the URL.
-        match = self._account_for(service.strip(), "")
-        if match is not None:
-            self._cred_login.blockSignals(True)
-            self._cred_login.setCurrentText(match.login)
-            self._cred_login.blockSignals(False)
-        self._derive_url()
-
-    def _on_login_changed(self, _login: str) -> None:
-        self._derive_url()
+        self._validate()
 
     def result_entry(self) -> ConnectorEntry:
         t = self._type.currentText()
+        cred: CredentialEntry | None = self._cred_combo.currentData()
         return ConnectorEntry(
             id=self._id.text().strip(),
             type=t,
-            credential_service=self._cred_service.currentText().strip(),
-            credential_url=self._cred_url.text().strip(),
-            credential_login=self._cred_login.currentText().strip(),
+            credential_service=cred.service if cred else "",
+            credential_url=cred.url if cred else "",
+            credential_login=cred.login if cred else "",
             client_id=self._client_id_spin.value() if t == "strava" else 0,
             folder=self._folder.text().strip() if t == "local_folder" else "",
         )

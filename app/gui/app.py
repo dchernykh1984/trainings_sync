@@ -341,20 +341,42 @@ class CredentialDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Add Credential" if entry is None else "Edit Credential")
-        self.setMinimumWidth(420)
+        self.setMinimumWidth(440)
 
         form = QFormLayout(self)
+
+        # Per-credential source: type the secret in (manual) or resolve it from
+        # a KeePass .kdbx at sync time (the master password is never stored).
+        src_row = QHBoxLayout()
+        self._manual_radio = QRadioButton("Enter manually")
+        self._keepass_radio = QRadioButton("From KeePass file")
+        src_row.addWidget(self._manual_radio)
+        src_row.addWidget(self._keepass_radio)
+        src_row.addStretch()
+        form.addRow("Source:", src_row)
 
         self._service = QLineEdit(entry.service if entry else "")
         self._url = QLineEdit(entry.url if entry else "")
         self._login = QLineEdit(entry.login if entry else "")
-        self._password = QLineEdit(entry.password if entry else "")
-        self._password.setEchoMode(QLineEdit.EchoMode.Password)
-
         form.addRow("Service:", self._service)
         form.addRow("URL:", self._url)
         form.addRow("Login:", self._login)
-        form.addRow("Password / Token:", self._password)
+
+        self._password = QLineEdit(entry.password if entry else "")
+        self._password.setEchoMode(QLineEdit.EchoMode.Password)
+        self._password_label = QLabel("Password / Token:")
+        form.addRow(self._password_label, self._password)
+
+        kp_row = QHBoxLayout()
+        self._keepass_path = QLineEdit(entry.keepass_path if entry else "")
+        self._keepass_path.setPlaceholderText("Path to .kdbx file")
+        self._keepass_browse = QPushButton("Browse...")
+        kp_row.addWidget(self._keepass_path)
+        kp_row.addWidget(self._keepass_browse)
+        self._keepass_row = QWidget()
+        self._keepass_row.setLayout(kp_row)
+        self._keepass_label = QLabel("KeePass file:")
+        form.addRow(self._keepass_label, self._keepass_row)
 
         hint = QLabel("For Strava: login = client_secret, password = refresh_token")
         hint.setWordWrap(True)
@@ -369,17 +391,47 @@ class CredentialDialog(QDialog):
 
         self._ok_btn = btns.button(QDialogButtonBox.StandardButton.Ok)
         self._service.textChanged.connect(self._validate)
+        self._keepass_radio.toggled.connect(self._on_source_changed)
+        self._keepass_browse.clicked.connect(self._browse_keepass)
+
+        is_keepass = entry is not None and entry.source == "keepass"
+        self._keepass_radio.setChecked(is_keepass)
+        self._manual_radio.setChecked(not is_keepass)
+        self._on_source_changed()
+
+    def _on_source_changed(self) -> None:
+        is_keepass = self._keepass_radio.isChecked()
+        self._password.setVisible(not is_keepass)
+        self._password_label.setVisible(not is_keepass)
+        self._keepass_row.setVisible(is_keepass)
+        self._keepass_label.setVisible(is_keepass)
         self._validate()
+
+    def _browse_keepass(self) -> None:
+        path_str, _ = QFileDialog.getOpenFileName(
+            self, "Select KeePass database", "", "KeePass (*.kdbx);;All files (*)"
+        )
+        if path_str:
+            self._keepass_path.setText(path_str)
 
     def _validate(self) -> None:
         self._ok_btn.setEnabled(bool(self._service.text().strip()))
 
     def result_entry(self) -> CredentialEntry:
+        if self._keepass_radio.isChecked():
+            return CredentialEntry(
+                service=self._service.text().strip(),
+                url=self._url.text().strip(),
+                login=self._login.text().strip(),
+                source="keepass",
+                keepass_path=self._keepass_path.text().strip(),
+            )
         return CredentialEntry(
             service=self._service.text().strip(),
             url=self._url.text().strip(),
             login=self._login.text().strip(),
             password=self._password.text(),
+            source="manual",
         )
 
 

@@ -86,10 +86,7 @@ def test_credential_dialog_password_echo_hidden(qtbot) -> None:
 
     dlg = CredentialDialog()
     qtbot.addWidget(dlg)
-    # The last QLineEdit in the dialog is the password field.
-    fields = dlg.findChildren(QLineEdit)
-    pw = fields[-1]
-    assert pw.echoMode() == QLineEdit.EchoMode.Password
+    assert dlg._password.echoMode() == QLineEdit.EchoMode.Password
 
 
 def test_credential_dialog_ok_disabled_until_service_filled(qtbot) -> None:
@@ -98,6 +95,64 @@ def test_credential_dialog_ok_disabled_until_service_filled(qtbot) -> None:
     assert not dlg._ok_btn.isEnabled()
     dlg._service.setText("Garmin Connect")
     assert dlg._ok_btn.isEnabled()
+
+
+def test_credential_dialog_defaults_to_manual_source(qtbot) -> None:
+    dlg = CredentialDialog()
+    qtbot.addWidget(dlg)
+    assert dlg._manual_radio.isChecked()
+    # isHidden() reflects the explicit hidden flag regardless of parent showing.
+    assert not dlg._password.isHidden()
+    assert dlg._keepass_row.isHidden()
+
+
+def test_credential_dialog_manual_result(qtbot) -> None:
+    dlg = CredentialDialog()
+    qtbot.addWidget(dlg)
+    dlg._service.setText("Garmin Connect")
+    dlg._url.setText("https://connect.garmin.com")
+    dlg._login.setText("me@x")
+    dlg._password.setText("secret")
+    entry = dlg.result_entry()
+    assert entry.source == "manual"
+    assert entry.password == "secret"
+    assert entry.keepass_path == ""
+
+
+def test_credential_dialog_keepass_switches_fields(qtbot) -> None:
+    dlg = CredentialDialog()
+    qtbot.addWidget(dlg)
+    dlg._keepass_radio.setChecked(True)
+    assert not dlg._keepass_row.isHidden()
+    assert dlg._password.isHidden()
+
+
+def test_credential_dialog_keepass_result(qtbot) -> None:
+    dlg = CredentialDialog()
+    qtbot.addWidget(dlg)
+    dlg._service.setText("Garmin Connect")
+    dlg._url.setText("https://connect.garmin.com")
+    dlg._login.setText("me@x")
+    dlg._keepass_radio.setChecked(True)
+    dlg._keepass_path.setText("/home/me/db.kdbx")
+    entry = dlg.result_entry()
+    assert entry.source == "keepass"
+    assert entry.keepass_path == "/home/me/db.kdbx"
+    assert entry.password == ""
+
+
+def test_credential_dialog_prefilled_keepass(qtbot) -> None:
+    existing = CredentialEntry(
+        "Garmin Connect",
+        "https://connect.garmin.com",
+        "me@x",
+        source="keepass",
+        keepass_path="/x/db.kdbx",
+    )
+    dlg = CredentialDialog(entry=existing)
+    qtbot.addWidget(dlg)
+    assert dlg._keepass_radio.isChecked()
+    assert dlg._keepass_path.text() == "/x/db.kdbx"
 
 
 # ---------------------------------------------------------------------------

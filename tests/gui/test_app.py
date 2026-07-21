@@ -478,6 +478,86 @@ def test_credentials_tab_edit_no_selection_does_nothing(
     tab._edit()
 
 
+class _FakeCredentialDialog:
+    def __init__(self, entry: CredentialEntry) -> None:
+        self._entry = entry
+
+    def exec(self) -> int:
+        from PySide6.QtWidgets import QDialog
+
+        return QDialog.DialogCode.Accepted
+
+    def result_entry(self) -> CredentialEntry:
+        return self._entry
+
+
+def _store_with_connector_using_garmin(store: ConfigStore) -> None:
+    store.save_credentials(
+        [CredentialEntry("Garmin Connect", "https://connect.garmin.com", "me@x", "p")]
+    )
+    store.save_gui_config(
+        GuiConfig(
+            connectors=[
+                ConnectorEntry(
+                    id="garmin",
+                    type="garmin",
+                    credential_service="Garmin Connect",
+                    credential_url="https://connect.garmin.com",
+                    credential_login="me@x",
+                )
+            ]
+        )
+    )
+
+
+def test_credentials_tab_edit_identity_of_used_credential_is_blocked(
+    qtbot, monkeypatch, store: ConfigStore
+) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    import app.gui.app as gui_app
+
+    _store_with_connector_using_garmin(store)
+    tab = CredentialsTab(store)
+    qtbot.addWidget(tab)
+
+    renamed = CredentialEntry(
+        "Garmin Connect", "https://connect.garmin.com", "new@x", "p"
+    )
+    monkeypatch.setattr(
+        gui_app, "CredentialDialog", lambda **kw: _FakeCredentialDialog(renamed)
+    )
+    warned: list[bool] = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warned.append(True))
+    tab._table.selectRow(0)
+    tab._edit()
+
+    assert warned == [True]
+    assert store.load_credentials()[0].login == "me@x"  # unchanged
+
+
+def test_credentials_tab_edit_password_of_used_credential_is_allowed(
+    qtbot, monkeypatch, store: ConfigStore
+) -> None:
+    import app.gui.app as gui_app
+
+    _store_with_connector_using_garmin(store)
+    tab = CredentialsTab(store)
+    qtbot.addWidget(tab)
+
+    # Same identity, new password - must be allowed even while referenced.
+    updated = CredentialEntry(
+        "Garmin Connect", "https://connect.garmin.com", "me@x", "new-pw"
+    )
+    monkeypatch.setattr(
+        gui_app, "CredentialDialog", lambda **kw: _FakeCredentialDialog(updated)
+    )
+    tab._table.selectRow(0)
+    tab._edit()
+
+    assert store.load_credentials()[0].password == "new-pw"
+
+
 def test_credentials_tab_delete_credential_used_by_connector_is_blocked(
     qtbot, monkeypatch, store: ConfigStore
 ) -> None:

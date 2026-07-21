@@ -424,6 +424,58 @@ def test_credentials_tab_edit_no_selection_does_nothing(
     tab._edit()
 
 
+def test_credentials_tab_delete_credential_used_by_connector_is_blocked(
+    qtbot, monkeypatch, store: ConfigStore
+) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    store.save_credentials(
+        [CredentialEntry("Garmin Connect", "https://connect.garmin.com", "me@x", "p")]
+    )
+    store.save_gui_config(
+        GuiConfig(
+            connectors=[
+                ConnectorEntry(
+                    id="garmin",
+                    type="garmin",
+                    credential_service="Garmin Connect",
+                    credential_url="https://connect.garmin.com",
+                    credential_login="me@x",
+                )
+            ]
+        )
+    )
+    tab = CredentialsTab(store)
+    qtbot.addWidget(tab)
+    warned: dict[str, str] = {}
+    monkeypatch.setattr(
+        QMessageBox, "warning", lambda _s, title, text, *a, **k: warned.update(t=text)
+    )
+    tab._table.selectRow(0)
+    tab._delete()
+
+    # The credential is kept and the warning names the offending connector.
+    assert tab._table.rowCount() == 1
+    assert "'garmin'" in warned["t"]
+
+
+def test_credentials_tab_delete_unused_credential_succeeds(
+    qtbot, monkeypatch, store: ConfigStore
+) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    store.save_credentials([CredentialEntry("Lonely", "u", "l", "p")])
+    tab = CredentialsTab(store)
+    qtbot.addWidget(tab)
+    monkeypatch.setattr(
+        QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes
+    )
+    tab._table.selectRow(0)
+    tab._delete()
+
+    assert tab._table.rowCount() == 0
+
+
 def test_credentials_tab_masks_password(qtbot, store: ConfigStore) -> None:
     store.save_credentials([CredentialEntry("S", "U", "L", "supersecret")])
     tab = CredentialsTab(store)

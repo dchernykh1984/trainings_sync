@@ -526,6 +526,17 @@ class CredentialsTab(QWidget):
         if row < 0:
             return
         entry = self._entries[row]
+        using = self._connectors_using_credential(entry)
+        if using:
+            connectors = ", ".join(repr(c) for c in using)
+            QMessageBox.warning(
+                self,
+                "Credential in use",
+                f"Credential {entry.service!r} is used by connector(s): "
+                f"{connectors}.\n\nRemove it from those connectors before "
+                "deleting the credential.",
+            )
+            return
         reply = QMessageBox.question(
             self,
             "Delete credential",
@@ -535,6 +546,22 @@ class CredentialsTab(QWidget):
             self._entries.pop(row)
             self._store.save_credentials(self._entries)
             self._refresh_table()
+
+    def _connectors_using_credential(self, cred: CredentialEntry) -> list[str]:
+        from app.gui.credential_provider import find_credential
+
+        connectors = self._store.load_gui_config().connectors
+        return [
+            c.id
+            for c in connectors
+            if find_credential(
+                [cred],
+                c.credential_service,
+                c.credential_url,
+                c.credential_login or None,
+            )
+            is not None
+        ]
 
 
 # ---------------------------------------------------------------------------

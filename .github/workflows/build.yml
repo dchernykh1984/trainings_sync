@@ -28,7 +28,7 @@ jobs:
       - id: set
         shell: bash
         run: |
-          full='{"include":[{"os":"ubuntu-22.04","name":"linux-x86_64"},{"os":"ubuntu-22.04-arm","name":"linux-aarch64"},{"os":"windows-latest","name":"windows-x64"},{"os":"windows-11-arm","name":"windows-arm64"},{"os":"macos-13","name":"macos-x86_64"},{"os":"macos-14","name":"macos-arm64"}]}'
+          full='{"include":[{"os":"ubuntu-22.04","name":"linux-x86_64"},{"os":"ubuntu-24.04-arm","name":"linux-aarch64"},{"os":"windows-latest","name":"windows-x64"},{"os":"windows-11-arm","name":"windows-arm64"},{"os":"macos-14","name":"macos-arm64"}]}'
           smoke='{"include":[{"os":"ubuntu-22.04","name":"linux-x86_64"}]}'
           if [ -n "${{ inputs.release_tag }}" ]; then
             echo "matrix=$full" >> "$GITHUB_OUTPUT"

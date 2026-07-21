@@ -105,11 +105,26 @@ def test_credential_dialog_defaults_to_manual_source(qtbot) -> None:
     assert dlg._keepass_row.isHidden()
 
 
+def test_credential_dialog_url_dropdown_presets_and_free_text(qtbot) -> None:
+    dlg = CredentialDialog()
+    qtbot.addWidget(dlg)
+    urls = [dlg._url.itemText(i) for i in range(dlg._url.count())]
+    assert urls == [
+        "https://connect.garmin.com",
+        "https://www.strava.com/api/v3",
+    ]
+    assert dlg._url.isEditable()
+    # A custom URL can still be typed.
+    dlg._service.setText("Custom")
+    dlg._url.setCurrentText("https://example.test/api")
+    assert dlg.result_entry().url == "https://example.test/api"
+
+
 def test_credential_dialog_manual_result(qtbot) -> None:
     dlg = CredentialDialog()
     qtbot.addWidget(dlg)
     dlg._service.setText("Garmin Connect")
-    dlg._url.setText("https://connect.garmin.com")
+    dlg._url.setCurrentText("https://connect.garmin.com")
     dlg._login.setText("me@x")
     dlg._password.setText("secret")
     entry = dlg.result_entry()
@@ -141,7 +156,7 @@ def test_credential_dialog_keepass_result(qtbot) -> None:
     dlg = CredentialDialog()
     qtbot.addWidget(dlg)
     dlg._service.setText("Garmin Connect")
-    dlg._url.setText("https://connect.garmin.com")
+    dlg._url.setCurrentText("https://connect.garmin.com")
     dlg._login.setText("me@x")
     dlg._keepass_radio.setChecked(True)
     dlg._keepass_path.setText("/home/me/db.kdbx")

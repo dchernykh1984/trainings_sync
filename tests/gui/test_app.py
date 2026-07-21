@@ -26,7 +26,6 @@ from app.gui.config_store import (
     ConfigStore,
     ConnectorEntry,
     CredentialEntry,
-    CredentialSource,
     GroupSourceEntry,
     GuiConfig,
     SyncGroupEntry,
@@ -748,10 +747,18 @@ def test_sync_worker_logs_and_closes_logger_on_setup_failure(
 def test_sync_worker_keepass_rejects_strava_connectors(
     qtbot, store: ConfigStore
 ) -> None:
-    # KeePass cannot persist Strava refresh tokens, so the combination is
-    # refused (mirroring the CLI's --creds-keepass restriction).
-    store.save_credential_source(
-        CredentialSource(source="keepass", keepass_path="/x/db.kdbx")
+    # A Strava connector backed by a KeePass credential is refused, since a
+    # rotated refresh token cannot be written back to a .kdbx.
+    store.save_credentials(
+        [
+            CredentialEntry(
+                "Strava",
+                "https://www.strava.com/api/v3",
+                "cs",
+                source="keepass",
+                keepass_path="/x/db.kdbx",
+            )
+        ]
     )
     gui_config = GuiConfig(
         connectors=[
@@ -760,6 +767,7 @@ def test_sync_worker_keepass_rejects_strava_connectors(
                 type="strava",
                 credential_service="Strava",
                 credential_url="https://www.strava.com/api/v3",
+                credential_login="cs",
                 client_id=1,
             )
         ],
@@ -771,9 +779,11 @@ def test_sync_worker_keepass_rejects_strava_connectors(
             )
         ],
     )
-    worker = SyncWorker(store, gui_config, GuiRenderer(), keepass_password="pw")
+    worker = SyncWorker(
+        store, gui_config, GuiRenderer(), keepass_passwords={"/x/db.kdbx": "pw"}
+    )
 
-    with pytest.raises(ValueError, match="does not support Strava"):
+    with pytest.raises(ValueError, match="does not support KeePass"):
         asyncio.run(worker._async_sync())
 
 
@@ -788,12 +798,37 @@ def _make_sync_tab(store: ConfigStore):
     return SyncTab(store, ConfigTab(store))
 
 
+def _keepass_garmin_config(store: ConfigStore, kdbx: str) -> None:
+    store.save_credentials(
+        [
+            CredentialEntry(
+                "Garmin Connect",
+                "https://connect.garmin.com",
+                "me@x",
+                source="keepass",
+                keepass_path=kdbx,
+            )
+        ]
+    )
+    store.save_gui_config(
+        GuiConfig(
+            connectors=[
+                ConnectorEntry(
+                    id="garmin",
+                    type="garmin",
+                    credential_service="Garmin Connect",
+                    credential_url="https://connect.garmin.com",
+                    credential_login="me@x",
+                )
+            ],
+        )
+    )
+
+
 def test_sync_tab_prompts_keepass_password(qtbot, monkeypatch, store) -> None:
     from PySide6.QtWidgets import QInputDialog
 
-    store.save_credential_source(
-        CredentialSource(source="keepass", keepass_path="/x.kdbx")
-    )
+    _keepass_garmin_config(store, "/x.kdbx")
     tab = _make_sync_tab(store)
     qtbot.addWidget(tab)
     monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("secret-pw", True))
@@ -801,15 +836,71 @@ def test_sync_tab_prompts_keepass_password(qtbot, monkeypatch, store) -> None:
 
     tab._run_sync()
     assert tab._worker is not None
-    assert tab._worker._keepass_password == "secret-pw"
+    assert tab._worker._keepass_passwords == {"/x.kdbx": "secret-pw"}
+
+
+def test_sync_tab_prompts_once_per_distinct_kdbx(qtbot, monkeypatch, store) -> None:
+    from PySide6.QtWidgets import QInputDialog
+
+    # Two connectors sharing one .kdbx must prompt only once.
+    store.save_credentials(
+        [
+            CredentialEntry(
+                "Garmin Connect",
+                "https://connect.garmin.com",
+                "me@x",
+                source="keepass",
+                keepass_path="/shared.kdbx",
+            ),
+            CredentialEntry(
+                "Other",
+                "https://other.example",
+                "u",
+                source="keepass",
+                keepass_path="/shared.kdbx",
+            ),
+        ]
+    )
+    store.save_gui_config(
+        GuiConfig(
+            connectors=[
+                ConnectorEntry(
+                    id="garmin",
+                    type="garmin",
+                    credential_service="Garmin Connect",
+                    credential_url="https://connect.garmin.com",
+                    credential_login="me@x",
+                ),
+                ConnectorEntry(
+                    id="other",
+                    type="garmin",
+                    credential_service="Other",
+                    credential_url="https://other.example",
+                    credential_login="u",
+                ),
+            ],
+        )
+    )
+    tab = _make_sync_tab(store)
+    qtbot.addWidget(tab)
+    prompts: list[str] = []
+
+    def _get_text(_parent, _title, label, *a, **k):
+        prompts.append(label)
+        return ("pw", True)
+
+    monkeypatch.setattr(QInputDialog, "getText", _get_text)
+    monkeypatch.setattr(SyncWorker, "start", lambda self: None)
+
+    tab._run_sync()
+    assert len(prompts) == 1
+    assert tab._worker._keepass_passwords == {"/shared.kdbx": "pw"}
 
 
 def test_sync_tab_keepass_cancel_aborts_run(qtbot, monkeypatch, store) -> None:
     from PySide6.QtWidgets import QInputDialog
 
-    store.save_credential_source(
-        CredentialSource(source="keepass", keepass_path="/x.kdbx")
-    )
+    _keepass_garmin_config(store, "/x.kdbx")
     tab = _make_sync_tab(store)
     qtbot.addWidget(tab)
     started: list[bool] = []
@@ -821,21 +912,22 @@ def test_sync_tab_keepass_cancel_aborts_run(qtbot, monkeypatch, store) -> None:
     assert started == []
 
 
-def test_sync_tab_json_source_does_not_prompt(qtbot, monkeypatch, store) -> None:
+def test_sync_tab_manual_credentials_do_not_prompt(qtbot, monkeypatch, store) -> None:
     from PySide6.QtWidgets import QInputDialog
 
+    store.save_credentials([CredentialEntry("Garmin Connect", "u", "me@x", "pw")])
     tab = _make_sync_tab(store)
     qtbot.addWidget(tab)
 
     def _boom(*_a: object, **_k: object) -> object:
-        raise AssertionError("must not prompt for the JSON source")
+        raise AssertionError("must not prompt when no KeePass credentials are used")
 
     monkeypatch.setattr(QInputDialog, "getText", _boom)
     monkeypatch.setattr(SyncWorker, "start", lambda self: None)
 
     tab._run_sync()
     assert tab._worker is not None
-    assert tab._worker._keepass_password is None
+    assert tab._worker._keepass_passwords == {}
 
 
 # ---------------------------------------------------------------------------

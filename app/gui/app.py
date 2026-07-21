@@ -87,13 +87,13 @@ class SyncWorker(QThread):
         config_store: ConfigStore,
         gui_config: GuiConfig,
         renderer: GuiRenderer,
-        keepass_password: str | None = None,
+        keepass_passwords: dict[str, str] | None = None,
     ) -> None:
         super().__init__()
         self._store = config_store
         self._gui_config = gui_config
         self._renderer = renderer
-        self._keepass_password = keepass_password
+        self._keepass_passwords = keepass_passwords or {}
 
     def run(self) -> None:
         ts_start = datetime.now().astimezone().isoformat(timespec="seconds")
@@ -110,7 +110,7 @@ class SyncWorker(QThread):
         from app.core.config import StravaConnectorConfig
         from app.core.connector_factory import build_connectors
         from app.core.orchestrator import SyncOrchestrator
-        from app.credentials.json_file import JsonFileProvider
+        from app.gui.credential_provider import GuiCredentialProvider
         from app.tracking.sync_logger import SyncLogger
         from app.tracking.tracker import TaskTracker
 
@@ -136,7 +136,7 @@ class SyncWorker(QThread):
             def _on_token_refresh(
                 connector_id: str, new_creds: object, _label: str
             ) -> None:
-                if isinstance(provider, JsonFileProvider):
+                if isinstance(provider, GuiCredentialProvider):
                     provider.update_refresh_token(
                         strava_cred_map[connector_id],
                         new_creds.refresh_token,  # type: ignore[attr-defined]
@@ -221,23 +221,36 @@ class SyncWorker(QThread):
         self, app_config: AppConfig, tracker: TaskTracker
     ) -> CredentialProvider:
         from app.core.config import StravaConnectorConfig
-        from app.credentials.json_file import JsonFileProvider
+        from app.gui.credential_provider import (
+            GuiCredentialProvider,
+            find_credential,
+        )
 
-        source = self._store.load_credential_source()
-        if source.source == "keepass":
-            from app.credentials.keepass import KeePassProvider
+        entries = self._store.load_credentials()
 
-            if any(isinstance(c, StravaConnectorConfig) for c in app_config.connectors):
-                raise ValueError(
-                    "KeePass credential source does not support Strava connectors; "
-                    "use the built-in JSON store for Strava"
+        # Strava refresh tokens are written back on rotation, which a read-only
+        # KeePass file cannot store - refuse that combination up front.
+        for cfg in app_config.connectors:
+            if isinstance(cfg, StravaConnectorConfig):
+                match = find_credential(
+                    entries,
+                    cfg.credential.service,
+                    cfg.credential.url,
+                    cfg.credential.login,
                 )
-            return KeePassProvider(
-                path=Path(source.keepass_path).expanduser(),
-                password=self._keepass_password or "",
-                tracker=tracker,
-            )
-        return JsonFileProvider(path=self._store.credentials_path, tracker=tracker)
+                if match is not None and match.source == "keepass":
+                    raise ValueError(
+                        f"connector {cfg.id!r}: Strava does not support KeePass "
+                        "credentials (its refresh token cannot be written back); "
+                        "use a manual credential for Strava"
+                    )
+
+        return GuiCredentialProvider(
+            entries,
+            self._keepass_passwords,
+            tracker,
+            on_manual_update=self._store.save_credentials,
+        )
 
 
 def _parse_date_or_default(value: str, default: date) -> date:
@@ -1138,9 +1151,9 @@ class SyncTab(QWidget):
     def _run_sync(self) -> None:
         gui_config = self._config_tab.current_config()
 
-        # When credentials come from KeePass, ask for the master password up
-        # front (on the GUI thread) - it is never stored anywhere.
-        proceed, keepass_password = self._prompt_keepass_password()
+        # Ask for each referenced KeePass file's master password up front (on
+        # the GUI thread) - the passwords are never stored anywhere.
+        proceed, keepass_passwords = self._prompt_keepass_passwords(gui_config)
         if not proceed:
             return
 
@@ -1162,7 +1175,7 @@ class SyncTab(QWidget):
         sigs.total_updated.connect(self._on_total_updated)
 
         self._worker = SyncWorker(
-            self._store, gui_config, renderer, keepass_password=keepass_password
+            self._store, gui_config, renderer, keepass_passwords=keepass_passwords
         )
         self._worker.started_ts.connect(self._on_started)
         self._worker.finished_ts.connect(self._on_finished)
@@ -1171,24 +1184,48 @@ class SyncTab(QWidget):
         self._run_btn.setEnabled(False)
         self._worker.start()
 
-    def _prompt_keepass_password(self) -> tuple[bool, str | None]:
-        """Return (proceed, password).
+    def _keepass_paths_in_use(self, gui_config: GuiConfig) -> list[str]:
+        """Distinct .kdbx paths of KeePass credentials referenced by connectors."""
+        from app.gui.credential_provider import find_credential
 
-        ``password`` is None when the source is not KeePass; ``proceed`` is
-        False only when the user cancels the master-password prompt.
+        entries = self._store.load_credentials()
+        paths: list[str] = []
+        for connector in gui_config.connectors:
+            match = find_credential(
+                entries,
+                connector.credential_service,
+                connector.credential_url,
+                connector.credential_login or None,
+            )
+            if (
+                match is not None
+                and match.source == "keepass"
+                and match.keepass_path
+                and match.keepass_path not in paths
+            ):
+                paths.append(match.keepass_path)
+        return paths
+
+    def _prompt_keepass_passwords(
+        self, gui_config: GuiConfig
+    ) -> tuple[bool, dict[str, str]]:
+        """Return (proceed, {kdbx_path: master_password}).
+
+        Prompts once per distinct .kdbx file in use; ``proceed`` is False only
+        when the user cancels a prompt.
         """
-        source = self._store.load_credential_source()
-        if source.source != "keepass":
-            return True, None
-        password, ok = QInputDialog.getText(
-            self,
-            "KeePass master password",
-            f"Master password for {source.keepass_path}:",
-            QLineEdit.EchoMode.Password,
-        )
-        if not ok:
-            return False, None
-        return True, password
+        passwords: dict[str, str] = {}
+        for path in self._keepass_paths_in_use(gui_config):
+            password, ok = QInputDialog.getText(
+                self,
+                "KeePass master password",
+                f"Master password for {path}:",
+                QLineEdit.EchoMode.Password,
+            )
+            if not ok:
+                return False, {}
+            passwords[path] = password
+        return True, passwords
 
     def _on_started(self, ts: str) -> None:
         self._status.setText(f"Sync started: {ts}")

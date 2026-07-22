@@ -1442,19 +1442,21 @@ def make_app_icon(size: int = 256) -> QIcon:
     arrowhead(start_a + span)
     arrowhead(start_b + span)
 
-    # Heartbeat / pulse line across the middle to signal "training".
-    pulse = QPen(white, pen_w * 0.85)
+    # Heartbeat / pulse line across the middle to signal "training". The peak
+    # and the trough are kept further apart horizontally than the stroke is
+    # wide, otherwise the two strokes merge and the beat reads as a solid bar.
+    pulse = QPen(white, pen_w * 0.62)
     pulse.setCapStyle(Qt.PenCapStyle.RoundCap)
     pulse.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
     p.setPen(pulse)
     path = QPainterPath()
     points = [
-        (c - r * 0.72, c),
-        (c - r * 0.30, c),
-        (c - r * 0.12, c - r * 0.55),
-        (c + r * 0.05, c + r * 0.55),
-        (c + r * 0.28, c),
-        (c + r * 0.72, c),
+        (c - r * 0.80, c),
+        (c - r * 0.42, c),
+        (c - r * 0.22, c - r * 0.58),
+        (c + r * 0.10, c + r * 0.54),
+        (c + r * 0.32, c),
+        (c + r * 0.80, c),
     ]
     path.moveTo(*points[0])
     for pt in points[1:]:

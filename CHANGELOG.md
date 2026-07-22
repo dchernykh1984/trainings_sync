@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.3](https://github.com/dchernykh1984/trainings_sync/compare/v0.1.2...v0.1.3) (2026-07-22)
+
+
+### Bug Fixes
+
+* make the heartbeat readable in the app icon ([9eae969](https://github.com/dchernykh1984/trainings_sync/commit/9eae96944c7447bc6ee5b0f9161bd2ba9637687e))
+
 ## [0.1.2](https://github.com/dchernykh1984/trainings_sync/compare/v0.1.1...v0.1.2) (2026-07-22)
 
 

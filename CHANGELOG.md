@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.2](https://github.com/dchernykh1984/trainings_sync/compare/v0.1.1...v0.1.2) (2026-07-22)
+
+
+### Bug Fixes
+
+* embed the app icon in the macOS and Windows builds ([db1d071](https://github.com/dchernykh1984/trainings_sync/commit/db1d07185b64fdd8b65f57b977e9e1821ee57838))
+
 ## [0.1.1](https://github.com/dchernykh1984/trainings_sync/compare/v0.1.0...v0.1.1) (2026-07-21)
 
 

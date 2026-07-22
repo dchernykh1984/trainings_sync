@@ -68,11 +68,11 @@ jobs:
           pyi=(uv run --with "pyinstaller>=6,<7" pyinstaller)
           common=(--noconfirm --windowed --name "$APP_NAME" --collect-submodules app)
           if [ "$RUNNER_OS" = "macOS" ]; then
-            "${pyi[@]}" "${common[@]}" app/gui/app.py
+            "${pyi[@]}" --icon app/app.icns "${common[@]}" app/gui/app.py
             ( cd dist && zip -r -y "${APP_NAME}-${{ matrix.name }}.zip" "${APP_NAME}.app" )
             echo "ASSET=dist/${APP_NAME}-${{ matrix.name }}.zip" >> "$GITHUB_ENV"
           elif [ "$RUNNER_OS" = "Windows" ]; then
-            "${pyi[@]}" --onefile "${common[@]}" app/gui/app.py
+            "${pyi[@]}" --onefile --icon app/app.ico "${common[@]}" app/gui/app.py
             mv "dist/${APP_NAME}.exe" "dist/${APP_NAME}-${{ matrix.name }}.exe"
             echo "ASSET=dist/${APP_NAME}-${{ matrix.name }}.exe" >> "$GITHUB_ENV"
           else

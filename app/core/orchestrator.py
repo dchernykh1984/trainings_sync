@@ -18,9 +18,9 @@ class SyncOrchestrator:
         groups: tuple[SyncGroupConfig, ...],
         connectors: dict[str, ServiceConnector],
         cache: ActivityCache,
+        uid_by_id: dict[str, str],
         tracker: TaskTracker | None = None,
         login_tasks: dict[str, asyncio.Task[None]] | None = None,
-        uid_by_id: dict[str, str] | None = None,
     ) -> None:
         self._groups = groups
         self._connectors = connectors
@@ -29,8 +29,10 @@ class SyncOrchestrator:
         self._login_tasks = login_tasks
         # Everything downstream is keyed by uid so that renaming a connector
         # leaves the cache untouched; the names are kept only to say who is
-        # who in the log and in the task list.
-        self._uid_by_id = uid_by_id or {cid: cid for cid in connectors}
+        # who in the log and in the task list. Required rather than
+        # defaulted: an identity map silently turns every name lookup into
+        # a crash and every label into a hex string.
+        self._uid_by_id = uid_by_id
         self._names = {uid: name for name, uid in self._uid_by_id.items()}
 
     async def run(self, start: date, end: date, *, force: bool = False) -> int:

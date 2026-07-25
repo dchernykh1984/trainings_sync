@@ -21,16 +21,17 @@ class WellnessOrchestrator:
         connectors: dict[str, WellnessConnector],
         cache: WellnessCache,
         tracker: TaskTracker,
+        names: dict[str, str],
         login_tasks: dict[str, asyncio.Task[None]] | None = None,
-        names: dict[str, str] | None = None,
     ) -> None:
         self._connectors = connectors
         self._cache = cache
         self._tracker = tracker
         self._login_tasks: dict[str, asyncio.Task[None]] = login_tasks or {}
         # Connectors are keyed by uid so a rename never moves cached data;
-        # these are what to call them in the task list.
-        self._names = names or {}
+        # these are what to call them in the task list. Required, so that
+        # forgetting to wire it cannot silently show hex strings.
+        self._names = names
 
     def _name(self, connector_id: str) -> str:
         """What to call a connector in the task list."""

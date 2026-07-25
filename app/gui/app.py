@@ -267,13 +267,46 @@ def _parse_date_or_default(value: str, default: date) -> date:
 _COUNT_MIN_WIDTH = 64
 
 
+class CounterColumn:
+    """One counter width shared by every row, so the bars stay in a column.
+
+    Rows lay themselves out on their own, so sizing each counter to its own
+    text would let a row counting to 193372 push its progress bar left of the
+    others. Instead the widest counter wins and every row adopts that width.
+    """
+
+    def __init__(self) -> None:
+        self._width = _COUNT_MIN_WIDTH
+        self._rows: list[TaskRow] = []
+
+    @property
+    def width(self) -> int:
+        return self._width
+
+    def add(self, row: TaskRow) -> None:
+        self._rows.append(row)
+        row.apply_count_width(self._width)
+
+    def require(self, width: int) -> None:
+        if width <= self._width:
+            return
+        self._width = width
+        for row in self._rows:
+            row.apply_count_width(width)
+
+
 class TaskRow(QWidget):
     def __init__(
-        self, name: str, total: int | None, parent: QWidget | None = None
+        self,
+        name: str,
+        total: int | None,
+        parent: QWidget | None = None,
+        column: CounterColumn | None = None,
     ) -> None:
         super().__init__(parent)
         self._name = name
         self._total = total
+        self._column = column if column is not None else CounterColumn()
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(4, 2, 4, 2)
@@ -302,22 +335,25 @@ class TaskRow(QWidget):
 
         self._count = QLabel("")
         self._count_chars = 0
-        self._count.setFixedWidth(_COUNT_MIN_WIDTH)
         self._count.setAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
+        self._column.add(self)
         if total is not None:
             self._fit_count_width(f"{total}/{total}")
         layout.addWidget(self._count)
 
-    def _fit_count_width(self, text: str) -> None:
-        """Widen the counter so that `text` is not clipped.
+    def apply_count_width(self, width: int) -> None:
+        """Adopt the shared counter width. Called by :class:`CounterColumn`."""
+        self._count.setFixedWidth(width)
 
-        The label is right-aligned with a fixed width, so anything too wide
-        loses its leading characters instead of its trailing ones: a task of
-        193372 items used to render as "36/193372". Sizing happens only when
-        the text grows longer, which keeps the column from jittering on every
-        progress tick.
+    def _fit_count_width(self, text: str) -> None:
+        """Ask the shared column to make room for `text`.
+
+        The counter is right-aligned with a fixed width, so text that does not
+        fit loses its leading characters instead of its trailing ones: a task
+        of 193372 items rendered as "36/193372". Only a longer text triggers a
+        request, which keeps the column from being recomputed on every tick.
         """
         if len(text) <= self._count_chars:
             return
@@ -325,7 +361,7 @@ class TaskRow(QWidget):
         # Digits are the widest glyphs the counter shows, so measuring a run
         # of them covers any value of the same length.
         width = self._count.fontMetrics().horizontalAdvance("0" * len(text))
-        self._count.setFixedWidth(max(_COUNT_MIN_WIDTH, width + 8))
+        self._column.require(max(_COUNT_MIN_WIDTH, width + 8))
 
     def update_progress(self, progress: int) -> None:
         if self._total is not None:
@@ -1249,6 +1285,7 @@ class SyncTab(QWidget):
         self._config_tab = config_tab
         self._worker: SyncWorker | None = None
         self._task_rows: dict[str, TaskRow] = {}
+        self._counter_column = CounterColumn()
 
         root = QVBoxLayout(self)
 
@@ -1295,6 +1332,9 @@ class SyncTab(QWidget):
                 if widget is not None:
                     widget.deleteLater()
         self._task_rows.clear()
+        # A fresh run starts the counter column over, so a previous run's wide
+        # totals do not leave every row padded.
+        self._counter_column = CounterColumn()
 
         renderer = GuiRenderer()
         sigs = renderer.signals
@@ -1375,7 +1415,10 @@ class SyncTab(QWidget):
 
     def _on_task_added(self, name: str, total: object) -> None:
         row = TaskRow(
-            name, total if isinstance(total, int) else None, self._task_container
+            name,
+            total if isinstance(total, int) else None,
+            self._task_container,
+            column=self._counter_column,
         )
         self._task_rows[name] = row
         # Insert before the trailing stretch

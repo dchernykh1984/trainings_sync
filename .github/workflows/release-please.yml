@@ -14,6 +14,12 @@ permissions:
   contents: write
   pull-requests: write
 
+# Two pushes to main in quick succession would otherwise race over the
+# release branch, and the loser's push is rejected as non-fast-forward.
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
 jobs:
   release-please:
     if: github.event_name == 'push'
@@ -26,6 +32,45 @@ jobs:
         uses: googleapis/release-please-action@v4
         with:
           release-type: python
+
+      # release-please bumps pyproject.toml but knows nothing about uv.lock,
+      # whose own version field would stay behind - leaving every `uv sync`
+      # with a dirty tree and a lock that no longer matches the release.
+      - uses: astral-sh/setup-uv@v7
+        if: steps.rp.outputs.pr
+        with:
+          python-version: "3.14"
+
+      - name: Match uv.lock to the released version
+        if: steps.rp.outputs.pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ fromJSON(steps.rp.outputs.pr).headBranchName }}
+        run: |
+          set -euo pipefail
+          git clone --branch "$BRANCH" --depth 1 \
+            "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" \
+            release-branch
+          cd release-branch
+          uv lock
+          if git diff --quiet -- uv.lock; then
+            echo "uv.lock already matches the released version"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -q -m "chore: match uv.lock to the released version" -- uv.lock
+          # release-please force-pushes this branch whenever it refreshes the
+          # PR. Losing that particular race is expected - the run that
+          # overtook us lands the same commit - but anything else is a real
+          # failure and must not pass silently.
+          if ! push=$(git push 2>&1); then
+            echo "$push"
+            echo "$push" | grep -q -e non-fast-forward -e "fetch first" \
+              || exit 1
+            echo "release branch moved on; the run that overtook us redoes this"
+          fi
 
   # Build the full platform matrix and upload the portable apps to the release,
   # in the same run (a GITHUB_TOKEN-created release cannot trigger a separate

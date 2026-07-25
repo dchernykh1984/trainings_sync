@@ -18,6 +18,12 @@ from app.core.wellness_cache import WellnessCache
 from app.core.wellness_orchestrator import WellnessOrchestrator
 from app.tracking.tracker import ProgressRenderer, Task, TaskStatus, TaskTracker
 
+
+def _identity(connectors: dict) -> dict[str, str]:
+    """These tests predate uids: every name is its own identity."""
+    return {cid: cid for cid in connectors}
+
+
 _START = date(2026, 1, 1)
 _END = date(2026, 1, 3)
 
@@ -97,7 +103,9 @@ class TestRunDownload:
         source = _make_source_connector(
             "garmin", tracker, daily_types=[WellnessDataType.SLEEP]
         )
-        orch = WellnessOrchestrator({"garmin": source}, cache, tracker)
+        orch = WellnessOrchestrator(
+            {"garmin": source}, cache, tracker, names=_identity({"garmin": source})
+        )
         await orch.run(_START, _END)
 
         assert source.fetch_daily.call_count == 3  # type: ignore[union-attr, attr-defined]
@@ -108,7 +116,9 @@ class TestRunDownload:
         source = _make_source_connector(
             "garmin", tracker, range_types=[WellnessDataType.BODY_BATTERY]
         )
-        orch = WellnessOrchestrator({"garmin": source}, cache, tracker)
+        orch = WellnessOrchestrator(
+            {"garmin": source}, cache, tracker, names=_identity({"garmin": source})
+        )
         await orch.run(_START, _END)
 
         source.fetch_range.assert_called_once()  # type: ignore[union-attr, attr-defined]
@@ -119,7 +129,9 @@ class TestRunDownload:
         source = _make_source_connector(
             "garmin", tracker, snapshot_types=[WellnessDataType.PERSONAL_RECORDS]
         )
-        orch = WellnessOrchestrator({"garmin": source}, cache, tracker)
+        orch = WellnessOrchestrator(
+            {"garmin": source}, cache, tracker, names=_identity({"garmin": source})
+        )
         await orch.run(_START, _END)
 
         source.fetch_snapshot.assert_called_once()  # type: ignore[union-attr, attr-defined]
@@ -130,7 +142,9 @@ class TestRunDownload:
         source = _make_source_connector(
             "garmin", tracker, daily_types=[WellnessDataType.SLEEP]
         )
-        orch = WellnessOrchestrator({"garmin": source}, cache, tracker)
+        orch = WellnessOrchestrator(
+            {"garmin": source}, cache, tracker, names=_identity({"garmin": source})
+        )
         await orch.run(_START, _END)
 
         key = WellnessCache.daily_key(_START)
@@ -143,7 +157,9 @@ class TestRunDownload:
         source = _make_source_connector(
             "garmin", tracker, range_types=[WellnessDataType.BODY_BATTERY]
         )
-        orch = WellnessOrchestrator({"garmin": source}, cache, tracker)
+        orch = WellnessOrchestrator(
+            {"garmin": source}, cache, tracker, names=_identity({"garmin": source})
+        )
         await orch.run(_START, _END)
 
         key = WellnessCache.range_key(_START, _END)
@@ -158,7 +174,9 @@ class TestRunDownload:
         key = WellnessCache.daily_key(_START)
         cache.write("garmin", WellnessDataType.SLEEP, key, {"cached": True})
 
-        orch = WellnessOrchestrator({"garmin": source}, cache, tracker)
+        orch = WellnessOrchestrator(
+            {"garmin": source}, cache, tracker, names=_identity({"garmin": source})
+        )
         await orch.run(_START, _END)
 
         assert source.fetch_daily.call_count == 2  # type: ignore[union-attr, attr-defined]
@@ -172,7 +190,9 @@ class TestRunDownload:
         key = WellnessCache.range_key(_START, _END)
         cache.write("garmin", WellnessDataType.BODY_BATTERY, key, {"cached": True})
 
-        orch = WellnessOrchestrator({"garmin": source}, cache, tracker)
+        orch = WellnessOrchestrator(
+            {"garmin": source}, cache, tracker, names=_identity({"garmin": source})
+        )
         await orch.run(_START, _END)
 
         source.fetch_range.assert_not_called()  # type: ignore[union-attr, attr-defined]
@@ -190,7 +210,9 @@ class TestRunDownload:
             {"cached": True},
         )
 
-        orch = WellnessOrchestrator({"garmin": source}, cache, tracker)
+        orch = WellnessOrchestrator(
+            {"garmin": source}, cache, tracker, names=_identity({"garmin": source})
+        )
         await orch.run(_START, _END)
 
         source.fetch_snapshot.assert_not_called()  # type: ignore[union-attr, attr-defined]
@@ -205,7 +227,9 @@ class TestRunDownload:
             daily_data=None,
         )
         source.fetch_daily = AsyncMock(return_value=None)  # type: ignore[union-attr, method-assign]
-        orch = WellnessOrchestrator({"garmin": source}, cache, tracker)
+        orch = WellnessOrchestrator(
+            {"garmin": source}, cache, tracker, names=_identity({"garmin": source})
+        )
         await orch.run(_START, _END)
 
         key = WellnessCache.daily_key(_START)
@@ -222,7 +246,9 @@ class TestRunForce:
         key = WellnessCache.daily_key(_START)
         cache.write("garmin", WellnessDataType.SLEEP, key, {"old": True})
 
-        orch = WellnessOrchestrator({"garmin": source}, cache, tracker)
+        orch = WellnessOrchestrator(
+            {"garmin": source}, cache, tracker, names=_identity({"garmin": source})
+        )
         await orch.run(_START, _END, force=True)
 
         assert source.fetch_daily.call_count == 3  # type: ignore[union-attr, attr-defined]
@@ -238,7 +264,9 @@ class TestRunForce:
         key = WellnessCache.daily_key(_START)
         cache.write("garmin", WellnessDataType.SLEEP, key, {"old": True})
 
-        orch = WellnessOrchestrator({"garmin": source}, cache, tracker)
+        orch = WellnessOrchestrator(
+            {"garmin": source}, cache, tracker, names=_identity({"garmin": source})
+        )
         await orch.run(_START, _END, force=False)
 
         assert source.fetch_daily.call_count == 2  # type: ignore[union-attr, attr-defined]
@@ -255,7 +283,12 @@ class TestRunUpload:
         dest_folder.mkdir()
         dest = _make_local_folder_connector("local", dest_folder, tracker)
 
-        orch = WellnessOrchestrator({"garmin": source, "local": dest}, cache, tracker)
+        orch = WellnessOrchestrator(
+            {"garmin": source, "local": dest},
+            cache,
+            tracker,
+            names=_identity({"garmin": source, "local": dest}),
+        )
         await orch.run(_START, _END)
 
         for d_offset in range(3):
@@ -279,7 +312,12 @@ class TestRunUpload:
         dest_folder.mkdir()
         dest = _make_local_folder_connector("local", dest_folder, tracker)
 
-        orch = WellnessOrchestrator({"garmin": source, "local": dest}, cache, tracker)
+        orch = WellnessOrchestrator(
+            {"garmin": source, "local": dest},
+            cache,
+            tracker,
+            names=_identity({"garmin": source, "local": dest}),
+        )
         await orch.run(_START, _END)
 
         tasks = tracker.tasks
@@ -299,7 +337,12 @@ class TestRunUpload:
         dest_folder.mkdir()
         dest = _make_local_folder_connector("local", dest_folder, tracker)
 
-        orch = WellnessOrchestrator({"garmin": source, "local": dest}, cache, tracker)
+        orch = WellnessOrchestrator(
+            {"garmin": source, "local": dest},
+            cache,
+            tracker,
+            names=_identity({"garmin": source, "local": dest}),
+        )
         await orch.run(_START, _END)
 
         result = await dest.fetch_snapshot(WellnessDataType.PERSONAL_RECORDS)
@@ -313,7 +356,9 @@ class TestProgressTracking:
         source = _make_source_connector(
             "garmin", tracker, daily_types=[WellnessDataType.SLEEP]
         )
-        orch = WellnessOrchestrator({"garmin": source}, cache, tracker)
+        orch = WellnessOrchestrator(
+            {"garmin": source}, cache, tracker, names=_identity({"garmin": source})
+        )
         await orch.run(_START, _END)
 
         tasks = tracker.tasks
@@ -333,7 +378,12 @@ class TestProgressTracking:
         dest_folder.mkdir()
         dest = _make_local_folder_connector("local", dest_folder, tracker)
 
-        orch = WellnessOrchestrator({"garmin": source, "local": dest}, cache, tracker)
+        orch = WellnessOrchestrator(
+            {"garmin": source, "local": dest},
+            cache,
+            tracker,
+            names=_identity({"garmin": source, "local": dest}),
+        )
         await orch.run(_START, _END)
 
         tasks = tracker.tasks
@@ -345,7 +395,9 @@ class TestProgressTracking:
         self, cache: WellnessCache, tracker: TaskTracker
     ) -> None:
         source = _make_source_connector("garmin", tracker)
-        orch = WellnessOrchestrator({"garmin": source}, cache, tracker)
+        orch = WellnessOrchestrator(
+            {"garmin": source}, cache, tracker, names=_identity({"garmin": source})
+        )
         await orch.run(_START, _END)
 
         tasks = tracker.tasks
@@ -361,7 +413,9 @@ class TestLocalFolderNotTreatedAsSource:
         folder.mkdir()
         dest = _make_local_folder_connector("local", folder, tracker)
 
-        orch = WellnessOrchestrator({"local": dest}, cache, tracker)
+        orch = WellnessOrchestrator(
+            {"local": dest}, cache, tracker, names=_identity({"local": dest})
+        )
         await orch.run(_START, _END)
 
         tasks = tracker.tasks

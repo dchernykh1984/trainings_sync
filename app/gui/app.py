@@ -264,6 +264,9 @@ def _parse_date_or_default(value: str, default: date) -> date:
 # ---------------------------------------------------------------------------
 
 
+_COUNT_MIN_WIDTH = 64
+
+
 class TaskRow(QWidget):
     def __init__(
         self, name: str, total: int | None, parent: QWidget | None = None
@@ -298,23 +301,46 @@ class TaskRow(QWidget):
         layout.addWidget(self._bar)
 
         self._count = QLabel("")
-        self._count.setFixedWidth(64)
+        self._count_chars = 0
+        self._count.setFixedWidth(_COUNT_MIN_WIDTH)
         self._count.setAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
+        if total is not None:
+            self._fit_count_width(f"{total}/{total}")
         layout.addWidget(self._count)
+
+    def _fit_count_width(self, text: str) -> None:
+        """Widen the counter so that `text` is not clipped.
+
+        The label is right-aligned with a fixed width, so anything too wide
+        loses its leading characters instead of its trailing ones: a task of
+        193372 items used to render as "36/193372". Sizing happens only when
+        the text grows longer, which keeps the column from jittering on every
+        progress tick.
+        """
+        if len(text) <= self._count_chars:
+            return
+        self._count_chars = len(text)
+        # Digits are the widest glyphs the counter shows, so measuring a run
+        # of them covers any value of the same length.
+        width = self._count.fontMetrics().horizontalAdvance("0" * len(text))
+        self._count.setFixedWidth(max(_COUNT_MIN_WIDTH, width + 8))
 
     def update_progress(self, progress: int) -> None:
         if self._total is not None:
             self._bar.setRange(0, self._total)
         self._bar.setValue(progress)
-        self._count.setText(
-            f"{progress}/{self._total}" if self._total is not None else str(progress)
-        )
+        text = f"{progress}/{self._total}" if self._total is not None else str(progress)
+        self._fit_count_width(text)
+        self._count.setText(text)
 
     def update_total(self, total: int) -> None:
         self._total = total
         self._bar.setRange(0, total)
+        # The total arrives after the row is built for tasks that discover
+        # their size later, so the counter has to be re-sized for it.
+        self._fit_count_width(f"{total}/{total}")
 
     def mark_done(self, warnings: list[str]) -> None:
         cap = max(1, self._total or 1)

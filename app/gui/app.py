@@ -1153,9 +1153,29 @@ class ConfigTab(QWidget):
             if self._connector_name_taken(entry.id, exclude_index=row):
                 self._warn_duplicate_name(entry.id)
                 return
+            old_id = self._config.connectors[row].id
             self._config.connectors[row] = entry
+            self._retarget_groups(old_id, entry.id)
             self._store.save_gui_config(self._config)
             self._refresh_connector_list()
+            self._refresh_group_list()  # groups may now show a new name
+
+    def _retarget_groups(self, old_id: str, new_id: str) -> None:
+        """Point the sync groups at a connector's new name.
+
+        Groups reference connectors by name, so a rename would otherwise leave
+        them pointing at something that no longer exists and the next sync
+        would die resolving it.
+        """
+        if old_id == new_id:
+            return
+        for group in self._config.sync_groups:
+            for source in group.sources:
+                if source.id == old_id:
+                    source.id = new_id
+            group.destinations = [
+                new_id if d == old_id else d for d in group.destinations
+            ]
 
     def _delete_connector(self) -> None:
         row = self._conn_list.currentRow()

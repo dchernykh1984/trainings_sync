@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.4](https://github.com/dchernykh1984/trainings_sync/compare/v0.1.3...v0.1.4) (2026-07-25)
+
+
+### Bug Fixes
+
+* stop the sync progress counter from losing its leading digits ([ffd39eb](https://github.com/dchernykh1984/trainings_sync/commit/ffd39ebab1205068f571642c7be649d1608d0fa9))
+
+
+### Documentation
+
+* explain how to run the app from a release ([bcce3a0](https://github.com/dchernykh1984/trainings_sync/commit/bcce3a09f3157fa0967a52e8a790dd682d2f4a72))
+
 ## [0.1.3](https://github.com/dchernykh1984/trainings_sync/compare/v0.1.2...v0.1.3) (2026-07-22)
 
 

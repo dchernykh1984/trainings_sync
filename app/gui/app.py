@@ -243,6 +243,7 @@ class SyncWorker(QThread):
                 wellness_cache,
                 tracker,
                 login_tasks=login_tasks,
+                names={c.uid: c.id for c in app_config.connectors},
             )
             await wellness_orch.run(start, end, force=self._gui_config.force)
         except Exception:  # noqa: S110

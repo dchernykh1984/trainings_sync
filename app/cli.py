@@ -184,7 +184,11 @@ async def _run_wellness_concurrent(
             if isinstance(wc, LocalFolderWellnessConnector):
                 await wc.login()
         wellness_orch = WellnessOrchestrator(
-            wellness_connectors, wellness_cache, tracker, login_tasks=login_tasks
+            wellness_connectors,
+            wellness_cache,
+            tracker,
+            login_tasks=login_tasks,
+            names={c.uid: c.id for c in config.connectors},
         )
         await wellness_orch.run(start, end, force=args.force)
     except Exception as exc:

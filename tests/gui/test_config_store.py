@@ -717,3 +717,30 @@ def test_loading_a_config_that_already_has_uids_leaves_the_file_alone(
     store.load_gui_config()
 
     assert path.stat().st_mtime_ns == before
+
+
+@pytest.mark.parametrize("kind", ["garmin", "strava", "local_folder"])
+def test_the_uid_reaches_the_app_config_for_every_connector_type(
+    tmp_path: Path, kind: str
+) -> None:
+    # Losing it for one type would silently fall back to the name, which is
+    # exactly the orphaned cache this design exists to prevent.
+    store = ConfigStore(config_dir=tmp_path)
+    entry = ConnectorEntry(id="Garmin Denis", uid="3f9a1c", type=kind, folder="/a")
+    config = GuiConfig(connectors=[entry], sync_groups=[])
+    assert store.to_app_config(config).connectors[0].uid == "3f9a1c"
+
+
+def test_two_connectors_sharing_a_uid_are_refused(tmp_path: Path) -> None:
+    # A config can be hand-edited or imported without going through the CLI
+    # parser that catches this.
+    store = ConfigStore(config_dir=tmp_path)
+    config = GuiConfig(
+        connectors=[
+            ConnectorEntry(id="A", uid="same", type="local_folder", folder="/a"),
+            ConnectorEntry(id="B", uid="same", type="local_folder", folder="/b"),
+        ],
+        sync_groups=[],
+    )
+    with pytest.raises(ValueError, match="share a uid"):
+        store.to_app_config(config)

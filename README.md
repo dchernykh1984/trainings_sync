@@ -339,7 +339,9 @@ Build the sync configuration visually:
   dropdown (populated from the Credentials tab) - its URL and login come from
   that account. For a local folder pick the directory with **Browse...** (or type
   the path). A connector used by a sync group cannot be deleted until you remove
-  it from those groups.
+  it from those groups. Renaming a connector is safe: each one also carries a
+  hidden `uid` that never changes, and the cache is filed under that, so the
+  downloaded history stays attached to it.
 - **Sync Groups** - define what syncs where. Add sources (each with a priority;
   higher priority wins when the same activity exists in several sources) and
   destinations, both chosen from the connectors you defined.

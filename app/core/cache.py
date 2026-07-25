@@ -22,7 +22,7 @@ def _file_exists(path: Path) -> bool:
 @dataclass(frozen=True)
 class CacheEntry:
     external_id: str
-    source_id: str  # stable id from config, e.g. "garmin-main"
+    source_id: str  # the connector's uid - never its display name
     format: str  # "fit", "gpx", "tcx"
     start_time: datetime  # UTC
     elapsed_s: int | None  # wall-clock duration; None if unknown

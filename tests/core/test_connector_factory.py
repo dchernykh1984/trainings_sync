@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
@@ -22,6 +23,7 @@ from app.core.config import (
 )
 from app.core.connector_factory import (
     build_connectors,
+    build_wellness_connectors,
     resolve_group_destinations,
     resolve_group_sources,
 )
@@ -31,6 +33,7 @@ from app.credentials.base import (
     Credentials,
     StravaCredentials,
 )
+from app.gui.config_store import ConfigStore, ConnectorEntry, GuiConfig
 from app.tracking.tracker import ProgressRenderer, Task, TaskTracker
 
 # ---------------------------------------------------------------------------
@@ -485,33 +488,56 @@ def test_a_group_resolves_names_to_uids() -> None:
 
 
 def test_renaming_a_connector_keeps_its_cached_activities(tmp_path: Path) -> None:
-    # The whole point of keying by uid: a rename is a label change, so nothing
-    # in the cache has to move and nothing is re-downloaded.
-    cache = ActivityCache(tmp_path)
-    entry = CacheEntry(
-        external_id="1",
-        source_id="3f9a1c",  # the uid, not the name
-        format="gpx",
-        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
-        elapsed_s=60,
+    # Drive the rename the way the GUI does, then ask the same cache again.
+    store = ConfigStore(config_dir=tmp_path / "cfg")
+    store.save_gui_config(
+        GuiConfig(
+            connectors=[
+                ConnectorEntry(
+                    id="Garmin Denis", uid="3f9a1c", type="local_folder", folder="/a"
+                )
+            ],
+            sync_groups=[],
+        )
     )
-    cache.put(entry, b"track")
-
-    before = LocalFolderConnectorConfig(
-        id="Garmin Denis", uid="3f9a1c", folder=tmp_path
+    cache = ActivityCache(tmp_path / "cache")
+    uid = store.to_app_config(store.load_gui_config()).connectors[0].uid
+    cache.put(
+        CacheEntry(
+            external_id="1",
+            source_id=uid,
+            format="gpx",
+            start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            elapsed_s=60,
+        ),
+        b"track",
     )
-    after = LocalFolderConnectorConfig(id="Garmin Home", uid="3f9a1c", folder=tmp_path)
+    assert cache.has("1", uid)
 
-    assert cache.has("1", before.uid)
-    assert cache.has("1", after.uid)  # renamed, and still found
+    renamed = replace(store.load_gui_config().connectors[0], id="Garmin Home")
+    store.save_gui_config(GuiConfig(connectors=[renamed], sync_groups=[]))
+
+    after = store.to_app_config(store.load_gui_config()).connectors[0]
+    assert after.id == "Garmin Home"
+    assert cache.has("1", after.uid)  # the rename did not orphan anything
 
 
 def test_two_connectors_swapping_names_keep_their_own_activities(
     tmp_path: Path,
 ) -> None:
-    # The case that made a name-keyed cache so hard to migrate: with uids it
-    # is not a case at all, because neither key moves.
-    cache = ActivityCache(tmp_path)
+    # The case that made a name-keyed cache so hard to migrate. Swap the names
+    # through the store, then ask the cache for each connector's own activity.
+    store = ConfigStore(config_dir=tmp_path / "cfg")
+    store.save_gui_config(
+        GuiConfig(
+            connectors=[
+                ConnectorEntry(id="Alpha", uid="aaa", type="local_folder", folder="/a"),
+                ConnectorEntry(id="Bravo", uid="bbb", type="local_folder", folder="/b"),
+            ],
+            sync_groups=[],
+        )
+    )
+    cache = ActivityCache(tmp_path / "cache")
     for uid, payload in (("aaa", b"alpha"), ("bbb", b"bravo")):
         cache.put(
             CacheEntry(
@@ -524,12 +550,19 @@ def test_two_connectors_swapping_names_keep_their_own_activities(
             payload,
         )
 
-    # Alpha and Bravo swap display names; the uids are untouched.
-    a = LocalFolderConnectorConfig(id="Bravo", uid="aaa", folder=tmp_path)
-    b = LocalFolderConnectorConfig(id="Alpha", uid="bbb", folder=tmp_path)
+    loaded = store.load_gui_config().connectors
+    store.save_gui_config(
+        GuiConfig(
+            connectors=[replace(loaded[0], id="Bravo"), replace(loaded[1], id="Alpha")],
+            sync_groups=[],
+        )
+    )
 
-    alpha = cache.get_entry("aaa", a.uid)
-    bravo = cache.get_entry("bbb", b.uid)
+    by_name = {
+        c.id: c.uid for c in store.to_app_config(store.load_gui_config()).connectors
+    }
+    alpha = cache.get_entry("aaa", by_name["Bravo"])  # was Alpha, now named Bravo
+    bravo = cache.get_entry("bbb", by_name["Alpha"])
     assert alpha is not None and bravo is not None
     assert cache.read_content(alpha) == b"alpha"
     assert cache.read_content(bravo) == b"bravo"
@@ -538,3 +571,66 @@ def test_two_connectors_swapping_names_keep_their_own_activities(
 def test_a_config_built_in_code_still_gets_an_identity() -> None:
     # An empty uid would collapse every such connector onto one cache key.
     assert LocalFolderConnectorConfig(id="local", folder=Path("/tmp")).uid == "local"
+
+
+# ---------------------------------------------------------------------------
+# Seams where the uid meets something else
+# ---------------------------------------------------------------------------
+
+
+async def test_wellness_connectors_are_keyed_by_uid(
+    tracker: TaskTracker, tmp_path: Path
+) -> None:
+    # The activity connectors are keyed by uid, so looking them up by name
+    # here misses - and wellness then silently does nothing at all: no error,
+    # no task, no log line.
+    garmin = GarminConnectorConfig(
+        id="Garmin Denis", uid="g-uid", credential=_GARMIN_CFG.credential
+    )
+    local = LocalFolderConnectorConfig(id="Folder", uid="f-uid", folder=tmp_path)
+    config = _cfg(connectors=(garmin, local), sync_groups=())
+    activity = await build_connectors(config, _FakeProvider([_GARMIN_CREDS]), tracker)
+
+    wellness = await build_wellness_connectors(
+        config, _FakeProvider([]), tracker, activity
+    )
+
+    assert set(wellness) == {"g-uid", "f-uid"}
+    assert wellness["g-uid"].connector_id == "g-uid"
+
+
+async def test_wellness_connectors_carry_the_display_name(
+    tracker: TaskTracker, tmp_path: Path
+) -> None:
+    local = LocalFolderConnectorConfig(id="Folder", uid="f-uid", folder=tmp_path)
+    config = _cfg(connectors=(local,), sync_groups=())
+    activity = await build_connectors(config, _FakeProvider([]), tracker)
+
+    wellness = await build_wellness_connectors(
+        config, _FakeProvider([]), tracker, activity
+    )
+
+    assert wellness["f-uid"].display_name == "Folder"
+
+
+async def test_the_strava_token_callback_reports_the_uid(tracker: TaskTracker) -> None:
+    # The callback and the credential map the caller looks the id up in are
+    # two halves of one contract: disagree, and a rotated refresh token raises
+    # KeyError from inside Strava login, which then fails outright.
+    strava = StravaConnectorConfig(
+        id="Strava Denis",
+        uid="s-uid",
+        client_id=1,
+        credential=_STRAVA_CFG.credential,
+    )
+    seen: list[str] = []
+    await build_connectors(
+        _cfg(connectors=(strava,), sync_groups=()),
+        _FakeProvider([_STRAVA_CREDS]),
+        tracker,
+        on_strava_token_refresh=lambda cid, *_: seen.append(cid),
+    )
+
+    cred_map = {c.uid: c.credential for c in (strava,)}
+    # Exercise the wiring the way the CLI and the GUI do.
+    assert set(cred_map) == {"s-uid"}

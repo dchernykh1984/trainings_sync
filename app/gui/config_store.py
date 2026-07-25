@@ -52,8 +52,8 @@ class CredentialEntry:
 class ConnectorEntry:
     id: str
     type: str  # "garmin" | "strava" | "local_folder"
-    # Stable identity, unaffected by renaming `id`; see
-    # app.core.connector_identity. Empty means "assign on load".
+    # Stable identity, unaffected by renaming `id`. Empty means the parsers
+    # fill it in from the name, which is what a pre-uid config gets.
     uid: str = ""
     credential_service: str = ""
     credential_url: str = ""

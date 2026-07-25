@@ -15,6 +15,7 @@ from app.connectors.strava import StravaConnector
 from app.core.cache import ActivityCache, CacheEntry
 from app.core.config import (
     AppConfig,
+    ConnectorConfig,
     GarminConnectorConfig,
     GroupSourceConfig,
     LocalFolderConnectorConfig,
@@ -96,6 +97,9 @@ _STRAVA_CFG = StravaConnectorConfig(
 
 _GARMIN_CREDS = Credentials(login="user@example.com", password="garmin-pass")
 _STRAVA_CREDS = Credentials(login="client-secret-val", password="refresh-token-val")
+_STRAVA_REFRESHED = StravaCredentials(
+    client_id=1, client_secret="client-secret-val", refresh_token="rotated"
+)
 
 _DEFAULT_GROUP = SyncGroupConfig(
     id="default",
@@ -578,6 +582,30 @@ def test_a_config_built_in_code_still_gets_an_identity() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _wellness_case(
+    kind: str, folder: Path
+) -> tuple[ConnectorConfig, list[Credentials]]:
+    """A connector of each type, with a uid that differs from its name."""
+    if kind == "garmin":
+        return (
+            GarminConnectorConfig(
+                id="Garmin Denis", uid="g-uid", credential=_GARMIN_CFG.credential
+            ),
+            [_GARMIN_CREDS],
+        )
+    if kind == "strava":
+        return (
+            StravaConnectorConfig(
+                id="Strava Denis",
+                uid="s-uid",
+                client_id=1,
+                credential=_STRAVA_CFG.credential,
+            ),
+            [_STRAVA_CREDS],
+        )
+    return LocalFolderConnectorConfig(id="Folder", uid="f-uid", folder=folder), []
+
+
 async def test_wellness_connectors_are_keyed_by_uid(
     tracker: TaskTracker, tmp_path: Path
 ) -> None:
@@ -599,21 +627,43 @@ async def test_wellness_connectors_are_keyed_by_uid(
     assert wellness["g-uid"].connector_id == "g-uid"
 
 
+@pytest.mark.parametrize("kind", ["garmin", "strava", "local_folder"])
 async def test_wellness_connectors_carry_the_display_name(
-    tracker: TaskTracker, tmp_path: Path
+    tracker: TaskTracker, tmp_path: Path, kind: str
 ) -> None:
-    local = LocalFolderConnectorConfig(id="Folder", uid="f-uid", folder=tmp_path)
-    config = _cfg(connectors=(local,), sync_groups=())
-    activity = await build_connectors(config, _FakeProvider([]), tracker)
+    # Every branch builds its own connector, so a missed one shows the user a
+    # hex string where its name belongs.
+    cfg, creds = _wellness_case(kind, tmp_path)
+    config = _cfg(connectors=(cfg,), sync_groups=())
+    activity = await build_connectors(config, _FakeProvider(creds), tracker)
 
     wellness = await build_wellness_connectors(
         config, _FakeProvider([]), tracker, activity
     )
 
-    assert wellness["f-uid"].display_name == "Folder"
+    assert wellness[cfg.uid].display_name == cfg.id
 
 
-async def test_the_strava_token_callback_reports_the_uid(tracker: TaskTracker) -> None:
+@pytest.mark.parametrize("kind", ["garmin", "strava", "local_folder"])
+async def test_every_wellness_type_is_keyed_by_uid(
+    tracker: TaskTracker, tmp_path: Path, kind: str
+) -> None:
+    # Looking the activity connector up by name misses, and that branch then
+    # builds nothing at all - silently, with no error and no task.
+    cfg, creds = _wellness_case(kind, tmp_path)
+    config = _cfg(connectors=(cfg,), sync_groups=())
+    activity = await build_connectors(config, _FakeProvider(creds), tracker)
+
+    wellness = await build_wellness_connectors(
+        config, _FakeProvider([]), tracker, activity
+    )
+
+    assert set(wellness) == {cfg.uid}
+
+
+async def test_the_strava_token_callback_reports_the_uid(
+    tracker: TaskTracker,
+) -> None:
     # The callback and the credential map the caller looks the id up in are
     # two halves of one contract: disagree, and a rotated refresh token raises
     # KeyError from inside Strava login, which then fails outright.
@@ -624,13 +674,18 @@ async def test_the_strava_token_callback_reports_the_uid(tracker: TaskTracker) -
         credential=_STRAVA_CFG.credential,
     )
     seen: list[str] = []
-    await build_connectors(
+    built = await build_connectors(
         _cfg(connectors=(strava,), sync_groups=()),
         _FakeProvider([_STRAVA_CREDS]),
         tracker,
         on_strava_token_refresh=lambda cid, *_: seen.append(cid),
     )
 
+    # Fire it the way StravaConnector does when a token rotates.
+    connector = built["s-uid"]
+    connector._on_token_refresh(_STRAVA_REFRESHED, "acct")  # type: ignore[attr-defined]
+
+    assert seen == ["s-uid"]
+    # And the caller must be able to resolve that id in the map it builds.
     cred_map = {c.uid: c.credential for c in (strava,)}
-    # Exercise the wiring the way the CLI and the GUI do.
-    assert set(cred_map) == {"s-uid"}
+    assert cred_map[seen[0]] is strava.credential

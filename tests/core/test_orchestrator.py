@@ -463,3 +463,34 @@ async def test_login_tasks_passed_to_source_executor(cache: ActivityCache) -> No
     await login_task
 
     assert captured == [login_tasks]
+
+
+async def test_a_sync_runs_when_the_uid_differs_from_the_name(
+    tmp_path: Path,
+) -> None:
+    # Every connector made in the GUI has a random uid, and so does every
+    # renamed one - the case this whole design exists for. The per-connector
+    # locks are keyed by uid, so looking them up by name kills the upload
+    # phase with a KeyError after the download has already run.
+    group = SyncGroupConfig(
+        id="g",
+        sources=(GroupSourceConfig(id="Garmin Denis", priority=1),),
+        destinations=("Local Folder",),
+    )
+    source = MagicMock()
+    source.login = AsyncMock()
+    source.list_activities = AsyncMock(return_value=[])
+    source.user_label = "acct"
+    dest = MagicMock()
+    dest.login = AsyncMock()
+    dest.list_activities = AsyncMock(return_value=[])
+    dest.user_label = ""
+
+    orchestrator = SyncOrchestrator(
+        groups=(group,),
+        connectors={"a1b2c3": source, "e5f6a7": dest},
+        cache=ActivityCache(tmp_path / "cache"),
+        uid_by_id={"Garmin Denis": "a1b2c3", "Local Folder": "e5f6a7"},
+    )
+
+    assert await orchestrator.run(date(2026, 1, 1), date(2026, 1, 2)) == 0

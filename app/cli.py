@@ -206,7 +206,7 @@ async def _run_sync(
         )
 
     strava_cred_map = {
-        c.id: c.credential
+        c.uid: c.credential
         for c in config.connectors
         if isinstance(c, StravaConnectorConfig)
     }
@@ -267,6 +267,7 @@ async def _run_sync(
             cache=cache,
             tracker=tracker,
             login_tasks=login_tasks,
+            uid_by_id={c.id: c.uid for c in config.connectors},
         )
         try:
             if not getattr(args, "skip_wellness", False):

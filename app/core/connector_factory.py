@@ -62,11 +62,11 @@ async def build_connectors(
             connector = StravaConnector(
                 credentials=strava_creds,
                 tracker=tracker,
-                on_token_refresh=_strava_callback(cfg.id, on_strava_token_refresh),
+                on_token_refresh=_strava_callback(cfg.uid, on_strava_token_refresh),
             )
         else:  # LocalFolderConnectorConfig - source mode (no cache/dest_id)
             connector = LocalFolderConnector(folder=cfg.folder, tracker=tracker)
-        result[cfg.id] = connector
+        result[cfg.uid] = connector
 
     return result
 
@@ -84,20 +84,20 @@ async def build_wellness_connectors(
     result: dict[str, WellnessConnector] = {}
     for cfg in config.connectors:
         if isinstance(cfg, GarminConnectorConfig):
-            activity_conn = activity_connectors.get(cfg.id)
+            activity_conn = activity_connectors.get(cfg.uid)
             if isinstance(activity_conn, GarminConnector):
                 connector: WellnessConnector = (
                     GarminWellnessConnector.from_garmin_connector(
-                        cfg.id, activity_conn, tracker
+                        cfg.uid, activity_conn, tracker
                     )
                 )
             else:
                 continue
         elif isinstance(cfg, StravaConnectorConfig):
-            activity_conn = activity_connectors.get(cfg.id)
+            activity_conn = activity_connectors.get(cfg.uid)
             if isinstance(activity_conn, StravaConnector):
                 connector = StravaWellnessConnector(
-                    connector_id=cfg.id,
+                    connector_id=cfg.uid,
                     strava_connector=activity_conn,
                     tracker=tracker,
                 )
@@ -105,21 +105,32 @@ async def build_wellness_connectors(
                 continue
         elif isinstance(cfg, LocalFolderConnectorConfig):
             connector = LocalFolderWellnessConnector(
-                connector_id=cfg.id,
+                connector_id=cfg.uid,
                 folder=cfg.folder,
                 tracker=tracker,
             )
         else:
             continue
-        result[cfg.id] = connector
+        result[cfg.uid] = connector
     return result
 
 
 def resolve_group_sources(
-    group: SyncGroupConfig, connectors: dict[str, ServiceConnector]
+    group: SyncGroupConfig,
+    connectors: dict[str, ServiceConnector],
+    uid_by_id: dict[str, str] | None = None,
 ) -> list[tuple[SourceSpec, ServiceConnector]]:
+    """Resolve a group's source names to the uids everything else works by.
+
+    Without a mapping the names are taken to be the uids, which is what a
+    config predating uids amounts to.
+    """
+    uid_by_id = uid_by_id or {cid: cid for cid in connectors}
     return [
-        (SourceSpec(source_id=src.id, priority=src.priority), connectors[src.id])
+        (
+            SourceSpec(source_id=uid_by_id[src.id], priority=src.priority),
+            connectors[uid_by_id[src.id]],
+        )
         for src in group.sources
     ]
 
@@ -128,11 +139,14 @@ def resolve_group_destinations(
     group: SyncGroupConfig,
     connectors: dict[str, ServiceConnector],
     cache: object,
+    uid_by_id: dict[str, str] | None = None,
 ) -> list[tuple[str, ServiceConnector]]:
+    uid_by_id = uid_by_id or {cid: cid for cid in connectors}
     result: list[tuple[str, ServiceConnector]] = []
-    for dest_id in group.destinations:
-        connector = connectors[dest_id]
+    for name in group.destinations:
+        uid = uid_by_id[name]
+        connector = connectors[uid]
         if isinstance(connector, LocalFolderConnector):
-            connector = connector.as_destination(cache, dest_id)
-        result.append((dest_id, connector))
+            connector = connector.as_destination(cache, uid)
+        result.append((uid, connector))
     return result

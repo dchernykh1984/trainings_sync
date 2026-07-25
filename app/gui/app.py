@@ -158,7 +158,7 @@ class SyncWorker(QThread):
             provider = self._build_provider(app_config, tracker)
 
             strava_cred_map = {
-                c.id: c.credential
+                c.uid: c.credential
                 for c in app_config.connectors
                 if isinstance(c, StravaConnectorConfig)
             }
@@ -187,6 +187,7 @@ class SyncWorker(QThread):
                 cache=cache,
                 tracker=tracker,
                 login_tasks=login_tasks,
+                uid_by_id={c.id: c.uid for c in app_config.connectors},
             )
             try:
                 if self._gui_config.skip_wellness:

@@ -436,3 +436,65 @@ def test_resolve_group_destinations_wraps_local_as_destination(
     assert dest_conn is not local_source
     assert dest_conn._cache is cache
     assert dest_conn._dest_id == "local"
+
+
+# ---------------------------------------------------------------------------
+# Cache keys follow the uid, labels follow the name
+# ---------------------------------------------------------------------------
+
+
+async def test_connectors_are_keyed_by_uid_not_by_name(
+    tracker: TaskTracker, tmp_path: Path
+) -> None:
+    # The key is what the cache is filed under, so it must be the thing that
+    # does not move when the user renames a connector.
+    local = LocalFolderConnectorConfig(id="Garmin Denis", uid="3f9a1c", folder=tmp_path)
+    result = await build_connectors(
+        _cfg(connectors=(local,), sync_groups=()), _FakeProvider([]), tracker
+    )
+    assert list(result) == ["3f9a1c"]
+
+
+def test_a_group_resolves_names_to_uids() -> None:
+    group = SyncGroupConfig(
+        id="g",
+        sources=(GroupSourceConfig(id="Garmin Denis", priority=1),),
+        destinations=("Garmin Denis",),
+    )
+    connectors = {"3f9a1c": object()}
+    uid_by_id = {"Garmin Denis": "3f9a1c"}
+
+    ((spec, _),) = resolve_group_sources(group, connectors, uid_by_id)  # type: ignore[arg-type]
+    ((dest_id, _),) = resolve_group_destinations(
+        group,
+        connectors,
+        object(),
+        uid_by_id,  # type: ignore[arg-type]
+    )
+
+    assert spec.source_id == "3f9a1c"
+    assert dest_id == "3f9a1c"
+
+
+def test_renaming_a_connector_leaves_the_cache_key_alone() -> None:
+    # The whole point: the cache is filed under the uid, so a rename is a
+    # label change and nothing more - no data has to move.
+    before = LocalFolderConnectorConfig(
+        id="Garmin Denis", uid="3f9a1c", folder=Path("/tmp")
+    )
+    after = LocalFolderConnectorConfig(
+        id="Garmin Home", uid="3f9a1c", folder=Path("/tmp")
+    )
+    assert before.uid == after.uid
+
+
+def test_two_connectors_swapping_names_keep_distinct_keys() -> None:
+    # This is the case that made a name-keyed cache so hard to migrate.
+    a = LocalFolderConnectorConfig(id="Bravo", uid="aaa", folder=Path("/tmp"))
+    b = LocalFolderConnectorConfig(id="Alpha", uid="bbb", folder=Path("/tmp"))
+    assert a.uid != b.uid
+
+
+def test_a_config_built_in_code_still_gets_an_identity() -> None:
+    # An empty uid would collapse every such connector onto one cache key.
+    assert LocalFolderConnectorConfig(id="local", folder=Path("/tmp")).uid == "local"

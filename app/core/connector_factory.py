@@ -88,7 +88,7 @@ async def build_wellness_connectors(
             if isinstance(activity_conn, GarminConnector):
                 connector: WellnessConnector = (
                     GarminWellnessConnector.from_garmin_connector(
-                        cfg.uid, activity_conn, tracker
+                        cfg.uid, activity_conn, tracker, display_name=cfg.id
                     )
                 )
             else:
@@ -100,6 +100,7 @@ async def build_wellness_connectors(
                     connector_id=cfg.uid,
                     strava_connector=activity_conn,
                     tracker=tracker,
+                    display_name=cfg.id,
                 )
             else:
                 continue
@@ -108,6 +109,7 @@ async def build_wellness_connectors(
                 connector_id=cfg.uid,
                 folder=cfg.folder,
                 tracker=tracker,
+                display_name=cfg.id,
             )
         else:
             continue

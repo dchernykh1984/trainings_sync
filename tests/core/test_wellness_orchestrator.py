@@ -398,3 +398,38 @@ async def test_the_task_list_shows_the_connector_name_not_its_uid(
 
     assert any("Garmin Denis" in name for name in renderer.task_names)
     assert not any("3f9a1c" in name for name in renderer.task_names)
+
+
+async def test_a_wellness_connector_names_itself_by_its_display_name(
+    tracker: TaskTracker,
+) -> None:
+    # The connectors build their own task names, so the orchestrator's map
+    # does not reach them - they need the name handed over at construction.
+    from app.connectors.strava_wellness import StravaWellnessConnector
+
+    renderer = _NameRecordingRenderer()
+    connector = StravaWellnessConnector(
+        connector_id="a1b2c3d4e5f6",
+        strava_connector=MagicMock(),
+        tracker=TaskTracker(renderer),
+        display_name="Strava Denis",
+    )
+
+    await connector.login()
+
+    assert renderer.task_names == ["Strava wellness (Strava Denis): connect"]
+
+
+async def test_a_wellness_connector_falls_back_to_its_id(tracker: TaskTracker) -> None:
+    from app.connectors.strava_wellness import StravaWellnessConnector
+
+    renderer = _NameRecordingRenderer()
+    connector = StravaWellnessConnector(
+        connector_id="garmin",
+        strava_connector=MagicMock(),
+        tracker=TaskTracker(renderer),
+    )
+
+    await connector.login()
+
+    assert renderer.task_names == ["Strava wellness (garmin): connect"]

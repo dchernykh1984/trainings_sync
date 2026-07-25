@@ -69,9 +69,11 @@ class GarminWellnessConnector(WellnessConnector):
         tracker: TaskTracker,
         client: Garmin | None = None,
         parent_connector: GarminConnector | None = None,
+        display_name: str = "",
     ) -> None:
         super().__init__(tracker)
         self._connector_id = connector_id
+        self._display_name = display_name
         self._credentials = credentials
         self._client: Garmin | None = client
         self._parent_connector: GarminConnector | None = parent_connector
@@ -82,9 +84,11 @@ class GarminWellnessConnector(WellnessConnector):
         connector_id: str,
         garmin_connector: GarminConnector,
         tracker: TaskTracker,
+        display_name: str = "",
     ) -> GarminWellnessConnector:
         return cls(
             connector_id=connector_id,
+            display_name=display_name,
             credentials=garmin_connector._credentials,
             tracker=tracker,
             client=None,
@@ -145,7 +149,7 @@ class GarminWellnessConnector(WellnessConnector):
         except Exception as exc:
             if log:
                 log.debug(
-                    f"[garmin-wellness] {self._connector_id}:"
+                    f"[garmin-wellness] {self.display_name}:"
                     f" fetch_daily({data_type.value}, {date_str}) failed: {exc}"
                 )
             return None
@@ -166,7 +170,7 @@ class GarminWellnessConnector(WellnessConnector):
         except Exception as exc:
             if log:
                 log.debug(
-                    f"[garmin-wellness] {self._connector_id}:"
+                    f"[garmin-wellness] {self.display_name}:"
                     f" fetch_range({data_type.value},"
                     f" {start_str}, {end_str}) failed: {exc}"
                 )
@@ -288,7 +292,7 @@ class GarminWellnessConnector(WellnessConnector):
         except Exception as exc:
             if log:
                 log.debug(
-                    f"[garmin-wellness] {self._connector_id}:"
+                    f"[garmin-wellness] {self.display_name}:"
                     f" fetch_snapshot({data_type.value}) failed: {exc}"
                 )
             return None
@@ -307,7 +311,7 @@ class GarminWellnessConnector(WellnessConnector):
         except Exception as exc:
             if log:
                 log.warning(
-                    f"[garmin-wellness] {self._connector_id}:"
+                    f"[garmin-wellness] {self.display_name}:"
                     f" push_record({data_type.value}) failed: {exc}"
                 )
 

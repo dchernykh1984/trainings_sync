@@ -20,19 +20,29 @@ class SyncOrchestrator:
         cache: ActivityCache,
         tracker: TaskTracker | None = None,
         login_tasks: dict[str, asyncio.Task[None]] | None = None,
+        uid_by_id: dict[str, str] | None = None,
     ) -> None:
         self._groups = groups
         self._connectors = connectors
         self._cache = cache
         self._tracker = tracker
         self._login_tasks = login_tasks
+        # Everything downstream is keyed by uid so that renaming a connector
+        # leaves the cache untouched; the names are kept only to say who is
+        # who in the log and in the task list.
+        self._uid_by_id = uid_by_id or {cid: cid for cid in connectors}
+        self._names = {uid: name for name, uid in self._uid_by_id.items()}
 
     async def run(self, start: date, end: date, *, force: bool = False) -> int:
         list_cache: dict[tuple[str, date, date], list[ActivityMeta]] = {}
 
         # Collect unique source IDs in declaration order across all groups.
         unique_source_ids: list[str] = list(
-            dict.fromkeys(src.id for group in self._groups for src in group.sources)
+            dict.fromkeys(
+                self._uid_by_id[src.id]
+                for group in self._groups
+                for src in group.sources
+            )
         )
         source_executors = [
             self._build_source_executor(src_id, list_cache)
@@ -75,6 +85,7 @@ class SyncOrchestrator:
             task_prefix="",
             login_tasks=self._login_tasks,
             list_cache=list_cache,
+            names=self._names,
         )
 
     def _build_executor(
@@ -83,15 +94,16 @@ class SyncOrchestrator:
         list_cache: dict[tuple[str, date, date], list[ActivityMeta]],
     ) -> SyncExecutor:
         return SyncExecutor(
-            sources=resolve_group_sources(group, self._connectors),
+            sources=resolve_group_sources(group, self._connectors, self._uid_by_id),
             destinations=resolve_group_destinations(
-                group, self._connectors, self._cache
+                group, self._connectors, self._cache, self._uid_by_id
             ),
             cache=self._cache,
             tracker=self._tracker,
             task_prefix=f"{group.id}: ",
             login_tasks=self._login_tasks,
             list_cache=list_cache,
+            names=self._names,
         )
 
     async def _download_source_phase(
@@ -104,16 +116,17 @@ class SyncOrchestrator:
         force: bool,
     ) -> None:
         log = self._tracker.sync_logger if self._tracker is not None else None
+        name = self._names.get(source_id, source_id)
         if log is not None:
-            log.info(f"[source] {source_id} - download started")
+            log.info(f"[source] {name} - download started")
         try:
             await executor.download_phase(start, end, force=force)
         except BaseException:
             if log is not None:
-                log.error(f"[source] {source_id} - download failed")
+                log.error(f"[source] {name} - download failed")
             raise
         if log is not None:
-            log.info(f"[source] {source_id} - download done")
+            log.info(f"[source] {name} - download done")
 
     async def _upload_group_locked(
         self,

@@ -150,6 +150,7 @@ class SyncExecutor:
         task_prefix: str = "",
         login_tasks: dict[str, asyncio.Task[None]] | None = None,
         list_cache: dict[tuple[str, date, date], list[ActivityMeta]] | None = None,
+        names: dict[str, str] | None = None,
     ) -> None:
         source_ids = [spec.source_id for spec, _ in sources]
         if len(source_ids) != len(set(source_ids)):
@@ -166,7 +167,14 @@ class SyncExecutor:
         self._task_prefix = task_prefix
         self._login_tasks = login_tasks
         self._list_cache = list_cache
+        # Ids here are uids, so that renaming a connector never touches the
+        # cache. These are what to call them in front of the user.
+        self._names = names or {}
         self._download_failures: int = 0
+
+    def _name(self, connector_id: str) -> str:
+        """What to call a connector in the log and the task list."""
+        return self._names.get(connector_id, connector_id)
 
     @property
     def download_failures(self) -> int:
@@ -235,7 +243,7 @@ class SyncExecutor:
                     continue  # new 429 since we waited; loop back to wait
                 if attempt > 0 and not _start_logged and log:
                     log.info(
-                        f"[download] {source_id}{account}:"
+                        f"[download] {self._name(source_id)}{account}:"
                         f" {item.meta.external_id!r} - attempt"
                         f" {attempt + 1}/{_DOWNLOAD_ATTEMPTS} starting"
                     )
@@ -273,14 +281,14 @@ class SyncExecutor:
             stored = self._cache_activity(source_id, activity)
             if log:
                 log.info(
-                    f"[download] {source_id}{account}:"
+                    f"[download] {self._name(source_id)}{account}:"
                     f" {activity.external_id!r}"
                     f" {activity.start_time.date()}"
                     f' "{activity.name}" -> {stored.filename}'
                 )
         elif log:
             log.info(
-                f"[download] {source_id}{account}:"
+                f"[download] {self._name(source_id)}{account}:"
                 f" {meta.external_id!r} - unavailable, skipped"
             )
         if not advanced and tracking is not None:
@@ -301,7 +309,7 @@ class SyncExecutor:
         if isinstance(exc, RateLimitError):
             if log:
                 log.warning(
-                    f"[download] {source_id}{account}:"
+                    f"[download] {self._name(source_id)}{account}:"
                     f" {external_id!r} - rate limited (download failed)"
                 )
             return 0.0, advanced
@@ -313,14 +321,14 @@ class SyncExecutor:
         if log:
             if has_next:
                 log.warning(
-                    f"[download] {source_id}{account}:"
+                    f"[download] {self._name(source_id)}{account}:"
                     f" {external_id!r} - attempt"
                     f" {attempt + 1}/{_DOWNLOAD_ATTEMPTS} failed ({exc}),"
                     f" sleeping {_DOWNLOAD_RETRY_DELAY_S:.0f}s before retry"
                 )
             else:
                 log.warning(
-                    f"[download] {source_id}{account}:"
+                    f"[download] {self._name(source_id)}{account}:"
                     f" {external_id!r} - attempt"
                     f" {attempt + 1}/{_DOWNLOAD_ATTEMPTS} failed ({exc})"
                 )
@@ -376,7 +384,7 @@ class SyncExecutor:
                     and log
                 ):
                     log.info(
-                        f"[download] {source_id}{account}:"
+                        f"[download] {self._name(source_id)}{account}:"
                         f" pausing all downloads for {rate_state.last_pause_s:.0f}s"
                     )
                 continue
@@ -386,7 +394,7 @@ class SyncExecutor:
             return 0
         if log:
             log.error(
-                f"[download] {source_id}{account}:"
+                f"[download] {self._name(source_id)}{account}:"
                 f" {item.meta.external_id!r} - all {_DOWNLOAD_ATTEMPTS} attempts"
                 f" failed ({last_exc})"
             )
@@ -443,7 +451,9 @@ class SyncExecutor:
                 spec, _ = source_metas[0]
                 label = self._source_user_label(spec.source_id)
                 src_part = (
-                    f" {spec.source_id} ({label})" if label else f" {spec.source_id}"
+                    f" {self._name(spec.source_id)} ({label})"
+                    if label
+                    else f" {self._name(spec.source_id)}"
                 )
             else:
                 src_part = ""
@@ -484,7 +494,7 @@ class SyncExecutor:
             label = self._source_user_label(spec.source_id)
             account = f" ({label})" if label else ""
             log.info(
-                f"[plan] {spec.source_id}{account}:"
+                f"[plan] {self._name(spec.source_id)}{account}:"
                 f" {to_dl} to download, {len(metas) - to_dl} skipped"
             )
 
@@ -539,8 +549,9 @@ class SyncExecutor:
             for source_id, items in by_source.items():
                 label = source_map[source_id].user_label
                 suffix = f" ({label})" if label else ""
+                name = self._name(source_id)
                 source_task_names[source_id] = await tracker.add_task(
-                    f"{self._task_prefix}Download {source_id}{suffix} activities",
+                    f"{self._task_prefix}Download {name}{suffix} activities",
                     total=len(items),
                 )
 
@@ -596,11 +607,12 @@ class SyncExecutor:
         if dest_id is not None:
             dest_label = self._dest_user_label(dest_id)
             dest_suffix = f" ({dest_label})" if dest_label else ""
-            where = f" -> {dest_id}{dest_suffix}"
+            where = f" -> {self._name(dest_id)}{dest_suffix}"
         else:
             where = ""
+        src_name = self._name(entry.source_id)
         log.debug(
-            f"[upload-plan] {entry.source_id}{src_suffix}: {entry.external_id!r}"
+            f"[upload-plan] {src_name}{src_suffix}: {entry.external_id!r}"
             f" {entry.start_time.date()}{where}: {reason}"
         )
 
@@ -803,7 +815,7 @@ class SyncExecutor:
         await tracking[0].warn(
             tracking[1],
             f"{external_id!r}: {n_items} media item(s) not uploaded"
-            f" to {dest_id} (not supported)",
+            f" to {self._name(dest_id)} (not supported)",
         )
 
     def _build_upload_activity(
@@ -867,8 +879,8 @@ class SyncExecutor:
                     src_suffix = f" ({src_label})" if src_label else ""
                     log.info(
                         f"[upload] {entry.external_id!r}"
-                        f" ({entry.source_id}{src_suffix})"
-                        f" -> {dest_id}{dest_suffix}: {result}"
+                        f" ({self._name(entry.source_id)}{src_suffix})"
+                        f" -> {self._name(dest_id)}{dest_suffix}: {result}"
                     )
                 if tracking is not None:
                     await tracking[0].advance(tracking[1])
@@ -947,7 +959,7 @@ class SyncExecutor:
                 label = dest_map[dest_id].user_label
                 suffix = f" ({label})" if label else ""
                 dest_task_names[dest_id] = await tracker.add_task(
-                    f"{self._task_prefix}Upload to {dest_id}{suffix}",
+                    f"{self._task_prefix}Upload to {self._name(dest_id)}{suffix}",
                     total=len(entries),
                 )
 

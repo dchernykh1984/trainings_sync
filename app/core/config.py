@@ -18,6 +18,14 @@ class GarminConnectorConfig:
     credential: CredentialRequest
     uid: str = ""
 
+    def __post_init__(self) -> None:
+        # A config built in code rather than parsed still needs an identity:
+        # an empty one would collapse every such connector onto a single
+        # cache key. The name is the only sensible stand-in, and it is what a
+        # pre-uid config file gets too.
+        if not self.uid:
+            object.__setattr__(self, "uid", self.id)
+
 
 @dataclass(frozen=True)
 class StravaConnectorConfig:
@@ -26,12 +34,28 @@ class StravaConnectorConfig:
     credential: CredentialRequest
     uid: str = ""
 
+    def __post_init__(self) -> None:
+        # A config built in code rather than parsed still needs an identity:
+        # an empty one would collapse every such connector onto a single
+        # cache key. The name is the only sensible stand-in, and it is what a
+        # pre-uid config file gets too.
+        if not self.uid:
+            object.__setattr__(self, "uid", self.id)
+
 
 @dataclass(frozen=True)
 class LocalFolderConnectorConfig:
     id: str
     folder: Path
     uid: str = ""
+
+    def __post_init__(self) -> None:
+        # A config built in code rather than parsed still needs an identity:
+        # an empty one would collapse every such connector onto a single
+        # cache key. The name is the only sensible stand-in, and it is what a
+        # pre-uid config file gets too.
+        if not self.uid:
+            object.__setattr__(self, "uid", self.id)
 
 
 ConnectorConfig = (

@@ -14,10 +14,13 @@ permissions:
   contents: write
   pull-requests: write
 
-# Two pushes to main in quick succession would otherwise race over the
-# release branch, and the loser's push is rejected as non-fast-forward.
+# The uv.lock step below clones the release branch, rewrites the lock and pushes
+# it back. Two runs doing that at once race: one force-pushes a fresh version
+# bump while the other is mid-flight, and the loser's push is rejected as a
+# non-fast-forward. Serialise runs instead of cancelling them - cancelling could
+# abandon a release halfway through.
 concurrency:
-  group: release-please
+  group: release-please-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -45,9 +48,19 @@ jobs:
         if: steps.rp.outputs.pr
         env:
           GH_TOKEN: ${{ github.token }}
-          BRANCH: ${{ fromJSON(steps.rp.outputs.pr).headBranchName }}
+          # Short-circuited on purpose: every release-PR merge is a push that
+          # leaves this output empty, and fromJSON('') is an error. Whether a
+          # skipped step's env is evaluated at all is not specified, so do not
+          # rely on the `if` above to shield the expression.
+          BRANCH: >-
+            ${{ steps.rp.outputs.pr
+            && fromJSON(steps.rp.outputs.pr).headBranchName || '' }}
         run: |
           set -euo pipefail
+          if [ -z "$BRANCH" ]; then
+            echo "::error::release-please reported a PR without a head branch"
+            exit 1
+          fi
           git clone --branch "$BRANCH" --depth 1 \
             "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" \
             release-branch
@@ -61,16 +74,7 @@ jobs:
           git config user.email \
             "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -q -m "chore: match uv.lock to the released version" -- uv.lock
-          # release-please force-pushes this branch whenever it refreshes the
-          # PR. Losing that particular race is expected - the run that
-          # overtook us lands the same commit - but anything else is a real
-          # failure and must not pass silently.
-          if ! push=$(git push 2>&1); then
-            echo "$push"
-            echo "$push" | grep -q -e non-fast-forward -e "fetch first" \
-              || exit 1
-            echo "release branch moved on; the run that overtook us redoes this"
-          fi
+          git push
 
   # Build the full platform matrix and upload the portable apps to the release,
   # in the same run (a GITHUB_TOKEN-created release cannot trigger a separate

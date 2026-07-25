@@ -124,6 +124,11 @@ def cache(tmp_path: Path) -> ActivityCache:
     return c
 
 
+def _identity(connectors: dict[str, Any]) -> dict[str, str]:
+    """A config predating uids: every name is its own identity."""
+    return {cid: cid for cid in connectors}
+
+
 # ---------------------------------------------------------------------------
 # build_connectors - connector types
 # ---------------------------------------------------------------------------
@@ -350,7 +355,7 @@ def test_resolve_group_sources_returns_specs_and_connectors(tmp_path: Path) -> N
         ),
         destinations=("local",),
     )
-    result = resolve_group_sources(group, connectors)
+    result = resolve_group_sources(group, connectors, _identity(connectors))
     assert len(result) == 2
     spec0, conn0 = result[0]
     assert spec0.source_id == "garmin"
@@ -376,7 +381,7 @@ def test_resolve_group_sources_preserves_order(tmp_path: Path) -> None:
         ),
         destinations=(),
     )
-    result = resolve_group_sources(group, connectors)
+    result = resolve_group_sources(group, connectors, _identity(connectors))
     assert [r[1] for r in result] == [c3, c1, c2]
 
 
@@ -396,7 +401,9 @@ def test_resolve_group_destinations_returns_id_connector_pairs() -> None:
         sources=(GroupSourceConfig(id="garmin", priority=1),),
         destinations=("local",),
     )
-    result = resolve_group_destinations(group, connectors, cache=object())
+    result = resolve_group_destinations(
+        group, connectors, object(), _identity(connectors)
+    )
     assert result == [("local", local_conn)]
 
 
@@ -410,7 +417,9 @@ def test_resolve_group_destinations_multiple() -> None:
         sources=(GroupSourceConfig(id="src", priority=1),),
         destinations=("d1", "d2"),
     )
-    result = resolve_group_destinations(group, connectors, cache=object())
+    result = resolve_group_destinations(
+        group, connectors, object(), _identity(connectors)
+    )
     assert len(result) == 2
     assert result[0] == ("d1", c1)
     assert result[1] == ("d2", c2)
@@ -430,7 +439,7 @@ def test_resolve_group_destinations_wraps_local_as_destination(
         sources=(GroupSourceConfig(id="local", priority=1),),
         destinations=("local",),
     )
-    result = resolve_group_destinations(group, connectors, cache=cache)
+    result = resolve_group_destinations(group, connectors, cache, _identity(connectors))
     assert len(result) == 1
     dest_id, dest_conn = result[0]
     assert dest_id == "local"

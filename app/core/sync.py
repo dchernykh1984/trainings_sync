@@ -655,7 +655,7 @@ class SyncExecutor:
                 shadower_label = self._source_user_label(shadower)
                 shadower_suffix = f" ({shadower_label})" if shadower_label else ""
                 self._log_upload_decision(
-                    entry, None, f"shadowed by {shadower}{shadower_suffix}"
+                    entry, None, f"shadowed by {self._name(shadower)}{shadower_suffix}"
                 )
             else:
                 for dest_id, connector in self._destinations:
@@ -701,10 +701,11 @@ class SyncExecutor:
                 collected.append(item)
             added = len(collected) - before
             if log and added:
+                winner_name = self._name(winner.source_id)
                 log.debug(
-                    f"[upload-plan] {winner.source_id}: {winner.external_id!r}"
+                    f"[upload-plan] {winner_name}: {winner.external_id!r}"
                     f" borrows {added} media item(s)"
-                    f" from {donor.source_id}: {donor.external_id!r}"
+                    f" from {self._name(donor.source_id)}: {donor.external_id!r}"
                 )
         return collected
 

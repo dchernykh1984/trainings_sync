@@ -118,14 +118,9 @@ async def build_wellness_connectors(
 def resolve_group_sources(
     group: SyncGroupConfig,
     connectors: dict[str, ServiceConnector],
-    uid_by_id: dict[str, str] | None = None,
+    uid_by_id: dict[str, str],
 ) -> list[tuple[SourceSpec, ServiceConnector]]:
-    """Resolve a group's source names to the uids everything else works by.
-
-    Without a mapping the names are taken to be the uids, which is what a
-    config predating uids amounts to.
-    """
-    uid_by_id = uid_by_id or {cid: cid for cid in connectors}
+    """Resolve a group's source names to the uids everything else works by."""
     return [
         (
             SourceSpec(source_id=uid_by_id[src.id], priority=src.priority),
@@ -139,9 +134,8 @@ def resolve_group_destinations(
     group: SyncGroupConfig,
     connectors: dict[str, ServiceConnector],
     cache: object,
-    uid_by_id: dict[str, str] | None = None,
+    uid_by_id: dict[str, str],
 ) -> list[tuple[str, ServiceConnector]]:
-    uid_by_id = uid_by_id or {cid: cid for cid in connectors}
     result: list[tuple[str, ServiceConnector]] = []
     for name in group.destinations:
         uid = uid_by_id[name]

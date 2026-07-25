@@ -94,16 +94,45 @@ class SyncWorker(QThread):
         self._gui_config = gui_config
         self._renderer = renderer
         self._keepass_passwords = keepass_passwords or {}
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._task: asyncio.Task[int] | None = None
+        self._cancelled = False
 
     def run(self) -> None:
         ts_start = datetime.now().astimezone().isoformat(timespec="seconds")
         self.started_ts.emit(ts_start)
         try:
-            failures = asyncio.run(self._async_sync())
-            ts_end = datetime.now().astimezone().isoformat(timespec="seconds")
-            self.finished_ts.emit(ts_end, failures)
+            failures = asyncio.run(self._run_cancellable())
+        except asyncio.CancelledError:
+            return  # asked to stop so the app can quit; nothing to report
         except Exception as exc:
             self.error_occurred.emit(str(exc))
+            return
+        ts_end = datetime.now().astimezone().isoformat(timespec="seconds")
+        self.finished_ts.emit(ts_end, failures)
+
+    async def _run_cancellable(self) -> int:
+        # Publish the loop and task so cancel() can reach them from the GUI
+        # thread; asyncio.run() creates the loop, so it cannot be captured
+        # before the coroutine is already running.
+        self._loop = asyncio.get_running_loop()
+        self._task = asyncio.current_task()  # type: ignore[assignment]
+        if self._cancelled:
+            # cancel() landed in the gap between start() and this line, where
+            # there was no task to cancel yet.
+            raise asyncio.CancelledError
+        return await self._async_sync()
+
+    def cancel(self) -> None:
+        """Ask a running sync to stop. Safe to call from the GUI thread."""
+        self._cancelled = True
+        loop, task = self._loop, self._task
+        if loop is None or task is None:
+            return  # not armed yet; _run_cancellable picks up the flag
+        try:
+            loop.call_soon_threadsafe(task.cancel)
+        except RuntimeError:
+            pass  # the loop already finished - nothing left to cancel
 
     async def _async_sync(self) -> int:
         from app.core.cache import ActivityCache
@@ -1316,6 +1345,17 @@ class SyncTab(QWidget):
         self._log_btn.clicked.connect(self._show_log)
 
     def _run_sync(self) -> None:
+        # A previous run may still be unwinding after a stop that overran its
+        # budget. Starting now would leave two writers on one cache index, and
+        # rebinding self._worker would destroy a live QThread.
+        if self._worker is not None and self._worker.isRunning():
+            QMessageBox.information(
+                self,
+                "Sync in progress",
+                "The previous sync is still stopping. Try again in a moment.",
+            )
+            return
+
         gui_config = self._config_tab.current_config()
 
         # Ask for each referenced KeePass file's master password up front (on
@@ -1412,6 +1452,47 @@ class SyncTab(QWidget):
         self._run_btn.setEnabled(True)
         self._status.setText(f"[X] Error: {error}")
         QMessageBox.critical(self, "Sync error", error)
+
+    def sync_running(self) -> bool:
+        return self._worker is not None and self._worker.isRunning()
+
+    def stop_sync(self, timeout_ms: int = 15000) -> bool:
+        """Cancel a running sync and wait for its thread to unwind.
+
+        Returns whether the thread actually finished; the caller must not let
+        the window go away while it is still running.
+        """
+        worker = self._worker
+        if worker is None or not worker.isRunning():
+            return True
+        # The run is being abandoned, so its outcome is no longer news:
+        # without this a race could still flash "Sync finished" while the
+        # window is closing.
+        for signal in (worker.started_ts, worker.finished_ts, worker.error_occurred):
+            try:
+                signal.disconnect()
+            except (RuntimeError, TypeError):
+                pass  # nothing connected
+        worker.cancel()
+        if worker.wait(timeout_ms):
+            return True
+        # Still running. Run stays disabled on purpose: a second sync would put
+        # two writers on one cache index, and binding a new worker over this
+        # one drops the last reference to a live QThread, which aborts the
+        # process. QThread.finished fires whatever the outcome, so the tab
+        # recovers by itself once the run really ends.
+        self._status.setText("Stopping the sync...")
+        worker.finished.connect(self._on_abandoned_sync_finished)
+        if not worker.isRunning():
+            # It ended between the wait timing out and the connect above, so
+            # the signal has already been and gone; without this the tab would
+            # sit with Run disabled for the rest of the session.
+            self._on_abandoned_sync_finished()
+        return False
+
+    def _on_abandoned_sync_finished(self) -> None:
+        self._run_btn.setEnabled(True)
+        self._status.setText("Sync stopped.")
 
     def _on_task_added(self, name: str, total: object) -> None:
         row = TaskRow(
@@ -1570,6 +1651,38 @@ class MainWindow(QMainWindow):
         quit_action.triggered.connect(self.close)
         file_menu = self.menuBar().addMenu("File")
         file_menu.addAction(quit_action)
+
+    def closeEvent(self, event) -> None:  # type: ignore[override]  # noqa: N802
+        """Stop a running sync before the window - and its thread - go away.
+
+        Qt aborts the process when a QThread is destroyed while still running,
+        so closing the window mid-sync used to crash the app.
+        """
+        if not self._sync_tab.sync_running():
+            event.accept()
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Sync in progress",
+            "A sync is still running. Stop it and quit?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            event.ignore()
+            return
+
+        if not self._sync_tab.stop_sync():
+            # Never tear down a live thread: better to stay open than crash.
+            QMessageBox.warning(
+                self,
+                "Sync still stopping",
+                "The sync has not stopped yet. Try closing again in a moment.",
+            )
+            event.ignore()
+            return
+        event.accept()
 
 
 # ---------------------------------------------------------------------------

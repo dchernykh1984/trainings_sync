@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import date
 from pathlib import Path
 
@@ -1270,6 +1271,45 @@ def test_sync_worker_logs_and_closes_logger_on_setup_failure(
     assert "Sync run finished" in log_text  # run_end() ran in the finally block
 
 
+def test_sync_worker_cancel_stops_a_running_sync(qtbot, store: ConfigStore) -> None:
+    # Quitting mid-sync has to be able to unwind the thread: Qt aborts the
+    # process if a QThread is destroyed while it is still running.
+    class _SlowWorker(SyncWorker):
+        async def _async_sync(self) -> int:
+            await asyncio.sleep(60)
+            return 0
+
+    worker = _SlowWorker(store, GuiConfig(connectors=[], sync_groups=[]), GuiRenderer())
+    worker.start()
+    qtbot.waitUntil(lambda: worker._task is not None, timeout=5000)
+    worker.cancel()
+    assert worker.wait(5000)
+    assert not worker.isRunning()
+
+
+def test_cancelling_before_the_sync_arms_itself_still_stops_it(
+    qtbot, store: ConfigStore
+) -> None:
+    # cancel() has no task to reach in the gap between start() and the
+    # coroutine's first line; closing the window right after Run lands there.
+    class _SlowWorker(SyncWorker):
+        async def _async_sync(self) -> int:
+            await asyncio.sleep(60)
+            return 0
+
+    worker = _SlowWorker(store, GuiConfig(connectors=[], sync_groups=[]), GuiRenderer())
+    worker.cancel()
+    worker.start()
+
+    assert worker.wait(5000)
+    assert not worker.isRunning()
+
+
+def test_sync_worker_cancel_before_it_started_does_nothing(store: ConfigStore) -> None:
+    worker = SyncWorker(store, GuiConfig(connectors=[], sync_groups=[]), GuiRenderer())
+    worker.cancel()  # must not raise: there is no loop to reach into yet
+
+
 def test_sync_worker_keepass_rejects_strava_connectors(
     qtbot, store: ConfigStore
 ) -> None:
@@ -1501,6 +1541,192 @@ def test_main_window_has_window_icon(qtbot, store: ConfigStore) -> None:
     window = MainWindow(store)
     qtbot.addWidget(window)
     assert not window.windowIcon().isNull()
+
+
+def _stub_sync_tab(monkeypatch, window, *, running: bool, stops: bool = True) -> list:
+    calls: list[str] = []
+    monkeypatch.setattr(window._sync_tab, "sync_running", lambda: running)
+
+    def _stop(*_args: object, **_kwargs: object) -> bool:
+        calls.append("stop")
+        return stops
+
+    monkeypatch.setattr(window._sync_tab, "stop_sync", _stop)
+    return calls
+
+
+def test_closing_without_a_running_sync_closes_straight_away(
+    qtbot, monkeypatch, store: ConfigStore
+) -> None:
+    window = MainWindow(store)
+    qtbot.addWidget(window)
+    calls = _stub_sync_tab(monkeypatch, window, running=False)
+    assert window.close() is True
+    assert calls == []
+
+
+def test_closing_mid_sync_can_be_called_off(
+    qtbot, monkeypatch, store: ConfigStore
+) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    window = MainWindow(store)
+    qtbot.addWidget(window)
+    calls = _stub_sync_tab(monkeypatch, window, running=True)
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        staticmethod(lambda *a, **k: QMessageBox.StandardButton.No),
+    )
+    assert window.close() is False
+    assert calls == []  # the running sync was left alone
+
+
+def test_closing_mid_sync_stops_the_sync_first(
+    qtbot, monkeypatch, store: ConfigStore
+) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    window = MainWindow(store)
+    qtbot.addWidget(window)
+    calls = _stub_sync_tab(monkeypatch, window, running=True)
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes),
+    )
+    assert window.close() is True
+    assert calls == ["stop"]
+
+
+def test_a_stop_that_times_out_leaves_the_tab_usable(qtbot, store: ConfigStore) -> None:
+    # The window stays open in this case, so the tab must not be left with a
+    # dead Run button: the worker's signals are disconnected by now, and
+    # nothing else ever re-enables it.
+    #
+    # Cancelling does not interrupt a blocking call already handed to a thread,
+    # which is how every connector does its network I/O - so this is the shape
+    # a real overrun takes.
+    class _StubbornWorker(SyncWorker):
+        async def _async_sync(self) -> int:
+            await asyncio.to_thread(time.sleep, 2)
+            return 0
+
+    window = MainWindow(store)
+    qtbot.addWidget(window)
+    tab = window._sync_tab
+    worker = _StubbornWorker(
+        store, GuiConfig(connectors=[], sync_groups=[]), GuiRenderer()
+    )
+    worker.started_ts.connect(tab._on_started)
+    worker.finished_ts.connect(tab._on_finished)
+    worker.error_occurred.connect(tab._on_error)
+    tab._worker = worker
+    tab._run_btn.setEnabled(False)
+    worker.start()
+    qtbot.waitUntil(lambda: worker._task is not None, timeout=5000)
+
+    try:
+        assert tab.stop_sync(timeout_ms=1) is False
+        # Run stays disabled while the abandoned worker is alive.
+        assert not tab._run_btn.isEnabled()
+    finally:
+        # Never leave the thread running: a QThread still alive at interpreter
+        # shutdown aborts the whole process.
+        assert worker.wait(10000)
+    qtbot.waitUntil(tab._run_btn.isEnabled, timeout=5000)
+
+
+def test_run_is_refused_while_a_stopped_sync_is_still_unwinding(
+    qtbot, monkeypatch, store: ConfigStore
+) -> None:
+    # Two syncs on one cache index means lost updates, and rebinding the
+    # worker would destroy a live QThread - which aborts the process.
+    from PySide6.QtWidgets import QMessageBox
+
+    class _StubbornWorker(SyncWorker):
+        async def _async_sync(self) -> int:
+            await asyncio.to_thread(time.sleep, 2)
+            return 0
+
+    window = MainWindow(store)
+    qtbot.addWidget(window)
+    tab = window._sync_tab
+    worker = _StubbornWorker(
+        store, GuiConfig(connectors=[], sync_groups=[]), GuiRenderer()
+    )
+    tab._worker = worker
+    worker.start()
+    qtbot.waitUntil(lambda: worker._task is not None, timeout=5000)
+
+    told = []
+    monkeypatch.setattr(
+        QMessageBox, "information", staticmethod(lambda *a, **k: told.append(a))
+    )
+    try:
+        tab._run_sync()
+        assert told, "starting a second sync should be refused"
+        assert tab._worker is worker  # the live thread was not replaced
+    finally:
+        worker.cancel()
+        assert worker.wait(10000)
+
+
+def test_a_sync_ending_just_as_the_stop_times_out_still_frees_the_tab(
+    qtbot, monkeypatch, store: ConfigStore
+) -> None:
+    # QThread.finished fires once. If it lands between the wait timing out and
+    # the connect, nothing would ever re-enable Run again.
+    class _SlowWorker(SyncWorker):
+        async def _async_sync(self) -> int:
+            await asyncio.sleep(60)
+            return 0
+
+    window = MainWindow(store)
+    qtbot.addWidget(window)
+    tab = window._sync_tab
+    worker = _SlowWorker(store, GuiConfig(connectors=[], sync_groups=[]), GuiRenderer())
+    tab._worker = worker
+    tab._run_btn.setEnabled(False)
+    worker.start()
+    qtbot.waitUntil(lambda: worker._task is not None, timeout=5000)
+
+    # wait() reports a timeout, but the run is over by the time we look again.
+    def _wait_then_finish(_timeout: int = 0) -> bool:
+        worker.cancel()
+        SyncWorker.wait(worker, 5000)
+        return False
+
+    monkeypatch.setattr(worker, "wait", _wait_then_finish)
+
+    assert tab.stop_sync(timeout_ms=1) is False
+    assert tab._run_btn.isEnabled()
+
+
+def test_stopping_an_idle_tab_is_a_no_op(qtbot, store: ConfigStore) -> None:
+    window = MainWindow(store)
+    qtbot.addWidget(window)
+    assert window._sync_tab.stop_sync() is True
+
+
+def test_window_stays_open_when_the_sync_refuses_to_stop(
+    qtbot, monkeypatch, store: ConfigStore
+) -> None:
+    # Destroying a QThread that is still running aborts the process, so a sync
+    # that will not stop has to keep the window alive instead of crashing.
+    from PySide6.QtWidgets import QMessageBox
+
+    window = MainWindow(store)
+    qtbot.addWidget(window)
+    calls = _stub_sync_tab(monkeypatch, window, running=True, stops=False)
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes),
+    )
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: None))
+    assert window.close() is False
+    assert calls == ["stop"]
 
 
 # ---------------------------------------------------------------------------

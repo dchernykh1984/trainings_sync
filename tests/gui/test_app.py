@@ -230,6 +230,43 @@ def test_connector_dialog_type_dropdown_matches_supported_types(qtbot) -> None:
     assert items == list(CONNECTOR_TYPES)
 
 
+def test_a_new_connector_gets_its_own_uid(qtbot) -> None:
+    # The uid is what lets the cache follow a connector across renames, so a
+    # fresh connector must not be left without one.
+    first, second = ConnectorDialog(), ConnectorDialog()
+    qtbot.addWidget(first)
+    qtbot.addWidget(second)
+    assert first.result_entry().uid
+    assert first.result_entry().uid != second.result_entry().uid
+
+
+def test_editing_a_connector_keeps_its_uid(qtbot) -> None:
+    existing = ConnectorEntry(id="Garmin", uid="abc123", type="garmin")
+    dlg = ConnectorDialog(entry=existing)
+    qtbot.addWidget(dlg)
+    dlg._id.setText("Garmin Denis")
+    result = dlg.result_entry()
+    assert (result.id, result.uid) == ("Garmin Denis", "abc123")
+
+
+def test_editing_a_pre_uid_connector_adopts_its_name_as_the_uid(qtbot) -> None:
+    # The name is what the cache is already keyed by, so it is the only safe
+    # identity to adopt; a random one would look like a brand new connector.
+    dlg = ConnectorDialog(entry=ConnectorEntry(id="Garmin", type="garmin"))
+    qtbot.addWidget(dlg)
+    assert dlg.result_entry().uid == "Garmin"
+
+
+def test_a_pre_uid_connector_renamed_in_one_sitting_keeps_its_cache(qtbot) -> None:
+    # Renaming straight after upgrading is the case most likely to lose data:
+    # the uid has to be the old name, or the rename goes unnoticed.
+    dlg = ConnectorDialog(entry=ConnectorEntry(id="Garmin", type="garmin"))
+    qtbot.addWidget(dlg)
+    dlg._id.setText("Garmin Denis")
+    result = dlg.result_entry()
+    assert (result.id, result.uid) == ("Garmin Denis", "Garmin")
+
+
 def test_connector_dialog_prefilled_strava(qtbot) -> None:
     existing = ConnectorEntry(
         id="strava",

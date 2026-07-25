@@ -8,10 +8,15 @@ from pathlib import Path
 from app.credentials.base import CredentialRequest
 
 
+# `id` is the display name and the user is free to change it. `uid` is the
+# connector's stable identity: it never changes, so the cache can follow a
+# connector across renames instead of being silently orphaned. Configs written
+# before uids existed simply get uid == id (see `_parse_connector`).
 @dataclass(frozen=True)
 class GarminConnectorConfig:
     id: str
     credential: CredentialRequest
+    uid: str = ""
 
 
 @dataclass(frozen=True)
@@ -19,12 +24,14 @@ class StravaConnectorConfig:
     id: str
     client_id: int
     credential: CredentialRequest
+    uid: str = ""
 
 
 @dataclass(frozen=True)
 class LocalFolderConnectorConfig:
     id: str
     folder: Path
+    uid: str = ""
 
 
 ConnectorConfig = (
@@ -114,14 +121,24 @@ def _parse_connector(raw: object, index: int, base_dir: Path) -> ConnectorConfig
 
     connector_type = _require_str(raw, "type", where)
 
+    # A config written before uids existed keeps working: the connector's
+    # current name becomes its stable identity, which is exactly what the
+    # cache is already keyed by, so nothing has to be rewritten.
+    raw_uid = raw.get("uid", "")
+    if not isinstance(raw_uid, str):
+        raise ConfigError(f"{where}: 'uid' must be a string")
+    connector_uid = raw_uid or connector_id
+
     if connector_type == "garmin":
         return GarminConnectorConfig(
             id=connector_id,
+            uid=connector_uid,
             credential=_parse_credential(raw, where),
         )
     if connector_type == "strava":
         return StravaConnectorConfig(
             id=connector_id,
+            uid=connector_uid,
             client_id=_require_int(raw, "client_id", where),
             credential=_parse_credential(raw, where),
         )
@@ -129,6 +146,7 @@ def _parse_connector(raw: object, index: int, base_dir: Path) -> ConnectorConfig
         folder_str = _require_str(raw, "folder", where)
         return LocalFolderConnectorConfig(
             id=connector_id,
+            uid=connector_uid,
             folder=_resolve_path(folder_str, base_dir),
         )
     raise ConfigError(f"{where}: unknown connector type {connector_type!r}")
@@ -219,7 +237,7 @@ def _check_unique_ids(ids: list[str], label: str) -> None:
     seen: set[str] = set()
     for sid in ids:
         if sid in seen:
-            raise ConfigError(f"duplicate {label} id: {sid!r}")
+            raise ConfigError(f"duplicate {label}: {sid!r}")
         seen.add(sid)
 
 
@@ -266,7 +284,10 @@ def load_config(path: Path) -> AppConfig:
     connectors = tuple(
         _parse_connector(c, i, base_dir) for i, c in enumerate(raw_connectors)
     )
-    _check_unique_ids([c.id for c in connectors], "connector")
+    _check_unique_ids([c.id for c in connectors], "connector id")
+    # A shared uid reads as "this connector was renamed", so a duplicate
+    # would hand one connector's cached history to another.
+    _check_unique_ids([c.uid for c in connectors], "connector uid")
     _check_strava_credential_uniqueness(connectors)
 
     raw_groups = raw.get("sync_groups", [])
@@ -279,7 +300,7 @@ def load_config(path: Path) -> AppConfig:
     sync_groups = tuple(
         _parse_group(g, i, connector_ids) for i, g in enumerate(raw_groups)
     )
-    _check_unique_ids([g.id for g in sync_groups], "sync group")
+    _check_unique_ids([g.id for g in sync_groups], "sync group id")
 
     start = _parse_date_optional(raw, "start", "root")
     end = _parse_date_optional(raw, "end", "root")

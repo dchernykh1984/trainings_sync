@@ -8,6 +8,7 @@ import sys
 from datetime import date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 from PySide6.QtCore import QDate, QPointF, QRectF, Qt, QThread, Signal
 from PySide6.QtGui import (
@@ -707,6 +708,11 @@ class ConnectorDialog(QDialog):
         self.setWindowTitle("Add Connector" if entry is None else "Edit Connector")
         self.setMinimumWidth(440)
         self._credentials = credentials or []
+        # Editing keeps the connector's identity, so renaming it does not cut
+        # the cache loose. An entry with no uid yet falls back to its name, the
+        # same rule the config parsers use - minting a random one here would
+        # orphan the cache on the very next rename.
+        self._uid = (entry.uid or entry.id) if entry is not None else uuid4().hex
 
         root = QVBoxLayout(self)
         form = QFormLayout()
@@ -809,6 +815,7 @@ class ConnectorDialog(QDialog):
         )
         return ConnectorEntry(
             id=self._id.text().strip(),
+            uid=self._uid,
             type=t,
             credential_service=cred.service if cred else "",
             credential_url=cred.url if cred else "",

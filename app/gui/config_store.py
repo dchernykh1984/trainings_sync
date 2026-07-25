@@ -52,6 +52,9 @@ class CredentialEntry:
 class ConnectorEntry:
     id: str
     type: str  # "garmin" | "strava" | "local_folder"
+    # Stable identity, unaffected by renaming `id`; see
+    # app.core.connector_identity. Empty means "assign on load".
+    uid: str = ""
     credential_service: str = ""
     credential_url: str = ""
     credential_login: str = ""
@@ -139,7 +142,15 @@ class ConfigStore:
         if not self._config_path.exists():
             return GuiConfig()
         raw: dict = json.loads(self._config_path.read_text(encoding="utf-8"))
-        return _parse_gui_config(raw)
+        config = _parse_gui_config(raw)
+        # A config written before uids existed has them backfilled from the
+        # connector names above; write that back so the identities are fixed
+        # from now on and a later rename has something to be measured against.
+        if any(
+            isinstance(c, dict) and not c.get("uid") for c in raw.get("connectors", [])
+        ):
+            self.save_gui_config(config)
+        return config
 
     def load_gui_config_from(self, path: Path) -> GuiConfig:
         """Parse a config JSON file at an arbitrary path.
@@ -233,8 +244,12 @@ def _parse_gui_config(raw: dict) -> GuiConfig:
 
 
 def _parse_connector_entry(raw: dict) -> ConnectorEntry:
+    connector_id = raw.get("id", "")
     return ConnectorEntry(
-        id=raw.get("id", ""),
+        id=connector_id,
+        # Pre-uid configs adopt their current name as the stable identity,
+        # which is what the existing cache is already keyed by.
+        uid=raw.get("uid", "") or connector_id,
         type=raw.get("type", ""),
         credential_service=raw.get("credential_service", ""),
         credential_url=raw.get("credential_url", ""),
@@ -256,7 +271,7 @@ def _parse_group_entry(raw: dict) -> SyncGroupEntry:
 
 
 def _serialize_connector(c: ConnectorEntry) -> dict:
-    d: dict = {"id": c.id, "type": c.type}
+    d: dict = {"id": c.id, "uid": c.uid or c.id, "type": c.type}
     if c.type == "garmin":
         d["credential_service"] = c.credential_service
         d["credential_url"] = c.credential_url
@@ -287,6 +302,7 @@ def _connector_to_app(
     if c.type == "garmin":
         return GarminConnectorConfig(
             id=c.id,
+            uid=c.uid or c.id,
             credential=CredentialRequest(
                 service=c.credential_service,
                 url=c.credential_url,
@@ -296,6 +312,7 @@ def _connector_to_app(
     if c.type == "strava":
         return StravaConnectorConfig(
             id=c.id,
+            uid=c.uid or c.id,
             client_id=c.client_id,
             credential=CredentialRequest(
                 service=c.credential_service,
@@ -306,6 +323,7 @@ def _connector_to_app(
     if c.type == "local_folder":
         return LocalFolderConnectorConfig(
             id=c.id,
+            uid=c.uid or c.id,
             folder=Path(c.folder).expanduser().resolve(),
         )
     raise ValueError(f"unknown connector type: {c.type!r}")

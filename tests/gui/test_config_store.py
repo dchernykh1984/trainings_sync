@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 
@@ -497,6 +498,7 @@ def test_serialize_connector_garmin() -> None:
     d = _serialize_connector(c)
     assert d == {
         "id": "g",
+        "uid": "g",  # falls back to the display id for pre-uid entries
         "type": "garmin",
         "credential_service": "Garmin Connect",
         "credential_url": "https://connect.garmin.com",
@@ -619,3 +621,99 @@ def test_group_to_app() -> None:
     assert sg.id == "grp"
     assert sg.sources[0].id == "s"
     assert sg.destinations == ("d",)
+
+
+# ---------------------------------------------------------------------------
+# Connector uid - survives renaming so the cache stays attached
+# ---------------------------------------------------------------------------
+
+
+def test_a_connector_without_a_uid_adopts_its_id() -> None:
+    # Existing GUI configs have no uid; the name they already carry is what
+    # the cache is keyed by, so adopting it migrates nothing.
+    entry = _parse_connector_entry({"id": "Garmin Denis", "type": "garmin"})
+    assert entry.uid == "Garmin Denis"
+
+
+def test_an_explicit_uid_is_kept_over_the_id() -> None:
+    entry = _parse_connector_entry(
+        {"id": "Garmin Denis", "uid": "abc123", "type": "garmin"}
+    )
+    assert (entry.uid, entry.id) == ("abc123", "Garmin Denis")
+
+
+def test_the_uid_survives_a_save_and_load_round_trip(tmp_path: Path) -> None:
+    store = ConfigStore(config_dir=tmp_path)
+    store.save_gui_config(
+        GuiConfig(
+            connectors=[ConnectorEntry(id="Garmin", uid="abc123", type="garmin")],
+            sync_groups=[],
+        )
+    )
+    assert store.load_gui_config().connectors[0].uid == "abc123"
+
+
+def test_renaming_a_connector_keeps_its_uid(tmp_path: Path) -> None:
+    # This is the whole point: the display name moves, the identity does not,
+    # so the cache stays attached to it.
+    store = ConfigStore(config_dir=tmp_path)
+    original = ConnectorEntry(id="Garmin", uid="abc123", type="garmin")
+    store.save_gui_config(GuiConfig(connectors=[original], sync_groups=[]))
+
+    renamed = replace(store.load_gui_config().connectors[0], id="Garmin Denis")
+    store.save_gui_config(GuiConfig(connectors=[renamed], sync_groups=[]))
+
+    reloaded = store.load_gui_config().connectors[0]
+    assert (reloaded.id, reloaded.uid) == ("Garmin Denis", "abc123")
+
+
+def test_the_uid_reaches_the_app_config(tmp_path: Path) -> None:
+    store = ConfigStore(config_dir=tmp_path)
+    config = GuiConfig(
+        connectors=[ConnectorEntry(id="Garmin Denis", uid="abc123", type="garmin")],
+        sync_groups=[],
+    )
+    assert store.to_app_config(config).connectors[0].uid == "abc123"
+
+
+def test_loading_a_pre_uid_config_writes_the_uids_back(tmp_path: Path) -> None:
+    # The identities have to reach the file: a rename is only recognisable if
+    # the uid was recorded before it happened.
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {
+                "connectors": [{"id": "Garmin Denis", "type": "garmin"}],
+                "sync_groups": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    store = ConfigStore(config_dir=tmp_path)
+
+    store.load_gui_config()
+
+    on_disk = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
+    assert on_disk["connectors"][0]["uid"] == "Garmin Denis"
+
+
+def test_loading_a_config_that_already_has_uids_leaves_the_file_alone(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "connectors": [
+                    {"id": "Garmin Denis", "uid": "abc123", "type": "garmin"}
+                ],
+                "sync_groups": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    store = ConfigStore(config_dir=tmp_path)
+    before = path.stat().st_mtime_ns
+
+    store.load_gui_config()
+
+    assert path.stat().st_mtime_ns == before

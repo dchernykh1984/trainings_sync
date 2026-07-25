@@ -690,3 +690,41 @@ def test_duplicate_sync_group_ids(tmp_path: Path) -> None:
     data = {**_minimal(), "sync_groups": [_SYNC_GROUP, _SYNC_GROUP]}
     with pytest.raises(ConfigError, match="duplicate sync group id"):
         load_config(_write(tmp_path, data))
+
+
+# ---------------------------------------------------------------------------
+# Connector uid - stable identity behind the display name
+# ---------------------------------------------------------------------------
+
+
+def test_connector_without_a_uid_adopts_its_id(tmp_path: Path) -> None:
+    # CLI configs written before uids existed must keep working unchanged, and
+    # the id they already use is exactly what the cache is keyed by.
+    cfg = load_config(_write(tmp_path, _minimal()))
+    assert [c.uid for c in cfg.connectors] == [c.id for c in cfg.connectors]
+
+
+def test_an_explicit_uid_is_kept(tmp_path: Path) -> None:
+    data = _minimal()
+    data["connectors"] = [{**_GARMIN_CONNECTOR, "uid": "abc123"}, _LOCAL_CONNECTOR]
+    cfg = load_config(_write(tmp_path, data))
+    assert cfg.connectors[0].uid == "abc123"
+    assert cfg.connectors[0].id == "garmin"  # display name is independent
+
+
+def test_a_non_string_uid_is_rejected(tmp_path: Path) -> None:
+    data = _minimal()
+    data["connectors"] = [{**_GARMIN_CONNECTOR, "uid": 17}, _LOCAL_CONNECTOR]
+    with pytest.raises(ConfigError, match="uid"):
+        load_config(_write(tmp_path, data))
+
+
+def test_two_connectors_sharing_a_uid_are_rejected(tmp_path: Path) -> None:
+    # A shared uid reads as a rename and would merge two connectors' caches.
+    data = _minimal()
+    data["connectors"] = [
+        {**_GARMIN_CONNECTOR, "uid": "same"},
+        {**_LOCAL_CONNECTOR, "uid": "same"},
+    ]
+    with pytest.raises(ConfigError, match="duplicate connector uid"):
+        load_config(_write(tmp_path, data))

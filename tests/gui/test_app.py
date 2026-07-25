@@ -13,6 +13,7 @@ from app.gui.app import (
     _COUNT_MIN_WIDTH,
     ConfigTab,
     ConnectorDialog,
+    CounterColumn,
     CredentialDialog,
     CredentialsTab,
     LogDialog,
@@ -944,6 +945,46 @@ def test_task_row_counter_keeps_its_width_for_small_totals(qtbot) -> None:
     qtbot.addWidget(row)
     row.update_progress(3)
     assert row._count.minimumWidth() == _COUNT_MIN_WIDTH
+
+
+def test_rows_sharing_a_column_keep_one_counter_width(qtbot) -> None:
+    # Equal counter widths are what keeps the progress bars in one column:
+    # sizing each row to its own text would shove the wide rows' bars left.
+    column = CounterColumn()
+    small = TaskRow("Login", total=1, column=column)
+    big = TaskRow("Wellness download", total=193372, column=column)
+    qtbot.addWidget(small)
+    qtbot.addWidget(big)
+    small.update_progress(1)
+    big.update_progress(191081)
+    assert small._count.minimumWidth() == big._count.minimumWidth()
+    needed = big._count.fontMetrics().horizontalAdvance(big._count.text())
+    assert big._count.minimumWidth() >= needed
+
+
+def test_a_row_added_later_adopts_the_column_width(qtbot) -> None:
+    # Rows appear as tasks start, so one joining after the column has already
+    # widened must not fall back to the narrow default.
+    column = CounterColumn()
+    big = TaskRow("Wellness download", total=193372, column=column)
+    qtbot.addWidget(big)
+    late = TaskRow("Login", total=1, column=column)
+    qtbot.addWidget(late)
+    assert late._count.minimumWidth() == big._count.minimumWidth()
+    assert late._count.minimumWidth() > _COUNT_MIN_WIDTH
+
+
+def test_a_late_total_widens_every_row_in_the_column(qtbot) -> None:
+    # Wellness download reports its total only once it is running.
+    column = CounterColumn()
+    small = TaskRow("Login", total=1, column=column)
+    late = TaskRow("Wellness download", total=None, column=column)
+    qtbot.addWidget(small)
+    qtbot.addWidget(late)
+    before = small._count.minimumWidth()
+    late.update_total(193372)
+    assert small._count.minimumWidth() > before
+    assert small._count.minimumWidth() == late._count.minimumWidth()
 
 
 # ---------------------------------------------------------------------------

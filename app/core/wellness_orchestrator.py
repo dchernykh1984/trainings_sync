@@ -22,11 +22,19 @@ class WellnessOrchestrator:
         cache: WellnessCache,
         tracker: TaskTracker,
         login_tasks: dict[str, asyncio.Task[None]] | None = None,
+        names: dict[str, str] | None = None,
     ) -> None:
         self._connectors = connectors
         self._cache = cache
         self._tracker = tracker
         self._login_tasks: dict[str, asyncio.Task[None]] = login_tasks or {}
+        # Connectors are keyed by uid so a rename never moves cached data;
+        # these are what to call them in the task list.
+        self._names = names or {}
+
+    def _name(self, connector_id: str) -> str:
+        """What to call a connector in the task list."""
+        return self._names.get(connector_id, connector_id)
 
     async def run(self, start: date, end: date, *, force: bool = False) -> None:
         sources = {
@@ -95,7 +103,7 @@ class WellnessOrchestrator:
             return
 
         task_name = await self._tracker.add_task(
-            f"Wellness download ({connector_id})", total=total
+            f"Wellness download ({self._name(connector_id)})", total=total
         )
         sem = asyncio.Semaphore(_MAX_CONCURRENT)
 
@@ -187,7 +195,8 @@ class WellnessOrchestrator:
             return
 
         task_name = await self._tracker.add_task(
-            f"Wellness upload ({dest.connector_id})", total=len(push_items)
+            f"Wellness upload ({self._name(dest.connector_id)})",
+            total=len(push_items),
         )
         for push_dt, push_d, push_key, push_source_id in push_items:
             data = self._cache.read(push_source_id, push_dt, push_key)

@@ -367,3 +367,34 @@ class TestLocalFolderNotTreatedAsSource:
         tasks = tracker.tasks
         download_tasks = [n for n in tasks if "Wellness download" in n]
         assert len(download_tasks) == 0
+
+
+class _NameRecordingRenderer(_FakeRenderer):
+    def __init__(self) -> None:
+        self.task_names: list[str] = []
+
+    def on_task_added(self, task: Task) -> None:
+        self.task_names.append(task.name)
+
+
+async def test_the_task_list_shows_the_connector_name_not_its_uid(
+    cache: WellnessCache,
+) -> None:
+    # Connectors are keyed by uid so that a rename never moves cached data -
+    # but a hex string is not what the user should read in the task list.
+    renderer = _NameRecordingRenderer()
+    tracker = TaskTracker(renderer)
+    source = _make_source_connector(
+        "3f9a1c", tracker, daily_types=[WellnessDataType.SLEEP]
+    )
+    orch = WellnessOrchestrator(
+        {"3f9a1c": source},
+        cache,
+        tracker,
+        names={"3f9a1c": "Garmin Denis"},
+    )
+
+    await orch.run(_START, _END)
+
+    assert any("Garmin Denis" in name for name in renderer.task_names)
+    assert not any("3f9a1c" in name for name in renderer.task_names)

@@ -10,6 +10,7 @@ import pytest
 from PySide6.QtCore import Qt
 
 from app.gui.app import (
+    _COUNT_MIN_WIDTH,
     ConfigTab,
     ConnectorDialog,
     CredentialDialog,
@@ -914,6 +915,35 @@ def test_task_row_update_total(qtbot) -> None:
     row.update_total(20)
     assert row._total == 20
     assert row._bar.maximum() == 20
+
+
+def test_task_row_counter_fits_a_large_total(qtbot) -> None:
+    row = TaskRow("Wellness download", total=193372)
+    qtbot.addWidget(row)
+    row.update_progress(193336)
+    # The counter is right-aligned and fixed-width, so text that does not fit
+    # loses its leading characters: "193336/193372" used to show as
+    # "36/193372".
+    needed = row._count.fontMetrics().horizontalAdvance(row._count.text())
+    assert row._count.minimumWidth() >= needed
+
+
+def test_task_row_counter_fits_a_total_that_arrives_late(qtbot) -> None:
+    # Tasks that discover their size while running report the total after the
+    # row already exists, which is how the clipped counter was first seen.
+    row = TaskRow("Wellness download", total=None)
+    qtbot.addWidget(row)
+    row.update_total(193372)
+    row.update_progress(193336)
+    needed = row._count.fontMetrics().horizontalAdvance(row._count.text())
+    assert row._count.minimumWidth() >= needed
+
+
+def test_task_row_counter_keeps_its_width_for_small_totals(qtbot) -> None:
+    row = TaskRow("Task", total=5)
+    qtbot.addWidget(row)
+    row.update_progress(3)
+    assert row._count.minimumWidth() == _COUNT_MIN_WIDTH
 
 
 # ---------------------------------------------------------------------------

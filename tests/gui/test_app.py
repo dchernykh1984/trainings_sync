@@ -1147,6 +1147,87 @@ def test_config_tab_edit_connector_keeping_own_name_is_allowed(
     assert saved[0].folder == "/b"
 
 
+def test_renaming_a_connector_repoints_the_sync_groups(
+    qtbot, monkeypatch, store: ConfigStore
+) -> None:
+    # Groups reference connectors by name. Leaving them on the old name makes
+    # the next sync die resolving it - after the cache migration has already
+    # moved everything, so the failure lands at the worst possible moment.
+    import app.gui.app as gui_app
+
+    store.save_gui_config(
+        GuiConfig(
+            connectors=[
+                ConnectorEntry(id="Garmin", uid="u1", type="local_folder", folder="/a"),
+                ConnectorEntry(id="Local", uid="u2", type="local_folder", folder="/b"),
+            ],
+            sync_groups=[
+                SyncGroupEntry(
+                    id="g1",
+                    sources=[GroupSourceEntry(id="Garmin", priority=1)],
+                    destinations=["Local", "Garmin"],
+                )
+            ],
+        )
+    )
+    tab = ConfigTab(store)
+    qtbot.addWidget(tab)
+
+    renamed = ConnectorEntry(
+        id="Garmin Denis", uid="u1", type="local_folder", folder="/a"
+    )
+    monkeypatch.setattr(
+        gui_app, "ConnectorDialog", lambda **kw: _FakeConnectorDialog(renamed)
+    )
+    tab._conn_list.setCurrentRow(0)
+    tab._edit_connector()
+
+    group = store.load_gui_config().sync_groups[0]
+    assert [s.id for s in group.sources] == ["Garmin Denis"]
+    assert group.destinations == ["Local", "Garmin Denis"]
+    # The list on screen must not keep showing a connector that is gone.
+    shown = [tab._grp_list.item(i).text() for i in range(tab._grp_list.count())]
+    assert "Garmin Denis" in shown[0]
+    assert "[Garmin(" not in shown[0]
+
+
+def test_editing_a_connector_without_renaming_leaves_the_groups_alone(
+    qtbot, monkeypatch, store: ConfigStore
+) -> None:
+    import app.gui.app as gui_app
+
+    store.save_gui_config(
+        GuiConfig(
+            connectors=[
+                ConnectorEntry(id="Garmin", uid="u1", type="local_folder", folder="/a")
+            ],
+            sync_groups=[
+                SyncGroupEntry(
+                    id="g1",
+                    sources=[GroupSourceEntry(id="Garmin", priority=1)],
+                    destinations=["Garmin"],
+                )
+            ],
+        )
+    )
+    tab = ConfigTab(store)
+    qtbot.addWidget(tab)
+
+    monkeypatch.setattr(
+        gui_app,
+        "ConnectorDialog",
+        lambda **kw: _FakeConnectorDialog(
+            ConnectorEntry(id="Garmin", uid="u1", type="local_folder", folder="/b")
+        ),
+    )
+    tab._conn_list.setCurrentRow(0)
+    tab._edit_connector()
+
+    group = store.load_gui_config().sync_groups[0]
+    assert [s.id for s in group.sources] == ["Garmin"]
+    assert group.destinations == ["Garmin"]
+
+
 class _FakeGroupDialog:
     def __init__(self, entry: SyncGroupEntry) -> None:
         self._entry = entry

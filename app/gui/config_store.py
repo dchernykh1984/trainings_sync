@@ -182,6 +182,11 @@ class ConfigStore:
 
     def to_app_config(self, config: GuiConfig) -> AppConfig:
         connectors = tuple(_connector_to_app(c) for c in config.connectors)
+        # The CLI parser refuses these; a config imported here never goes
+        # through it, and two connectors on one uid share a cache identity.
+        uids = [c.uid for c in connectors]
+        if len(uids) != len(set(uids)):
+            raise ValueError("two connectors share a uid")
         sync_groups = tuple(_group_to_app(g) for g in config.sync_groups)
         start = date.fromisoformat(config.start) if config.start else None
         end = date.fromisoformat(config.end) if config.end else None

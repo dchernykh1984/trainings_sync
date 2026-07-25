@@ -7,21 +7,28 @@
       "type": "garmin",
       "credential_service": "Garmin Connect",
       "credential_url": "https://connect.garmin.com",
-      "credential_login": "YOUR_GARMIN_EMAIL"
+      "credential_login": "YOUR_GARMIN_EMAIL",
+      "uid": "garmin"
     },
     {
       "id": "local",
       "type": "local_folder",
-      "folder": "/path/to/trainings_data"
+      "folder": "/path/to/trainings_data",
+      "uid": "local"
     }
   ],
   "sync_groups": [
     {
       "id": "default",
       "sources": [
-        {"id": "garmin", "priority": 1}
+        {
+          "id": "garmin",
+          "priority": 1
+        }
       ],
-      "destinations": ["local"]
+      "destinations": [
+        "local"
+      ]
     }
   ]
 }

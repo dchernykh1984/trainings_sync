@@ -1150,9 +1150,8 @@ def test_config_tab_edit_connector_keeping_own_name_is_allowed(
 def test_renaming_a_connector_repoints_the_sync_groups(
     qtbot, monkeypatch, store: ConfigStore
 ) -> None:
-    # Groups reference connectors by name. Leaving them on the old name makes
-    # the next sync die resolving it - after the cache migration has already
-    # moved everything, so the failure lands at the worst possible moment.
+    # Groups reference connectors by name, so leaving them on the old one
+    # makes the next sync die resolving it.
     import app.gui.app as gui_app
 
     store.save_gui_config(

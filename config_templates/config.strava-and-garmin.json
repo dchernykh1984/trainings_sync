@@ -7,36 +7,52 @@
       "type": "garmin",
       "credential_service": "Garmin Connect",
       "credential_url": "https://connect.garmin.com",
-      "credential_login": "YOUR_GARMIN_EMAIL"
+      "credential_login": "YOUR_GARMIN_EMAIL",
+      "uid": "garmin"
     },
     {
       "id": "strava",
       "type": "strava",
       "client_id": 0,
       "credential_service": "Strava",
-      "credential_url": "https://www.strava.com/api/v3"
+      "credential_url": "https://www.strava.com/api/v3",
+      "uid": "strava"
     },
     {
       "id": "local",
       "type": "local_folder",
-      "folder": "/path/to/trainings_data"
+      "folder": "/path/to/trainings_data",
+      "uid": "local"
     }
   ],
   "sync_groups": [
     {
       "id": "strava-to-garmin",
       "sources": [
-        {"id": "strava", "priority": 1}
+        {
+          "id": "strava",
+          "priority": 1
+        }
       ],
-      "destinations": ["garmin"]
+      "destinations": [
+        "garmin"
+      ]
     },
     {
       "id": "garmin-and-strava-to-local",
       "sources": [
-        {"id": "garmin", "priority": 1},
-        {"id": "strava", "priority": 2}
+        {
+          "id": "garmin",
+          "priority": 1
+        },
+        {
+          "id": "strava",
+          "priority": 2
+        }
       ],
-      "destinations": ["local"]
+      "destinations": [
+        "local"
+      ]
     }
   ]
 }

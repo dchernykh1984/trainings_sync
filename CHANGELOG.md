@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.2.0](https://github.com/dchernykh1984/trainings_sync/compare/v0.1.4...v0.2.0) (2026-07-25)
+
+
+### Features
+
+* give connectors a stable id of their own ([ec8c10d](https://github.com/dchernykh1984/trainings_sync/commit/ec8c10dc2ded8e8a8e66b43a77850b329f43cfb0))
+* key the activity cache by connector uid, not by its name ([73f38c9](https://github.com/dchernykh1984/trainings_sync/commit/73f38c93260df8c4c0e0519f6372eea2d0007556))
+
+
+### Bug Fixes
+
+* keep the sync progress bars aligned in one column ([d111697](https://github.com/dchernykh1984/trainings_sync/commit/d11169759c880fe269a55b4026c74deb0f4fb34d))
+* keep uv.lock in step with the released version ([b81627c](https://github.com/dchernykh1984/trainings_sync/commit/b81627ca8fc7c4483f5d417ed5f173b85707c475))
+* name the connector, not its uid, in wellness tasks and the log ([d71e827](https://github.com/dchernykh1984/trainings_sync/commit/d71e827d9e7294e28855f67b35c53fab4a5124b3))
+* never print a connector uid where its name belongs ([191049f](https://github.com/dchernykh1984/trainings_sync/commit/191049f8712125c25862838f58db59abf2e2a5a8))
+* repoint sync groups when a connector is renamed ([0a93c04](https://github.com/dchernykh1984/trainings_sync/commit/0a93c042cc12acc843be0b211c0e03edcf521d61))
+* require the uid mapping instead of silently defaulting it ([f64caa6](https://github.com/dchernykh1984/trainings_sync/commit/f64caa68e4d46f04e27b77a8c01f94b56b396eb9))
+* show the connector name in wellness tasks, not its uid ([42b126d](https://github.com/dchernykh1984/trainings_sync/commit/42b126df499e534a60bbbcacf618400c0cc82774))
+* stop the app crashing when closed during a sync ([b50a3f4](https://github.com/dchernykh1984/trainings_sync/commit/b50a3f4c29f8d9e4fa55cc5fd2da793daaf88dfa))
+* take the per-connector locks by uid, not by display name ([0b04030](https://github.com/dchernykh1984/trainings_sync/commit/0b04030354948b0a5db248fbca644080c897cbbf))
+
+
+### Documentation
+
+* explain the connector uid, and refuse a duplicate in the GUI ([5db0503](https://github.com/dchernykh1984/trainings_sync/commit/5db0503809ee59913ce17b1b5f0055ba1f3b0fd8))
+
 ## [0.1.4](https://github.com/dchernykh1984/trainings_sync/compare/v0.1.3...v0.1.4) (2026-07-25)
 
 

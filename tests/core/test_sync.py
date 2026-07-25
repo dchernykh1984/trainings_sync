@@ -2474,3 +2474,61 @@ class TestUploadPhase:
         await executor_b.upload_phase(_START, _END)
         # act-1 is now visible in the freshly fetched list -- no second upload
         assert dest.upload_activity.await_count == 1
+
+
+class TestDisplayNames:
+    """Ids here are uids; the user must never be shown one."""
+
+    async def test_task_names_and_logs_use_the_connector_name(
+        self, cache: ActivityCache
+    ) -> None:
+        # Everything downstream is keyed by uid so a rename never moves cached
+        # data. Without the names map every task and log line would read as a
+        # hex string - which is what the user actually sees.
+        meta = _meta()
+        conn = _source_conn(metas=[meta])
+        tracker = MagicMock()
+        tracker.add_task = AsyncMock(side_effect=lambda name, **_kw: name)
+        tracker.advance = AsyncMock()
+        tracker.finish = AsyncMock()
+        tracker.update_total = AsyncMock()
+        tracker.warn = AsyncMock()
+        tracker.sync_logger = MagicMock()
+        executor = SyncExecutor(
+            sources=[(_spec("3f9a1c"), conn)],
+            destinations=[],
+            cache=cache,
+            tracker=tracker,
+            names={"3f9a1c": "Garmin Denis"},
+        )
+
+        await executor.run(_START, _END)
+
+        task_names = [c.args[0] for c in tracker.add_task.call_args_list]
+        assert any("Garmin Denis" in n for n in task_names)
+        assert not any("3f9a1c" in n for n in task_names)
+        logged = [c.args[0] for c in tracker.sync_logger.info.call_args_list]
+        assert not any(m.startswith("[download] 3f9a1c") for m in logged)
+
+    async def test_a_connector_with_no_name_falls_back_to_its_id(
+        self, cache: ActivityCache
+    ) -> None:
+        conn = _source_conn(metas=[_meta()])
+        tracker = MagicMock()
+        tracker.add_task = AsyncMock(side_effect=lambda name, **_kw: name)
+        tracker.advance = AsyncMock()
+        tracker.finish = AsyncMock()
+        tracker.update_total = AsyncMock()
+        tracker.warn = AsyncMock()
+        tracker.sync_logger = None
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), conn)],
+            destinations=[],
+            cache=cache,
+            tracker=tracker,
+            names={},
+        )
+
+        await executor.run(_START, _END)
+
+        assert any("garmin" in c.args[0] for c in tracker.add_task.call_args_list)

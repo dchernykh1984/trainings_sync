@@ -22,9 +22,11 @@ class StravaWellnessConnector(WellnessConnector):
         connector_id: str,
         strava_connector: StravaConnector,
         tracker: TaskTracker,
+        display_name: str = "",
     ) -> None:
         super().__init__(tracker)
         self._connector_id = connector_id
+        self._display_name = display_name
         self._strava_connector = strava_connector
 
     @property
@@ -37,7 +39,7 @@ class StravaWellnessConnector(WellnessConnector):
 
     async def login(self) -> None:
         task_name = await self._tracker.add_task(
-            f"Strava wellness ({self._connector_id}): connect", total=1
+            f"Strava wellness ({self.display_name}): connect", total=1
         )
         await self._tracker.advance(task_name)
         await self._tracker.finish(task_name)
@@ -63,7 +65,7 @@ class StravaWellnessConnector(WellnessConnector):
         except Exception as exc:
             if log:
                 log.debug(
-                    f"[strava-wellness] {self._connector_id}:"
+                    f"[strava-wellness] {self.display_name}:"
                     f" fetch_snapshot(athlete_stats) failed: {exc}"
                 )
             return None
@@ -76,7 +78,7 @@ class StravaWellnessConnector(WellnessConnector):
         except Exception as exc:
             if log:
                 log.debug(
-                    f"[strava-wellness] {self._connector_id}:"
+                    f"[strava-wellness] {self.display_name}:"
                     f" fetch_snapshot(athlete_zones) failed: {exc}"
                 )
             return None

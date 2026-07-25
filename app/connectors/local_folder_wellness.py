@@ -18,10 +18,12 @@ class LocalFolderWellnessConnector(WellnessConnector):
         connector_id: str,
         folder: Path,
         tracker: object,
+        display_name: str = "",
     ) -> None:
 
         super().__init__(tracker)  # type: ignore[arg-type]
         self._connector_id = connector_id
+        self._display_name = display_name
         self._folder = folder
 
     @property

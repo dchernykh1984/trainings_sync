@@ -75,6 +75,16 @@ class WellnessConnector(ABC):
     @abstractmethod
     def connector_id(self) -> str: ...
 
+    @property
+    def display_name(self) -> str:
+        """What to call this connector in front of the user.
+
+        `connector_id` is the uid the cache is filed under, so it is not
+        something to show: for anything created in the GUI it is a hex
+        string.
+        """
+        return getattr(self, "_display_name", None) or self.connector_id
+
     @abstractmethod
     async def login(self) -> None: ...
 
@@ -104,7 +114,7 @@ class WellnessConnector(ABC):
         log = self._tracker.sync_logger
         if log:
             log.debug(
-                f"[wellness] {self.connector_id}: {method}({data_type.value})"
+                f"[wellness] {self.display_name}: {method}({data_type.value})"
                 " not supported - skipped"
             )
 

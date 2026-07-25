@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
+from app.connectors.base import ServiceConnector
 from app.connectors.garmin import GarminConnector
 from app.connectors.local_folder import LocalFolderConnector
 from app.connectors.strava import StravaConnector
-from app.core.cache import ActivityCache
+from app.core.cache import ActivityCache, CacheEntry
 from app.core.config import (
     AppConfig,
     GarminConnectorConfig,
@@ -461,38 +463,67 @@ def test_a_group_resolves_names_to_uids() -> None:
         sources=(GroupSourceConfig(id="Garmin Denis", priority=1),),
         destinations=("Garmin Denis",),
     )
-    connectors = {"3f9a1c": object()}
+    connectors: dict[str, ServiceConnector] = {
+        "3f9a1c": cast(ServiceConnector, object())
+    }
     uid_by_id = {"Garmin Denis": "3f9a1c"}
 
-    ((spec, _),) = resolve_group_sources(group, connectors, uid_by_id)  # type: ignore[arg-type]
-    ((dest_id, _),) = resolve_group_destinations(
-        group,
-        connectors,
-        object(),
-        uid_by_id,  # type: ignore[arg-type]
-    )
+    ((spec, _),) = resolve_group_sources(group, connectors, uid_by_id)
+    ((dest_id, _),) = resolve_group_destinations(group, connectors, object(), uid_by_id)
 
     assert spec.source_id == "3f9a1c"
     assert dest_id == "3f9a1c"
 
 
-def test_renaming_a_connector_leaves_the_cache_key_alone() -> None:
-    # The whole point: the cache is filed under the uid, so a rename is a
-    # label change and nothing more - no data has to move.
+def test_renaming_a_connector_keeps_its_cached_activities(tmp_path: Path) -> None:
+    # The whole point of keying by uid: a rename is a label change, so nothing
+    # in the cache has to move and nothing is re-downloaded.
+    cache = ActivityCache(tmp_path)
+    entry = CacheEntry(
+        external_id="1",
+        source_id="3f9a1c",  # the uid, not the name
+        format="gpx",
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        elapsed_s=60,
+    )
+    cache.put(entry, b"track")
+
     before = LocalFolderConnectorConfig(
-        id="Garmin Denis", uid="3f9a1c", folder=Path("/tmp")
+        id="Garmin Denis", uid="3f9a1c", folder=tmp_path
     )
-    after = LocalFolderConnectorConfig(
-        id="Garmin Home", uid="3f9a1c", folder=Path("/tmp")
-    )
-    assert before.uid == after.uid
+    after = LocalFolderConnectorConfig(id="Garmin Home", uid="3f9a1c", folder=tmp_path)
+
+    assert cache.has("1", before.uid)
+    assert cache.has("1", after.uid)  # renamed, and still found
 
 
-def test_two_connectors_swapping_names_keep_distinct_keys() -> None:
-    # This is the case that made a name-keyed cache so hard to migrate.
-    a = LocalFolderConnectorConfig(id="Bravo", uid="aaa", folder=Path("/tmp"))
-    b = LocalFolderConnectorConfig(id="Alpha", uid="bbb", folder=Path("/tmp"))
-    assert a.uid != b.uid
+def test_two_connectors_swapping_names_keep_their_own_activities(
+    tmp_path: Path,
+) -> None:
+    # The case that made a name-keyed cache so hard to migrate: with uids it
+    # is not a case at all, because neither key moves.
+    cache = ActivityCache(tmp_path)
+    for uid, payload in (("aaa", b"alpha"), ("bbb", b"bravo")):
+        cache.put(
+            CacheEntry(
+                external_id=uid,
+                source_id=uid,
+                format="gpx",
+                start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                elapsed_s=60,
+            ),
+            payload,
+        )
+
+    # Alpha and Bravo swap display names; the uids are untouched.
+    a = LocalFolderConnectorConfig(id="Bravo", uid="aaa", folder=tmp_path)
+    b = LocalFolderConnectorConfig(id="Alpha", uid="bbb", folder=tmp_path)
+
+    alpha = cache.get_entry("aaa", a.uid)
+    bravo = cache.get_entry("bbb", b.uid)
+    assert alpha is not None and bravo is not None
+    assert cache.read_content(alpha) == b"alpha"
+    assert cache.read_content(bravo) == b"bravo"
 
 
 def test_a_config_built_in_code_still_gets_an_identity() -> None:

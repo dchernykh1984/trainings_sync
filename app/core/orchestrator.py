@@ -137,7 +137,12 @@ class SyncOrchestrator:
         end: date,
     ) -> None:
         log = self._tracker.sync_logger if self._tracker is not None else None
-        conn_ids = sorted({src.id for src in group.sources} | set(group.destinations))
+        # The locks are keyed by uid like everything else; the group still
+        # names its connectors, so translate before reaching for them.
+        conn_ids = sorted(
+            {self._uid_by_id[src.id] for src in group.sources}
+            | {self._uid_by_id[name] for name in group.destinations}
+        )
         acquired: list[asyncio.Lock] = []
         try:
             for conn_id in conn_ids:

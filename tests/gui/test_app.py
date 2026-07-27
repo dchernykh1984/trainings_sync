@@ -12,6 +12,8 @@ from PySide6.QtCore import Qt
 
 from app.gui.app import (
     _COUNT_MIN_WIDTH,
+    APP_DESKTOP_NAME,
+    APP_DISPLAY_NAME,
     ConfigTab,
     ConnectorDialog,
     CounterColumn,
@@ -23,6 +25,7 @@ from app.gui.app import (
     SyncWorker,
     TaskRow,
     _parse_date_or_default,
+    configure_app_identity,
     make_app_icon,
 )
 from app.gui.config_store import (
@@ -1658,6 +1661,41 @@ def test_main_window_has_window_icon(qtbot, store: ConfigStore) -> None:
     window = MainWindow(store)
     qtbot.addWidget(window)
     assert not window.windowIcon().isNull()
+
+
+def test_main_window_title_is_the_display_name(qtbot, store: ConfigStore) -> None:
+    window = MainWindow(store)
+    qtbot.addWidget(window)
+    assert window.windowTitle() == APP_DISPLAY_NAME
+
+
+# ---------------------------------------------------------------------------
+# Application identity
+# ---------------------------------------------------------------------------
+
+
+def test_configure_app_identity_names_the_app_for_the_shell(qapp) -> None:
+    before = (
+        qapp.applicationName(),
+        qapp.applicationDisplayName(),
+        qapp.desktopFileName(),
+    )
+    try:
+        configure_app_identity(qapp)
+        assert qapp.applicationName() == APP_DISPLAY_NAME
+        assert qapp.applicationDisplayName() == APP_DISPLAY_NAME
+        assert qapp.desktopFileName() == APP_DESKTOP_NAME
+    finally:
+        qapp.setApplicationName(before[0])
+        qapp.setApplicationDisplayName(before[1])
+        qapp.setDesktopFileName(before[2])
+
+
+def test_display_name_is_not_the_artifact_name() -> None:
+    # The regression this guards: the shell name fell back to the packaged
+    # file name, so the dock read "trainings-sync".
+    assert APP_DISPLAY_NAME != APP_DESKTOP_NAME
+    assert "-" not in APP_DISPLAY_NAME
 
 
 def _stub_sync_tab(monkeypatch, window, *, running: bool, stops: bool = True) -> list:

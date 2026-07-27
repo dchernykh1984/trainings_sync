@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/dchernykh1984/trainings_sync/compare/v0.2.1...v0.2.2) (2026-07-27)
+
+
+### Bug Fixes
+
+* keep the macos bundle file name free of spaces ([ddfa11f](https://github.com/dchernykh1984/trainings_sync/commit/ddfa11f7d002b3e387ddf28e517d9d8af12e5544))
+
 ## [0.2.1](https://github.com/dchernykh1984/trainings_sync/compare/v0.2.0...v0.2.1) (2026-07-27)
 
 

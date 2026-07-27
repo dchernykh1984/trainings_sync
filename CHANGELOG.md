@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.1](https://github.com/dchernykh1984/trainings_sync/compare/v0.2.0...v0.2.1) (2026-07-27)
+
+
+### Bug Fixes
+
+* give the macos bundle a proper identifier and version ([93b49e0](https://github.com/dchernykh1984/trainings_sync/commit/93b49e0b06ccebfefc45af7d5378a9eda9db552e))
+* show the full app name in the dock and task switcher ([2ee4b5d](https://github.com/dchernykh1984/trainings_sync/commit/2ee4b5d5fe9ebe7ba6502f502c192c059863d963))
+
 ## [0.2.0](https://github.com/dchernykh1984/trainings_sync/compare/v0.1.4...v0.2.0) (2026-07-25)
 
 

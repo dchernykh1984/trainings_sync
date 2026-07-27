@@ -30,8 +30,17 @@ def _project_name() -> str:
     return match.group(1)
 
 
-def test_workflow_display_name_matches_the_app() -> None:
-    assert _workflow_env("APP_DISPLAY_NAME") == APP_DISPLAY_NAME
+def test_workflow_bundle_name_matches_the_app() -> None:
+    # macOS shows the .app folder name in the dock and ignores the plist's
+    # CFBundleName/CFBundleDisplayName, so the bundle name *is* the dock name.
+    # It has to stay space-free, hence the display name with spaces removed.
+    assert _workflow_env("APP_BUNDLE_NAME") == APP_DISPLAY_NAME.replace(" ", "")
+
+
+def test_workflow_bundle_name_has_no_spaces() -> None:
+    # The bundle is a file people copy between folders; spaces in it make
+    # every shell command that touches it need quoting.
+    assert " " not in _workflow_env("APP_BUNDLE_NAME")
 
 
 def test_workflow_bundle_id_is_reverse_dns_for_this_project() -> None:

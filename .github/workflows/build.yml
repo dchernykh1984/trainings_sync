@@ -20,10 +20,13 @@ env:
   # File name: the artifacts and the frozen executable. Kept ASCII and
   # space-free so a download URL stays readable.
   APP_NAME: trainings-sync
-  # User-facing name. macOS reads it from the bundle for the dock, the task
-  # switcher and the menu bar - none of which ever look at the window title,
-  # so leaving it as APP_NAME showed the app as "trainings-sync".
-  APP_DISPLAY_NAME: Trainings Sync
+  # Name of the .app bundle. macOS shows the bundle's *file name* in the dock
+  # and the task switcher; CFBundleName and CFBundleDisplayName are ignored
+  # for apps outside /Applications, even with LSHasLocalizedDisplayName and a
+  # localized InfoPlist.strings (all three were tried). So the dock name and
+  # the file name are one and the same setting, and this one stays space-free
+  # because the bundle is a file users copy around.
+  APP_BUNDLE_NAME: TrainingsSync
   # Reverse-DNS bundle id. macOS keys preferences, granted folder permissions
   # and LaunchServices registration off this, so every app needs its own.
   APP_BUNDLE_ID: io.github.dchernykh1984.trainings-sync
@@ -79,10 +82,10 @@ jobs:
           pyi=(uv run --with "pyinstaller>=6,<7" pyinstaller)
           common=(--noconfirm --windowed --collect-submodules app)
           if [ "$RUNNER_OS" = "macOS" ]; then
-            # --name drives every name in the bundle's Info.plist, so the
-            # bundle carries the display name while the zip around it keeps
-            # the artifact name.
-            "${pyi[@]}" --name "$APP_DISPLAY_NAME" --icon app/app.icns \
+            # --name sets the .app folder name, which is what the dock shows.
+            # The zip around it keeps the artifact name, so download URLs are
+            # unaffected.
+            "${pyi[@]}" --name "$APP_BUNDLE_NAME" --icon app/app.icns \
               --osx-bundle-identifier "$APP_BUNDLE_ID" \
               "${common[@]}" app/gui/app.py
             # PyInstaller hardcodes CFBundleShortVersionString to 0.0.0 and
@@ -93,14 +96,14 @@ jobs:
             if [ -z "$version" ]; then
               version=$(awk -F'"' '/^version *= *"/ {print $2; exit}' pyproject.toml)
             fi
-            plist="dist/${APP_DISPLAY_NAME}.app/Contents/Info.plist"
+            plist="dist/${APP_BUNDLE_NAME}.app/Contents/Info.plist"
             plutil -replace CFBundleShortVersionString -string "$version" "$plist"
             plutil -replace CFBundleVersion -string "$version" "$plist"
             # Editing the plist breaks the ad-hoc signature PyInstaller
             # applied ("plist or signature have been modified"), so reseal it.
-            codesign --force --sign - "dist/${APP_DISPLAY_NAME}.app"
+            codesign --force --sign - "dist/${APP_BUNDLE_NAME}.app"
             ( cd dist && zip -r -y "${APP_NAME}-${{ matrix.name }}.zip" \
-              "${APP_DISPLAY_NAME}.app" )
+              "${APP_BUNDLE_NAME}.app" )
             echo "ASSET=dist/${APP_NAME}-${{ matrix.name }}.zip" >> "$GITHUB_ENV"
           elif [ "$RUNNER_OS" = "Windows" ]; then
             "${pyi[@]}" --name "$APP_NAME" --onefile --icon app/app.ico \

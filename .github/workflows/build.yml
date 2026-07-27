@@ -24,6 +24,9 @@ env:
   # switcher and the menu bar - none of which ever look at the window title,
   # so leaving it as APP_NAME showed the app as "trainings-sync".
   APP_DISPLAY_NAME: Trainings Sync
+  # Reverse-DNS bundle id. macOS keys preferences, granted folder permissions
+  # and LaunchServices registration off this, so every app needs its own.
+  APP_BUNDLE_ID: io.github.dchernykh1984.trainings-sync
 
 jobs:
   targets:
@@ -68,6 +71,8 @@ jobs:
 
       - name: Build portable app
         shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
           # Pin PyInstaller so a future major release cannot break builds.
@@ -78,7 +83,22 @@ jobs:
             # bundle carries the display name while the zip around it keeps
             # the artifact name.
             "${pyi[@]}" --name "$APP_DISPLAY_NAME" --icon app/app.icns \
+              --osx-bundle-identifier "$APP_BUNDLE_ID" \
               "${common[@]}" app/gui/app.py
+            # PyInstaller hardcodes CFBundleShortVersionString to 0.0.0 and
+            # offers no flag for it, so stamp the plist by hand. On a release
+            # the tag is authoritative; on a smoke build fall back to
+            # pyproject.toml.
+            version="${RELEASE_TAG#v}"
+            if [ -z "$version" ]; then
+              version=$(awk -F'"' '/^version *= *"/ {print $2; exit}' pyproject.toml)
+            fi
+            plist="dist/${APP_DISPLAY_NAME}.app/Contents/Info.plist"
+            plutil -replace CFBundleShortVersionString -string "$version" "$plist"
+            plutil -replace CFBundleVersion -string "$version" "$plist"
+            # Editing the plist breaks the ad-hoc signature PyInstaller
+            # applied ("plist or signature have been modified"), so reseal it.
+            codesign --force --sign - "dist/${APP_DISPLAY_NAME}.app"
             ( cd dist && zip -r -y "${APP_NAME}-${{ matrix.name }}.zip" \
               "${APP_DISPLAY_NAME}.app" )
             echo "ASSET=dist/${APP_NAME}-${{ matrix.name }}.zip" >> "$GITHUB_ENV"

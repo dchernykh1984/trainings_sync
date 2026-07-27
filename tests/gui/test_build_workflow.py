@@ -12,7 +12,8 @@ from pathlib import Path
 
 from app.gui.app import APP_DISPLAY_NAME
 
-WORKFLOW = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "build.yml"
+ROOT = Path(__file__).resolve().parents[2]
+WORKFLOW = ROOT / ".github" / "workflows" / "build.yml"
 
 
 def _workflow_env(name: str) -> str:
@@ -22,5 +23,21 @@ def _workflow_env(name: str) -> str:
     return match.group(1)
 
 
+def _project_name() -> str:
+    text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    match = re.search(r'^name *= *"(.+?)"', text, re.MULTILINE)
+    assert match is not None, "pyproject.toml has no project name"
+    return match.group(1)
+
+
 def test_workflow_display_name_matches_the_app() -> None:
     assert _workflow_env("APP_DISPLAY_NAME") == APP_DISPLAY_NAME
+
+
+def test_workflow_bundle_id_is_reverse_dns_for_this_project() -> None:
+    # Copied between six sibling repos, so pin it to this project's own name -
+    # a bundle id left pointing at a sibling would silently make macOS treat
+    # the two apps as one.
+    bundle_id = _workflow_env("APP_BUNDLE_ID")
+    assert re.fullmatch(r"[a-z0-9]+(\.[a-z0-9-]+)+", bundle_id), bundle_id
+    assert bundle_id.rsplit(".", 1)[-1] == _project_name()

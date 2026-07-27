@@ -73,6 +73,14 @@ from app.gui.config_store import (
 )
 from app.tracking.gui_renderer import GuiRenderer
 
+# How the app calls itself to the user and to the OS shell. The macOS dock and
+# task switcher read this from the frozen bundle's Info.plist (see the build
+# workflow), never from the window title - the two are kept in step by hand.
+APP_DISPLAY_NAME = "Trainings Sync"
+# Basename of the freedesktop .desktop entry; on Linux it becomes the window's
+# WM_CLASS, which is what the taskbar labels the window with.
+APP_DESKTOP_NAME = "trainings-sync"
+
 # ---------------------------------------------------------------------------
 # SyncWorker - runs the full sync pipeline in a background QThread
 # ---------------------------------------------------------------------------
@@ -1654,7 +1662,7 @@ def make_app_icon(size: int = 256) -> QIcon:
 class MainWindow(QMainWindow):
     def __init__(self, store: ConfigStore) -> None:
         super().__init__()
-        self.setWindowTitle("Trainings Sync")
+        self.setWindowTitle(APP_DISPLAY_NAME)
         self.setWindowIcon(make_app_icon())
         # Wide enough that the Sync tab's task rows (long connector labels plus a
         # fixed-width progress bar and counter) fit without a horizontal scroll.
@@ -1719,8 +1727,21 @@ class MainWindow(QMainWindow):
 # ---------------------------------------------------------------------------
 
 
+def configure_app_identity(app: QApplication) -> None:
+    """Tell the OS shell what this app is called.
+
+    Without this the name defaults to the basename of argv[0] - the artifact
+    file name, suffixed with the platform - so the Linux taskbar labels the
+    window ``trainings-sync-linux-x86_64``.
+    """
+    app.setApplicationName(APP_DISPLAY_NAME)
+    app.setApplicationDisplayName(APP_DISPLAY_NAME)
+    app.setDesktopFileName(APP_DESKTOP_NAME)
+
+
 def main() -> None:
     app = QApplication(sys.argv)
+    configure_app_identity(app)
     app.setWindowIcon(make_app_icon())
     store = ConfigStore()
     window = MainWindow(store)

@@ -1,0 +1,4 @@
+{
+  "files": "\\.(py|ya?ml|md|toml|sh|json)$",
+  "exclude": "^(uv\\.lock|CHANGELOG\\.md)$"
+}

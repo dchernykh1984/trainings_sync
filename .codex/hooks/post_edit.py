@@ -11,7 +11,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 PATCH_PATH = re.compile(
-    r"^\*\*\* (?:Add File|Update File|Move to): (.+)$", re.MULTILINE
+    r"^\*\*\* (?:Add File|Update File|Move to): ([^\r\n]+)\r?$", re.MULTILINE
 )
 
 
@@ -57,7 +57,7 @@ def main() -> int:
         return 0
     if not isinstance(payload, dict):
         return 0
-    checks = json.loads((ROOT / ".codex/hooks/checks.json").read_text())
+    checks = json.loads((ROOT / ".codex/hooks/checks.json").read_text(encoding="utf-8"))
     problems = violations(edited_paths(payload, ROOT), ROOT, checks)
     if not problems:
         return 0

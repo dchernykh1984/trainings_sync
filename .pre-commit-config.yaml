@@ -43,7 +43,7 @@ repos:
     hooks:
       - id: coding-agent-hook-tests
         name: coding agent hook tests
-        entry: python3 .codex/hooks/test_post_edit.py
-        language: system
+        entry: python .codex/hooks/test_post_edit.py
+        language: python
         files: ^\.codex/
         pass_filenames: false

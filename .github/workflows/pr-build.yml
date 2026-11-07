@@ -14,3 +14,9 @@ permissions:
 jobs:
   build:
     uses: ./.github/workflows/build.yml
+    with:
+      # release-please's own pull request is the last gate before a tag, so it
+      # is the one worth building everywhere: a platform that stopped building
+      # shows up before the release instead of inside it. Every other pull
+      # request keeps the fast Linux-only smoke build.
+      all_platforms: ${{ startsWith(github.head_ref, 'release-please--') }}

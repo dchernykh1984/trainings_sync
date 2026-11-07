@@ -15,6 +15,13 @@ on:
         description: "Release tag to attach assets to; empty => Linux-only smoke build, no upload."
         type: string
         default: ""
+      # Build the whole matrix and upload nothing. The release pull request uses
+      # this to prove every platform still builds while the tag does not exist
+      # yet; every other pull request keeps the fast Linux-only smoke build.
+      all_platforms:
+        description: "Build every platform without uploading (release pull request)."
+        type: boolean
+        default: false
 
 env:
   # File name: the artifacts and the frozen executable. Kept ASCII and
@@ -47,7 +54,8 @@ jobs:
           # and no error, so the release just ends up without its macOS asset.
           full='{"include":[{"os":"ubuntu-22.04","name":"linux-x86_64"},{"os":"ubuntu-24.04-arm","name":"linux-aarch64"},{"os":"windows-latest","name":"windows-x64"},{"os":"windows-11-arm","name":"windows-arm64"},{"os":"macos-15","name":"macos-arm64"}]}'
           smoke='{"include":[{"os":"ubuntu-22.04","name":"linux-x86_64"}]}'
-          if [ -n "${{ inputs.release_tag }}" ]; then
+          if [ -n "${{ inputs.release_tag }}" ] \
+            || [ "${{ inputs.all_platforms }}" = "true" ]; then
             echo "matrix=$full" >> "$GITHUB_OUTPUT"
           else
             echo "matrix=$smoke" >> "$GITHUB_OUTPUT"
@@ -153,3 +161,48 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "${{ inputs.release_tag }}" "$ASSET" --clobber
+
+  # A retired runner label is not a failure: GitHub accepts the job, cancels it
+  # a second later with no steps, and marks the RUN cancelled - which notifies
+  # nobody. The release is created before this matrix runs (it has to be: a
+  # release made by GITHUB_TOKEN cannot trigger a separate workflow), so a dead
+  # platform used to leave a published release quietly short of one download.
+  # This job runs on a live label and says so out loud.
+  verify:
+    needs: [targets, build]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Every platform must have built, and reached the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag }}
+          MATRIX: ${{ needs.targets.outputs.matrix }}
+          BUILDS: ${{ needs.build.result }}
+        run: |
+          set -euo pipefail
+          echo "build matrix result: $BUILDS"
+          bad=0
+          if [ "$BUILDS" != "success" ]; then
+            echo "::error::not every platform built (matrix result: $BUILDS)"
+            echo "::error::a leg cancelled with no steps means its runner label is gone"
+            bad=1
+          fi
+          if [ -n "$TAG" ]; then
+            assets=$(gh release view "$TAG" --json assets --jq '.assets[].name')
+            echo "assets on $TAG:"
+            printf '%s\n' "$assets" | sed 's/^/  /'
+            for name in $(jq -r '.include[].name' <<<"$MATRIX"); do
+              if ! printf '%s\n' "$assets" | grep -q -- "-$name"; then
+                echo "::error::$TAG has no asset for $name"
+                bad=1
+              fi
+            done
+          fi
+          if [ "$bad" != 0 ]; then
+            exit 1
+          fi
+          echo "every platform in the matrix is accounted for"

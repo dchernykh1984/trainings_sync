@@ -40,7 +40,12 @@ jobs:
       - id: set
         shell: bash
         run: |
-          full='{"include":[{"os":"ubuntu-22.04","name":"linux-x86_64"},{"os":"ubuntu-24.04-arm","name":"linux-aarch64"},{"os":"windows-latest","name":"windows-x64"},{"os":"windows-11-arm","name":"windows-arm64"},{"os":"macos-14","name":"macos-arm64"}]}'
+          # Pin the oldest macOS image GitHub still runs: the frozen app then
+          # starts on as many macOS versions as possible. Bump it when that
+          # label retires - macos-14 was switched off on 2026-11-02, and a job
+          # asking for a retired label is cancelled a second in, with no steps
+          # and no error, so the release just ends up without its macOS asset.
+          full='{"include":[{"os":"ubuntu-22.04","name":"linux-x86_64"},{"os":"ubuntu-24.04-arm","name":"linux-aarch64"},{"os":"windows-latest","name":"windows-x64"},{"os":"windows-11-arm","name":"windows-arm64"},{"os":"macos-15","name":"macos-arm64"}]}'
           smoke='{"include":[{"os":"ubuntu-22.04","name":"linux-x86_64"}]}'
           if [ -n "${{ inputs.release_tag }}" ]; then
             echo "matrix=$full" >> "$GITHUB_OUTPUT"

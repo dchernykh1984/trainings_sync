@@ -1,0 +1,86 @@
+name: runner-labels
+
+# Ask every runner label the release matrix uses whether it still exists.
+#
+# A retired label is not a build failure. GitHub accepts the job, cancels it a
+# second later with no steps and no error, and marks the RUN cancelled - and a
+# cancelled run sends no failure notification. macos-14 was switched off on
+# 2026-11-02 and two releases went out without their macOS asset before anyone
+# noticed. GitHub also runs brownouts for weeks before a retirement, so a weekly
+# probe turns red well before the label takes a release with it.
+#
+# This costs one near-empty job per platform, a few seconds each. It is not a
+# build: the full matrix runs on the release pull request instead (pr-build.yml).
+
+on:
+  schedule:
+    # Staggered across the sibling projects, and away from both the Saturday
+    # audit and the top of the hour, which GitHub delays under load.
+    - cron: "43 8 * * 2"
+  workflow_dispatch:
+  pull_request:
+    # Editing the probe verifies the probe.
+    paths:
+      - ".github/workflows/runner-labels.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  labels:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.read.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - id: read
+        shell: bash
+        run: |
+          set -euo pipefail
+          # One source of truth: the release matrix in build.yml. A platform
+          # added there is probed from the next run, with nothing to keep in
+          # step by hand. Bail out loudly if that line ever stops parsing,
+          # rather than quietly probing nothing.
+          matrix=$(sed -n "s/^ *full='\(.*\)'$/\1/p" .github/workflows/build.yml)
+          count=$(jq '.include | length' <<<"$matrix")
+          if [ "$count" -lt 4 ]; then
+            echo "::error::read $count platforms out of build.yml, expected the full matrix"
+            exit 1
+          fi
+          echo "probing $count labels"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  probe:
+    needs: labels
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.labels.outputs.matrix) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - name: Answer from the runner
+        shell: bash
+        run: echo "${{ matrix.os }} is still here"
+
+  verdict:
+    needs: [labels, probe]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail unless every label produced a run
+        shell: bash
+        env:
+          PROBE: ${{ needs.probe.result }}
+        run: |
+          set -euo pipefail
+          echo "probe result: $PROBE"
+          # This job sits on a live label, so it runs even when a probe leg was
+          # cancelled for asking after a retired one - which is the whole point.
+          # Without it the run would end `cancelled` and notify nobody.
+          if [ "$PROBE" != "success" ]; then
+            echo "::error::a runner label did not answer (matrix result: $PROBE)"
+            echo "::error::check which leg was cancelled, then move it on in build.yml"
+            exit 1
+          fi
+          echo "every runner label in the release matrix is alive"

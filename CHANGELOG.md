@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.3](https://github.com/dchernykh1984/trainings_sync/compare/v0.2.2...v0.2.3) (2026-11-07)
+
+
+### Bug Fixes
+
+* **ci:** restore the macos release asset, lost to a retired runner label ([fa63cae](https://github.com/dchernykh1984/trainings_sync/commit/fa63cae9a9bf6068616abe0e8e8e87de2c483023))
+
 ## [0.2.2](https://github.com/dchernykh1984/trainings_sync/compare/v0.2.1...v0.2.2) (2026-07-27)
 
 

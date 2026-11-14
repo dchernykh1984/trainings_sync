@@ -7,8 +7,10 @@ from pathlib import Path
 
 from app.core.config import (
     AppConfig,
+    ConnectorConfig,
     GarminConnectorConfig,
     GroupSourceConfig,
+    IntervalsIcuConnectorConfig,
     LocalFolderConnectorConfig,
     StravaConnectorConfig,
     SyncGroupConfig,
@@ -22,7 +24,9 @@ _DEFAULT_CONFIG_DIR = Path.home() / ".config" / "trainings-sync"
 # _connector_to_app / _serialize_connector below. To add a new connector,
 # append its type here and extend those two functions (the round-trip test
 # test_every_connector_type_is_convertible enforces the latter).
-CONNECTOR_TYPES: tuple[str, ...] = ("garmin", "strava", "local_folder")
+CONNECTOR_TYPES: tuple[str, ...] = ("garmin", "strava", "intervals_icu", "local_folder")
+# The types that sign in with an account from the Credentials tab.
+CREDENTIAL_TYPES: tuple[str, ...] = ("garmin", "strava", "intervals_icu")
 
 
 # ---------------------------------------------------------------------------
@@ -51,7 +55,7 @@ class CredentialEntry:
 @dataclass
 class ConnectorEntry:
     id: str
-    type: str  # "garmin" | "strava" | "local_folder"
+    type: str  # "garmin" | "strava" | "intervals_icu" | "local_folder"
     # Stable identity, unaffected by renaming `id`. Empty means the parsers
     # fill it in from the name, which is what a pre-uid config gets.
     uid: str = ""
@@ -277,13 +281,9 @@ def _parse_group_entry(raw: dict) -> SyncGroupEntry:
 
 def _serialize_connector(c: ConnectorEntry) -> dict:
     d: dict = {"id": c.id, "uid": c.uid or c.id, "type": c.type}
-    if c.type == "garmin":
-        d["credential_service"] = c.credential_service
-        d["credential_url"] = c.credential_url
-        if c.credential_login:
-            d["credential_login"] = c.credential_login
-    elif c.type == "strava":
+    if c.type == "strava":
         d["client_id"] = c.client_id
+    if c.type in CREDENTIAL_TYPES:
         d["credential_service"] = c.credential_service
         d["credential_url"] = c.credential_url
         if c.credential_login:
@@ -301,9 +301,7 @@ def _serialize_group(g: SyncGroupEntry) -> dict:
     }
 
 
-def _connector_to_app(
-    c: ConnectorEntry,
-) -> GarminConnectorConfig | StravaConnectorConfig | LocalFolderConnectorConfig:
+def _connector_to_app(c: ConnectorEntry) -> ConnectorConfig:
     if c.type == "garmin":
         return GarminConnectorConfig(
             id=c.id,
@@ -319,6 +317,16 @@ def _connector_to_app(
             id=c.id,
             uid=c.uid or c.id,
             client_id=c.client_id,
+            credential=CredentialRequest(
+                service=c.credential_service,
+                url=c.credential_url,
+                login=c.credential_login or None,
+            ),
+        )
+    if c.type == "intervals_icu":
+        return IntervalsIcuConnectorConfig(
+            id=c.id,
+            uid=c.uid or c.id,
             credential=CredentialRequest(
                 service=c.credential_service,
                 url=c.credential_url,

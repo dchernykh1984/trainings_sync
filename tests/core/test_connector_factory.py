@@ -10,6 +10,7 @@ import pytest
 
 from app.connectors.base import ServiceConnector
 from app.connectors.garmin import GarminConnector
+from app.connectors.intervals_icu import IntervalsIcuConnector
 from app.connectors.local_folder import LocalFolderConnector
 from app.connectors.strava import StravaConnector
 from app.core.cache import ActivityCache, CacheEntry
@@ -18,6 +19,7 @@ from app.core.config import (
     ConnectorConfig,
     GarminConnectorConfig,
     GroupSourceConfig,
+    IntervalsIcuConnectorConfig,
     LocalFolderConnectorConfig,
     StravaConnectorConfig,
     SyncGroupConfig,
@@ -91,6 +93,12 @@ _GARMIN_CRED = CredentialRequest(
 _STRAVA_CRED = CredentialRequest(service="Strava", url="https://www.strava.com")
 
 _GARMIN_CFG = GarminConnectorConfig(id="garmin", credential=_GARMIN_CRED)
+_INTERVALS_CFG = IntervalsIcuConnectorConfig(
+    id="intervals",
+    credential=CredentialRequest(
+        service="intervals.icu", url="https://intervals.icu/api/v1"
+    ),
+)
 _STRAVA_CFG = StravaConnectorConfig(
     id="strava", client_id=99999, credential=_STRAVA_CRED
 )
@@ -167,6 +175,23 @@ async def test_strava_connector_builds_strava_connector(
     assert c._credentials.client_id == 99999
     assert c._credentials.client_secret == "client-secret-val"
     assert c._credentials.refresh_token == "refresh-token-val"
+
+
+async def test_intervals_icu_connector_gets_its_own_credential(
+    tracker: TaskTracker,
+) -> None:
+    # Credentials come back as one ordered batch, so every type that asks for
+    # one must also consume it, or the next connector gets the wrong account.
+    provider = _FakeProvider([_GARMIN_CREDS, Credentials("i42", "api-key")])
+    result = await build_connectors(
+        _cfg(connectors=(_GARMIN_CFG, _INTERVALS_CFG)), provider, tracker
+    )
+    garmin, intervals = result["garmin"], result["intervals"]
+    assert isinstance(garmin, GarminConnector)
+    assert garmin._credentials == _GARMIN_CREDS
+    assert isinstance(intervals, IntervalsIcuConnector)
+    assert intervals._athlete_id == "i42"
+    assert intervals._session.auth == ("API_KEY", "api-key")
 
 
 async def test_local_connector_builds_local_connector(

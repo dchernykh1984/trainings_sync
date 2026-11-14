@@ -143,6 +143,7 @@ def test_credential_dialog_url_dropdown_presets_and_free_text(qtbot) -> None:
     assert urls == [
         "https://connect.garmin.com",
         "https://www.strava.com/api/v3",
+        "https://intervals.icu/api/v1",
     ]
     assert dlg._url.isEditable()
     # A custom URL can still be typed.
@@ -350,6 +351,36 @@ def test_connector_dialog_type_change_shows_strava_client_id(qtbot) -> None:
     qtbot.addWidget(dlg)
     dlg._type.setCurrentText("strava")
     assert not dlg._client_id_spin.isHidden()
+
+
+def test_connector_dialog_intervals_icu_uses_a_credential(qtbot) -> None:
+    creds = [
+        CredentialEntry("Garmin Connect", "https://connect.garmin.com", "me@x", "p"),
+        CredentialEntry("intervals.icu", "https://intervals.icu/api/v1", "i42", "key"),
+    ]
+    dlg = ConnectorDialog(credentials=creds)
+    qtbot.addWidget(dlg)
+    dlg._type.setCurrentText("intervals_icu")
+    dlg._cred_combo.setCurrentIndex(1)
+    dlg._id.setText("intervals")
+    assert not dlg._cred_box.isHidden()
+    assert dlg._client_id_spin.isHidden()
+    assert dlg._ok_btn.isEnabled()
+    entry = dlg.result_entry()
+    assert (entry.type, entry.credential_service, entry.credential_login) == (
+        "intervals_icu",
+        "intervals.icu",
+        "i42",
+    )
+    assert entry.credential_url == "https://intervals.icu/api/v1"
+
+
+def test_connector_dialog_intervals_icu_needs_a_credential(qtbot) -> None:
+    dlg = ConnectorDialog(credentials=[])
+    qtbot.addWidget(dlg)
+    dlg._type.setCurrentText("intervals_icu")
+    dlg._id.setText("intervals")
+    assert not dlg._ok_btn.isEnabled()
 
 
 def test_connector_dialog_ok_needs_name_and_credential(qtbot) -> None:

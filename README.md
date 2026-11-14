@@ -5,7 +5,7 @@
 > Check the sync log file for rate limit messages and review your current usage on the [Strava API settings page](https://www.strava.com/settings/api).
 > See the [Strava rate limits documentation](https://developers.strava.com/docs/rate-limits/) for details.
 
-CLI tool for syncing training activities between Garmin Connect and a local folder (FIT/GPX/TCX). Strava upload support is also available.
+CLI tool for syncing training activities between Garmin Connect and a local folder (FIT/GPX/TCX). Strava and [intervals.icu](https://intervals.icu) are supported as sources and destinations too.
 
 ## Download a ready-made app
 
@@ -246,7 +246,7 @@ uv run trainings-sync \
 | Option                 | Description                                                                                                                                                               |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--config PATH`        | Path to the JSON config file. Required.                                                                                                                                   |
-| `--creds-json PATH`    | JSON credentials file. Required for Garmin and Strava connectors.                                                                                                         |
+| `--creds-json PATH`    | JSON credentials file. Required for Garmin, Strava and intervals.icu connectors.                                                                                          |
 | `--creds-keepass PATH` | KeePass database (.kdbx) instead of a JSON file. Master password is read from `KEEPASS_PASSWORD` env var, or prompted from stdin. Not supported with Strava sources or destinations. |
 | `--start DATE`         | Start date (YYYY-MM-DD). Overrides the value in config. Defaults to `2000-01-01` if not set anywhere.                                                                     |
 | `--end DATE`           | End date (YYYY-MM-DD). Overrides the value in config. Defaults to today.                                                                                                  |
@@ -266,6 +266,51 @@ request:
 
 When a limit is reached, the sync automatically pauses and resumes after the window resets. Your app's
 current limits are shown at [strava.com/settings/api](https://www.strava.com/settings/api).
+
+### intervals.icu
+
+intervals.icu works as a source (activities are downloaded as their original
+FIT/GPX/TCX files) and as a destination (activities are uploaded with their name
+and description).
+
+1. In intervals.icu open **Settings -> Developer Settings** and copy your **API key**.
+   Your athlete id (`i12345`) is shown on the same page.
+2. Add a connector to your config and use its `id` in `sync_groups`:
+   ```json
+   {
+     "id": "intervals",
+     "type": "intervals_icu",
+     "credential_service": "intervals.icu",
+     "credential_url": "https://intervals.icu/api/v1"
+   }
+   ```
+3. Add the account to your credentials file. `login` is your athlete id (leave it
+   empty for the owner of the key), `password` is the API key:
+   ```json
+   {
+     "service": "intervals.icu",
+     "url": "https://intervals.icu/api/v1",
+     "login": "i12345",
+     "password": "YOUR_API_KEY"
+   }
+   ```
+
+The API key never rotates, so a KeePass entry works with `--creds-keepass` too: URL
+`https://intervals.icu/api/v1`, user name = athlete id, password = API key. The
+`/api/v1` part keeps a browser-saved intervals.icu web login in the same database
+from being picked up instead.
+
+Limits to know about:
+
+- Activities that intervals.icu imported from Strava are not available through its
+  API, so they are never downloaded. They still count as already present when
+  uploading to intervals.icu. The API gives them no duration, so each one stands
+  for its first two minutes: an activity that covers at least one of those minutes
+  is not uploaded again. Their start time is read in the time zone of your
+  intervals.icu profile, so this works for activities recorded in that zone.
+- Photos are not uploaded.
+- The API allows 2500 requests per 15 minutes and 5000 per day. On a `429` the sync
+  waits for the time the server asks for (5 s if it does not say) and retries.
 
 ## Desktop GUI
 
@@ -320,6 +365,9 @@ shown in the table:
 For Garmin, *Login* is your Garmin email and the password is your Garmin
 password. For Strava, *Login* is your Client Secret and the password is the
 refresh token (see [Getting Strava credentials](#getting-strava-credentials)).
+For intervals.icu, pick the `https://intervals.icu/api/v1` URL; *Login* is your
+athlete id (empty for the owner of the key) and the password is the API key (see
+[intervals.icu](#intervalsicu)).
 Strava must use a **manual** account - its refresh token is rotated and written
 back, which a read-only KeePass file cannot store.
 
@@ -334,10 +382,10 @@ the connectors so you can detach it first.
 Build the sync configuration visually:
 
 - **Connectors** - add each data source/destination. Give it a **Name** (used to
-  reference it from sync groups) and a **Type** (`garmin`, `strava`, or
-  `local_folder`). For Garmin/Strava pick a **Credentials** account from the
-  dropdown (populated from the Credentials tab) - its URL and login come from
-  that account. For a local folder pick the directory with **Browse...** (or type
+  reference it from sync groups) and a **Type** (`garmin`, `strava`,
+  `intervals_icu`, or `local_folder`). For Garmin/Strava/intervals.icu pick a
+  **Credentials** account from the dropdown (populated from the Credentials
+  tab) - its URL and login come from that account. For a local folder pick the directory with **Browse...** (or type
   the path). A connector used by a sync group cannot be deleted until you remove
   it from those groups. Renaming a connector is safe: each one also carries a
   hidden `uid` that never changes, and the cache is filed under that, so the

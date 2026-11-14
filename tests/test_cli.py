@@ -22,6 +22,7 @@ from app.core.config import (
     AppConfig,
     GarminConnectorConfig,
     GroupSourceConfig,
+    IntervalsIcuConnectorConfig,
     StravaConnectorConfig,
     SyncGroupConfig,
 )
@@ -39,6 +40,12 @@ _GARMIN_CRED = CredentialRequest(
 _STRAVA_CRED = CredentialRequest(service="Strava", url="https://www.strava.com")
 _STRAVA_CONNECTOR = StravaConnectorConfig(
     id="strava", client_id=99999, credential=_STRAVA_CRED
+)
+_INTERVALS_CONNECTOR = IntervalsIcuConnectorConfig(
+    id="intervals",
+    credential=CredentialRequest(
+        service="intervals.icu", url="https://intervals.icu/api/v1"
+    ),
 )
 _DEFAULT_GROUP = SyncGroupConfig(
     id="default",
@@ -109,6 +116,18 @@ class TestValidate:
             )
         assert exc.value.code == 1
         assert "credentials" in capsys.readouterr().err
+
+    def test_intervals_icu_connector_requires_credentials(
+        self, capsys: pytest.CaptureFixture
+    ) -> None:
+        with pytest.raises(SystemExit):
+            _validate(_args(), _cfg(connectors=(_INTERVALS_CONNECTOR,)), _START, _END)
+        assert "credentials" in capsys.readouterr().err
+
+    def test_keepass_with_intervals_icu_connector_is_allowed(self) -> None:
+        # The API key never rotates, so nothing has to be written back.
+        args = _args(creds_keepass=Path("vault.kdbx"))
+        _validate(args, _cfg(connectors=(_INTERVALS_CONNECTOR,)), _START, _END)
 
     def test_valid_args_pass_without_exception(self) -> None:
         args = _args(creds_json=Path("creds.json"))

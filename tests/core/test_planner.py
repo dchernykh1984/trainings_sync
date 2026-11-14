@@ -85,6 +85,39 @@ class TestPlanEmpty:
         assert plan.to_download == ()
 
 
+class TestPlanNotDownloadable:
+    def test_listed_but_not_downloadable_is_never_planned(
+        self, cache: ActivityCache
+    ) -> None:
+        stub = ActivityMeta(
+            external_id="stub",
+            name="",
+            sport_type="",
+            start_time=_dt(),
+            downloadable=False,
+        )
+        plan = SyncPlanner().plan([(_spec(), [stub, _meta("real")])], cache, force=True)
+        assert [i.meta.external_id for i in plan.to_download] == ["real"]
+
+    def test_a_stub_does_not_shadow_a_lower_priority_source(
+        self, cache: ActivityCache
+    ) -> None:
+        # Nothing is downloaded for the stub, so the overlapping activity from
+        # the next source must still be planned.
+        stub = ActivityMeta(
+            external_id="stub",
+            name="",
+            sport_type="",
+            start_time=_dt(),
+            downloadable=False,
+        )
+        plan = SyncPlanner().plan(
+            [(_spec("intervals", 1), [stub]), (_spec("garmin", 2), [_meta("g1")])],
+            cache,
+        )
+        assert [i.meta.external_id for i in plan.to_download] == ["g1"]
+
+
 class TestPlanCacheHit:
     def test_skips_exact_cache_hit_without_force(self, cache: ActivityCache) -> None:
         cache.put(_entry(), b"content")

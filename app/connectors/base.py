@@ -143,6 +143,9 @@ class ActivityMeta:
     sport_type: str
     start_time: datetime  # must be UTC (utcoffset == 0)
     elapsed_s: int | None = field(default=None, kw_only=True)  # wall-clock duration
+    # False when the service lists an activity but will not hand over its file:
+    # it still counts as present at a destination, it is never downloaded.
+    downloadable: bool = field(default=True, kw_only=True)
 
     def __post_init__(self) -> None:
         offset = self.start_time.utcoffset()
@@ -221,7 +224,7 @@ class ServiceConnector(ABC):
         return True
 
     async def download_all(self, start: date, end: date) -> list[Activity]:
-        metas = await self.list_activities(start, end)
+        metas = [m for m in await self.list_activities(start, end) if m.downloadable]
         if not metas:
             return []
 

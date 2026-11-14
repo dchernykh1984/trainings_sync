@@ -26,6 +26,7 @@ from app.connectors.base import (
     ServiceConnector,
     TransientDownloadError,
     _fetch_url_bytes,
+    _parse_retry_after,
     _redact_url,
     _run_with_timeout,
     attach_debug_logging,
@@ -57,13 +58,6 @@ _RATE_LIMIT_MARGIN: int = _MAX_CONCURRENT * 5
 # Seconds of padding after a window boundary before zeroing stale usage.
 # Guards against local-clock drift vs Strava's server clock.
 _RESET_PADDING_S: float = 10.0
-
-
-def _parse_retry_after(headers: Any, default: float = 900.0) -> float:
-    try:
-        return float(headers.get("Retry-After", default))
-    except (ValueError, TypeError):
-        return default
 
 
 def _parse_retry_after_optional(headers: Any) -> float | None:

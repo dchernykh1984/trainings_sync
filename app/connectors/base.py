@@ -114,6 +114,13 @@ class RateLimitError(TransientDownloadError):
         self.retry_after = retry_after
 
 
+def _parse_retry_after(headers: Any, default: float = 900.0) -> float:
+    try:
+        return float(headers.get("Retry-After", default))
+    except (ValueError, TypeError):
+        return default
+
+
 _T = TypeVar("_T")
 _API_TIMEOUT_S: float = 30.0
 

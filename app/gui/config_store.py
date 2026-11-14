@@ -302,41 +302,24 @@ def _serialize_group(g: SyncGroupEntry) -> dict:
 
 
 def _connector_to_app(c: ConnectorEntry) -> ConnectorConfig:
+    uid = c.uid or c.id
+    credential = CredentialRequest(
+        service=c.credential_service,
+        url=c.credential_url,
+        login=c.credential_login or None,
+    )
     if c.type == "garmin":
-        return GarminConnectorConfig(
-            id=c.id,
-            uid=c.uid or c.id,
-            credential=CredentialRequest(
-                service=c.credential_service,
-                url=c.credential_url,
-                login=c.credential_login or None,
-            ),
-        )
+        return GarminConnectorConfig(id=c.id, uid=uid, credential=credential)
     if c.type == "strava":
         return StravaConnectorConfig(
-            id=c.id,
-            uid=c.uid or c.id,
-            client_id=c.client_id,
-            credential=CredentialRequest(
-                service=c.credential_service,
-                url=c.credential_url,
-                login=c.credential_login or None,
-            ),
+            id=c.id, uid=uid, client_id=c.client_id, credential=credential
         )
     if c.type == "intervals_icu":
-        return IntervalsIcuConnectorConfig(
-            id=c.id,
-            uid=c.uid or c.id,
-            credential=CredentialRequest(
-                service=c.credential_service,
-                url=c.credential_url,
-                login=c.credential_login or None,
-            ),
-        )
+        return IntervalsIcuConnectorConfig(id=c.id, uid=uid, credential=credential)
     if c.type == "local_folder":
         return LocalFolderConnectorConfig(
             id=c.id,
-            uid=c.uid or c.id,
+            uid=uid,
             folder=Path(c.folder).expanduser().resolve(),
         )
     raise ValueError(f"unknown connector type: {c.type!r}")

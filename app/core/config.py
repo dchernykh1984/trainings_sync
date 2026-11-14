@@ -44,6 +44,18 @@ class StravaConnectorConfig:
 
 
 @dataclass(frozen=True)
+class IntervalsIcuConnectorConfig:
+    id: str
+    credential: CredentialRequest
+    uid: str = ""
+
+    def __post_init__(self) -> None:
+        # Same identity rule as GarminConnectorConfig.
+        if not self.uid:
+            object.__setattr__(self, "uid", self.id)
+
+
+@dataclass(frozen=True)
 class LocalFolderConnectorConfig:
     id: str
     folder: Path
@@ -59,7 +71,17 @@ class LocalFolderConnectorConfig:
 
 
 ConnectorConfig = (
-    GarminConnectorConfig | StravaConnectorConfig | LocalFolderConnectorConfig
+    GarminConnectorConfig
+    | StravaConnectorConfig
+    | IntervalsIcuConnectorConfig
+    | LocalFolderConnectorConfig
+)
+
+# The connector configs that sign in with a credential; the rest need none.
+CREDENTIAL_CONNECTOR_CONFIGS = (
+    GarminConnectorConfig,
+    StravaConnectorConfig,
+    IntervalsIcuConnectorConfig,
 )
 
 
@@ -164,6 +186,12 @@ def _parse_connector(raw: object, index: int, base_dir: Path) -> ConnectorConfig
             id=connector_id,
             uid=connector_uid,
             client_id=_require_int(raw, "client_id", where),
+            credential=_parse_credential(raw, where),
+        )
+    if connector_type == "intervals_icu":
+        return IntervalsIcuConnectorConfig(
+            id=connector_id,
+            uid=connector_uid,
             credential=_parse_credential(raw, where),
         )
     if connector_type == "local_folder":

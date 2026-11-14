@@ -10,9 +10,9 @@ from pathlib import Path
 
 from app.core.cache import ActivityCache
 from app.core.config import (
+    CREDENTIAL_CONNECTOR_CONFIGS,
     AppConfig,
     ConfigError,
-    GarminConnectorConfig,
     StravaConnectorConfig,
     load_config,
 )
@@ -42,10 +42,7 @@ class _NullProvider(CredentialProvider):
 
 
 def _credentials_needed(config: AppConfig) -> bool:
-    return any(
-        isinstance(c, (GarminConnectorConfig, StravaConnectorConfig))
-        for c in config.connectors
-    )
+    return any(isinstance(c, CREDENTIAL_CONNECTOR_CONFIGS) for c in config.connectors)
 
 
 def _parse_date(value: str) -> date:
@@ -65,7 +62,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="trainings-sync",
         description=(
-            "Sync training activities between Garmin, Strava, and local folders."
+            "Sync training activities between Garmin, Strava, intervals.icu,"
+            " and local folders."
         ),
     )
     parser.add_argument(
@@ -102,7 +100,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--creds-json",
         type=Path,
         metavar="PATH",
-        help="JSON credentials file (required for Garmin/Strava connectors)",
+        help=(
+            "JSON credentials file"
+            " (required for Garmin/Strava/intervals.icu connectors)"
+        ),
     )
     creds_group.add_argument(
         "--creds-keepass",

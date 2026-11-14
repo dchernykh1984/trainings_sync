@@ -4,12 +4,15 @@ from collections.abc import Callable
 
 from app.connectors.base import ServiceConnector
 from app.connectors.garmin import GarminConnector
+from app.connectors.intervals_icu import IntervalsIcuConnector
 from app.connectors.local_folder import LocalFolderConnector
 from app.connectors.strava import StravaConnector
 from app.connectors.wellness_base import WellnessConnector
 from app.core.config import (
+    CREDENTIAL_CONNECTOR_CONFIGS,
     AppConfig,
     GarminConnectorConfig,
+    IntervalsIcuConnectorConfig,
     LocalFolderConnectorConfig,
     StravaConnectorConfig,
     SyncGroupConfig,
@@ -43,7 +46,7 @@ async def build_connectors(
     cred_requests = [
         cfg.credential
         for cfg in config.connectors
-        if isinstance(cfg, (GarminConnectorConfig, StravaConnectorConfig))
+        if isinstance(cfg, CREDENTIAL_CONNECTOR_CONFIGS)
     ]
     creds = iter(await provider.get_many(cred_requests, context="connectors"))
 
@@ -64,6 +67,8 @@ async def build_connectors(
                 tracker=tracker,
                 on_token_refresh=_strava_callback(cfg.uid, on_strava_token_refresh),
             )
+        elif isinstance(cfg, IntervalsIcuConnectorConfig):
+            connector = IntervalsIcuConnector(credentials=next(creds), tracker=tracker)
         else:  # LocalFolderConnectorConfig - source mode (no cache/dest_id)
             connector = LocalFolderConnector(folder=cfg.folder, tracker=tracker)
         result[cfg.uid] = connector

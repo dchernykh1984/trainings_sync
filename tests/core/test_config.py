@@ -10,6 +10,7 @@ from app.core.config import (
     ConfigError,
     GarminConnectorConfig,
     GroupSourceConfig,
+    IntervalsIcuConnectorConfig,
     LocalFolderConnectorConfig,
     StravaConnectorConfig,
     SyncGroupConfig,
@@ -100,6 +101,32 @@ def test_strava_connector(tmp_path: Path) -> None:
     assert c.client_id == 99999
     assert c.credential == CredentialRequest(
         service="Strava", url="https://www.strava.com", login=None
+    )
+
+
+def test_intervals_icu_connector(tmp_path: Path) -> None:
+    intervals = {
+        "id": "intervals",
+        "type": "intervals_icu",
+        "credential_service": "intervals.icu",
+        "credential_url": "https://intervals.icu/api/v1",
+        "credential_login": "i12345",
+    }
+    data = {**_minimal(), "connectors": [intervals, _LOCAL_CONNECTOR]}
+    data["sync_groups"] = [
+        {
+            "id": "g",
+            "sources": [{"id": "intervals", "priority": 1}],
+            "destinations": ["local"],
+        }
+    ]
+    c = load_config(_write(tmp_path, data)).connectors[0]
+    assert c == IntervalsIcuConnectorConfig(
+        id="intervals",
+        uid="intervals",
+        credential=CredentialRequest(
+            service="intervals.icu", url="https://intervals.icu/api/v1", login="i12345"
+        ),
     )
 
 

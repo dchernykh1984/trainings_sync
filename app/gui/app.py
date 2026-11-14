@@ -64,6 +64,7 @@ from PySide6.QtWidgets import (
 
 from app.gui.config_store import (
     CONNECTOR_TYPES,
+    CREDENTIAL_TYPES,
     ConfigStore,
     ConnectorEntry,
     CredentialEntry,
@@ -442,6 +443,7 @@ class TaskRow(QWidget):
 _KNOWN_CREDENTIAL_URLS = (
     "https://connect.garmin.com",
     "https://www.strava.com/api/v3",
+    "https://intervals.icu/api/v1",
 )
 
 
@@ -493,7 +495,11 @@ class CredentialDialog(QDialog):
         self._keepass_label = QLabel("KeePass file:")
         form.addRow(self._keepass_label, self._keepass_row)
 
-        hint = QLabel("For Strava: login = client_secret, password = refresh_token")
+        hint = QLabel(
+            "For Strava: login = client_secret, password = refresh_token. "
+            "For intervals.icu: login = athlete id (empty = the key's owner), "
+            "password = API key"
+        )
         hint.setWordWrap(True)
         form.addRow(hint)
 
@@ -806,22 +812,22 @@ class ConnectorDialog(QDialog):
 
     def _validate(self) -> None:
         has_name = bool(self._id.text().strip())
-        needs_cred = self._type.currentText() in ("garmin", "strava")
+        needs_cred = self._type.currentText() in CREDENTIAL_TYPES
         cred_ok = not needs_cred or self._cred_combo.currentData() is not None
         self._ok_btn.setEnabled(has_name and cred_ok)
 
     def _on_type_changed(self, t: str) -> None:
-        self._cred_box.setVisible(t in ("garmin", "strava"))
+        self._cred_box.setVisible(t in CREDENTIAL_TYPES)
         self._client_id_spin.setVisible(t == "strava")
         self._folder_box.setVisible(t == "local_folder")
         self._validate()
 
     def result_entry(self) -> ConnectorEntry:
         t = self._type.currentText()
-        # Credentials only apply to garmin/strava - a local folder must not carry
+        # Credentials only apply to account types - a local folder must not carry
         # a credential, or it would spuriously "use" one and block its deletion.
         cred: CredentialEntry | None = (
-            self._cred_combo.currentData() if t in ("garmin", "strava") else None
+            self._cred_combo.currentData() if t in CREDENTIAL_TYPES else None
         )
         return ConnectorEntry(
             id=self._id.text().strip(),

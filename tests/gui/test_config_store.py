@@ -10,12 +10,16 @@ from pathlib import Path
 import pytest
 
 from app.core.config import (
+    CREDENTIAL_CONNECTOR_CONFIGS,
     GarminConnectorConfig,
+    IntervalsIcuConnectorConfig,
     LocalFolderConnectorConfig,
     StravaConnectorConfig,
 )
+from app.credentials.base import CredentialRequest
 from app.gui.config_store import (
     CONNECTOR_TYPES,
+    CREDENTIAL_TYPES,
     ConfigStore,
     ConnectorEntry,
     CredentialEntry,
@@ -526,8 +530,14 @@ def test_serialize_connector_strava() -> None:
         client_id=12345,
     )
     d = _serialize_connector(c)
-    assert d["client_id"] == 12345
-    assert "folder" not in d
+    assert d == {
+        "id": "s",
+        "uid": "s",
+        "type": "strava",
+        "client_id": 12345,
+        "credential_service": "Strava",
+        "credential_url": "https://www.strava.com/api/v3",
+    }
 
 
 def test_serialize_connector_strava_with_login() -> None:
@@ -569,6 +579,35 @@ def test_to_app_config_strava_connector_with_login(store: ConfigStore) -> None:
     assert strava.credential.login == "my_client_secret"
 
 
+def test_intervals_icu_connector_round_trips_to_the_app_config() -> None:
+    entry = ConnectorEntry(
+        id="intervals",
+        uid="u1",
+        type="intervals_icu",
+        credential_service="intervals.icu",
+        credential_url="https://intervals.icu/api/v1",
+        credential_login="i42",
+    )
+    saved = _serialize_connector(entry)
+    assert saved == {
+        "id": "intervals",
+        "uid": "u1",
+        "type": "intervals_icu",
+        "credential_service": "intervals.icu",
+        "credential_url": "https://intervals.icu/api/v1",
+        "credential_login": "i42",
+    }
+    assert _connector_to_app(_parse_connector_entry(saved)) == (
+        IntervalsIcuConnectorConfig(
+            id="intervals",
+            uid="u1",
+            credential=CredentialRequest(
+                service="intervals.icu", url="https://intervals.icu/api/v1", login="i42"
+            ),
+        )
+    )
+
+
 def test_serialize_connector_local_folder() -> None:
     c = ConnectorEntry(id="l", type="local_folder", folder="/data")
     d = _serialize_connector(c)
@@ -607,8 +646,13 @@ def test_every_connector_type_is_convertible() -> None:
             credential_url="url",
             folder="/tmp/data",
         )
-        _connector_to_app(entry)  # must not raise
+        app_connector = _connector_to_app(entry)  # must not raise
         _serialize_connector(entry)  # must not raise
+        # The GUI's list of account types must agree with the core one, or a
+        # connector loses its credential picker or its credential on save.
+        assert (connector_type in CREDENTIAL_TYPES) == isinstance(
+            app_connector, CREDENTIAL_CONNECTOR_CONFIGS
+        )
 
 
 def test_group_to_app() -> None:

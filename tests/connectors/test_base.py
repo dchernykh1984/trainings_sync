@@ -187,6 +187,22 @@ class TestDownloadAll:
 
         assert [a.external_id for a in results] == ["1", "2", "3"]
 
+    async def test_skips_activities_that_cannot_be_downloaded(
+        self, connector: _FakeConnector
+    ) -> None:
+        stub = ActivityMeta(
+            external_id="2",
+            name="",
+            sport_type="",
+            start_time=_DT,
+            downloadable=False,
+        )
+        connector.metas = [_make_meta("1"), stub]
+
+        results = await connector.download_all(_START, _END)
+
+        assert [a.external_id for a in results] == ["1"]
+
     async def test_creates_task_with_correct_total(
         self, connector: _FakeConnector, tracker: TaskTracker
     ) -> None:

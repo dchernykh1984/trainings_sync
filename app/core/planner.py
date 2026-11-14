@@ -163,6 +163,9 @@ class SyncPlanner:
         healthy_ids: frozenset[tuple[str, str]],
         refresh_ids: frozenset[tuple[str, str]],
     ) -> bool:
+        if not meta.downloadable:
+            return False
+
         if not force and (meta.external_id, spec.source_id) in healthy_ids:
             return False
 

@@ -10,6 +10,7 @@ import requests
 from app.connectors.base import (
     Activity,
     ActivityMeta,
+    CallTimeoutError,
     MediaItem,
     ServiceConnector,
     TransientDownloadError,
@@ -567,5 +568,7 @@ class TestRunWithTimeout:
         with patch(
             "app.connectors.base.asyncio.wait_for", side_effect=asyncio.TimeoutError
         ):
-            with pytest.raises(TransientDownloadError, match="timed out after 30s"):
+            # A transient error, and one that says the call may still be running.
+            with pytest.raises(CallTimeoutError, match="timed out after 30s") as exc:
                 await _run_with_timeout(fut)
+        assert isinstance(exc.value, TransientDownloadError)

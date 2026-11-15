@@ -20,6 +20,7 @@ from app.connectors.base import (
     Activity,
     ActivityMeta,
     ActivityUnavailableError,
+    CallTimeoutError,
     RateLimitError,
     ServiceConnector,
     TransientDownloadError,
@@ -35,6 +36,15 @@ _BASE_URL = "https://intervals.icu/api/v1"
 _REQUEST_TIMEOUT_S: float = 30.0
 # Whole-call bound: a big file on a slow link can take minutes and still move.
 _CALL_TIMEOUT_S: float = 300.0
+# intervals.icu analyses an uploaded file before it answers, so a slow answer
+# to an upload is not a dead connection: wait longer than the socket timeout.
+_UPLOAD_RESPONSE_TIMEOUT_S: float = 120.0
+# An upload's whole-call bound also covers sending the file and that wait.
+_UPLOAD_CALL_TIMEOUT_S: float = 600.0
+_UPLOAD_ATTEMPTS: int = 3
+# Pause before sending a failed upload again: a server too slow to answer may
+# still be analysing the file, so it gets as long again to finish first.
+_UPLOAD_RETRY_PAUSE_S: float = _UPLOAD_RESPONSE_TIMEOUT_S
 _MAX_ATTEMPTS: int = 3
 # A 429 from the per-IP limit (10 calls/s) carries no Retry-After header.
 _DEFAULT_RETRY_AFTER_S: float = 5.0
@@ -65,6 +75,36 @@ def _zone(name: object) -> tzinfo | None:
     try:
         return ZoneInfo(name)
     except (KeyError, ValueError):  # ZoneInfoNotFoundError is a KeyError
+        return None
+
+
+def _status(exc: requests.HTTPError) -> int:
+    return exc.response.status_code if exc.response is not None else 0
+
+
+def _transient_status(exc: requests.HTTPError) -> bool:
+    """A 5xx or a 408: the same request may succeed later."""
+    status = _status(exc)
+    return status >= 500 or status == 408
+
+
+def _worth_resending(exc: Exception) -> bool:
+    """Whether sending a failed upload again may help: not after a 4xx, not
+    after a 429 that _request has already waited out, and not past the call
+    bound, where the send may still be running in its thread and a second one
+    alongside it could slip past the server's duplicate check."""
+    if isinstance(exc, (RateLimitError, CallTimeoutError)):
+        return False
+    if isinstance(exc, requests.HTTPError):
+        return _transient_status(exc)
+    return True  # no answer, or one cut off
+
+
+def _first_id(resp: requests.Response) -> str | None:
+    """The first activity id an upload answer names, if it names one."""
+    try:
+        return str(resp.json()["activities"][0]["id"])
+    except (ValueError, LookupError, TypeError):  # not JSON, or not that shape
         return None
 
 
@@ -110,12 +150,20 @@ class IntervalsIcuConnector(ServiceConnector):
         return self._label or self._athlete_id
 
     async def _request(
-        self, method: str, path: str, **kwargs: Any
+        self,
+        method: str,
+        path: str,
+        *,
+        timeout: float | tuple[float, float] = _REQUEST_TIMEOUT_S,
+        call_timeout: float = _CALL_TIMEOUT_S,
+        **kwargs: Any,
     ) -> requests.Response:
         """Send one API call, waiting out 429s.
 
         An error status raises HTTPError, a failed connection or call
         TransientDownloadError, and a 429 on the last attempt RateLimitError.
+        `timeout` is the socket timeout, in the form requests takes, and
+        `call_timeout` the bound on the whole call.
         """
         log = self._tracker.sync_logger
         attempt = 1
@@ -126,10 +174,10 @@ class IntervalsIcuConnector(ServiceConnector):
                         self._session.request,
                         method,
                         _BASE_URL + path,
-                        timeout=_REQUEST_TIMEOUT_S,
+                        timeout=timeout,
                         **kwargs,
                     ),
-                    _CALL_TIMEOUT_S,
+                    call_timeout,
                 )
             except requests.RequestException as exc:
                 raise TransientDownloadError(str(exc)) from exc
@@ -259,10 +307,9 @@ class IntervalsIcuConnector(ServiceConnector):
         try:
             resp = await self._request("GET", f"/activity/{meta.external_id}/file")
         except requests.HTTPError as exc:
-            status = exc.response.status_code if exc.response is not None else 0
-            if status in (401, 403):
+            if _status(exc) in (401, 403):
                 raise  # the key itself is refused: fail the run, do not skip
-            if status >= 500 or status == 408:
+            if _transient_status(exc):
                 raise TransientDownloadError(str(exc)) from exc
             # Any other 4xx will not change on retry (a manual entry has no
             # file), while the engine retries a transient error every minute.
@@ -295,21 +342,14 @@ class IntervalsIcuConnector(ServiceConnector):
     ) -> str | None:
         log = self._tracker.sync_logger
         account = self.user_label
-        resp = await self._request(
-            "POST",
-            f"/athlete/{self._athlete_id}/activities",
-            params={"name": activity.name} if activity.name else None,
-            files={"file": (f"activity.{activity.format}", activity.content)},
-        )
-        if resp.status_code == 200:  # 201 means created; 200 means all duplicates
+        created, uploaded_id = await self._post_file(activity, task_name)
+        if not created:
             if log:
                 log.info(
                     f"[intervals.icu] Upload ({account}): {activity.external_id!r}"
                     f" {activity.start_time.date()} - duplicate, skipped"
                 )
             return None
-        created = [str(a["id"]) for a in resp.json().get("activities") or []]
-        uploaded_id = created[0] if created else None
         if activity.description:
             await self._set_description(activity, uploaded_id)
         if log:
@@ -318,6 +358,66 @@ class IntervalsIcuConnector(ServiceConnector):
                 f" {activity.start_time.date()} - success (id={uploaded_id})"
             )
         return None
+
+    async def _post_file(
+        self, activity: Activity, task_name: str | None
+    ) -> tuple[bool, str | None]:
+        """Upload the file: (False, None) if intervals.icu already had it,
+        else (True, the new activity's id when known).
+
+        A single slow answer must not stop the run, since the engine gives up
+        the whole destination on the first failed upload. So after no answer,
+        a lost connection or a 5xx the file is sent again. That is safe once
+        the first send is stored: intervals.icu recognises a file it already
+        has and answers 200 instead of storing it twice. A server still
+        analysing the first send could take the second for a new file, so
+        every resend first waits as long again as the answer wait: one pause
+        for every failure, rather than a guess from the kind of failure
+        whether the server is still at work.
+
+        A 200 leaves the activity as it is. It cannot tell this upload's
+        earlier try from an activity that was there before and may have been
+        edited, so nothing is written over it, and a lost description of this
+        upload's own is only reported.
+        """
+        log = self._tracker.sync_logger
+        attempt = 1
+        while True:
+            try:
+                resp = await self._request(
+                    "POST",
+                    f"/athlete/{self._athlete_id}/activities",
+                    timeout=(_REQUEST_TIMEOUT_S, _UPLOAD_RESPONSE_TIMEOUT_S),
+                    call_timeout=_UPLOAD_CALL_TIMEOUT_S,
+                    params={"name": activity.name} if activity.name else None,
+                    files={"file": (f"activity.{activity.format}", activity.content)},
+                )
+            except (requests.HTTPError, TransientDownloadError) as exc:
+                if not _worth_resending(exc) or attempt == _UPLOAD_ATTEMPTS:
+                    raise
+                message = (
+                    f"{activity.external_id!r} - {exc}; attempt"
+                    f" {attempt}/{_UPLOAD_ATTEMPTS} failed, sending again in"
+                    f" {_UPLOAD_RETRY_PAUSE_S:.0f}s"
+                )
+                if task_name is not None:
+                    await self._tracker.warn(task_name, message)  # logs it too
+                elif log:
+                    log.warning(
+                        f"[intervals.icu] Upload ({self.user_label}): {message}"
+                    )
+            else:
+                if resp.status_code != 200:  # 201: created
+                    return True, _first_id(resp)
+                if attempt > 1 and activity.description and log:
+                    log.warning(
+                        f"[intervals.icu] Upload ({self.user_label}):"
+                        f" {activity.external_id!r} - already on intervals.icu"
+                        " after a failed try, left as it is: description not set"
+                    )
+                return False, None
+            await asyncio.sleep(_UPLOAD_RETRY_PAUSE_S)
+            attempt += 1
 
     async def _set_description(
         self, activity: Activity, uploaded_id: str | None

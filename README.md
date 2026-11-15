@@ -311,6 +311,14 @@ Limits to know about:
 - Photos are not uploaded.
 - The API allows 2500 requests per 15 minutes and 5000 per day. On a `429` the sync
   waits for the time the server asks for (5 s if it does not say) and retries.
+- Uploads go one at a time, and intervals.icu takes one to two seconds to process
+  each file, so the first upload of a long history takes hours.
+- If an upload gets no answer within two minutes, loses its connection or gets a
+  server error, the file is sent again two minutes later, so that a server still
+  working on it can finish first; three tries in all. A file intervals.icu
+  already has is answered 200, not stored a second time and left as it is: if
+  that was this upload's own earlier try, its description is not set, and the
+  log says so.
 
 ## Desktop GUI
 

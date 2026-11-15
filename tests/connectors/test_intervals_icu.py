@@ -231,7 +231,7 @@ async def test_a_strava_stub_keeps_the_same_ride_from_being_uploaded_again(
     cache.load()
     rides = {
         "g1": datetime(2026, 7, 1, 8, 0, 20, tzinfo=timezone.utc),  # the stub's ride
-        "g2": datetime(2026, 7, 1, 8, 30, tzinfo=timezone.utc),  # not on Strava
+        "g2": datetime(2026, 7, 1, 9, 30, tzinfo=timezone.utc),  # not on Strava
     }
     for external_id, start in rides.items():
         entry = CacheEntry(

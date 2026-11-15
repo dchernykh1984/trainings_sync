@@ -18,6 +18,7 @@ from app.connectors.base import (
     UploadRefusedError,
 )
 from app.core.cache import ActivityCache, CacheEntry
+from app.core.copies import find_copies
 from app.core.planner import DownloadItem, SourceSpec, SyncPlanner
 from app.tracking.tracker import TaskTracker
 
@@ -643,6 +644,7 @@ class SyncExecutor:
             for (dest_id, _), metas in zip(self._destinations, dest_metas, strict=True)
         }
 
+        copies = find_copies(candidates, min_overlap_s)
         by_dest: dict[str, list[CacheEntry]] = {}
         for entry in candidates:
             shadower = _shadowed_by_higher_priority(
@@ -653,11 +655,16 @@ class SyncExecutor:
                 min_overlap_s,
                 fallback_s,
             )
+            better = copies.get((entry.external_id, entry.source_id))
             if shadower is not None:
                 shadower_label = self._source_user_label(shadower)
                 shadower_suffix = f" ({shadower_label})" if shadower_label else ""
                 self._log_upload_decision(
                     entry, None, f"shadowed by {self._name(shadower)}{shadower_suffix}"
+                )
+            elif better is not None:
+                self._log_upload_decision(
+                    entry, None, f"copy of {better.external_id!r}, not uploaded"
                 )
             else:
                 for dest_id, connector in self._destinations:

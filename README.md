@@ -574,7 +574,10 @@ Build the sync configuration visually:
 - **Sync Groups** - define what syncs where. Add sources (each with a priority;
   higher priority wins when the same activity exists in several sources) and
   destinations, both chosen from the connectors you defined. A group uploads
-  only what its own sources have. When one group writes to a folder and another
+  only what its own sources have. When one source holds a workout twice (it
+  was uploaded again, or two devices recorded it) and the two overlap for at
+  least half of the longer one, only one copy goes out: the FIT, else the TCX,
+  else the first upload. When one group writes to a folder and another
   reads that folder, a new activity reaches the second group on the next run; to
   send it on in the same run, give the second group the folder's sources instead. A
   connector whose service only gives or only takes activities is offered only in

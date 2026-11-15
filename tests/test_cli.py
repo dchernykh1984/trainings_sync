@@ -1007,7 +1007,7 @@ _KEPT = CacheEntry(
     external_id="10", source_id="garmin-uid", format="fit", start_time=_T, elapsed_s=60
 )
 _COPY = dataclasses.replace(_KEPT, external_id="20", format="gpx")
-_TO_DELETE = FoundCopy("intervals", "i2", _COPY, _KEPT)
+_TO_DELETE = FoundCopy("intervals", "i2", _COPY, _KEPT, "i1")
 
 
 class TestRunCopies:
@@ -1067,8 +1067,8 @@ class TestRunCopies:
         out = capsys.readouterr().out
         assert "Extra copies to delete: 1" in out
         assert (
-            "intervals: 'i2' on 2024-05-01, uploaded from garmin-uid '20' (gpx);"
-            " the one from garmin-uid '10' (fit) stays"
+            "intervals: 2024-05-01 delete 'i2' (from garmin-uid '20' (gpx)),"
+            " keep 'i1' (from garmin-uid '10' (fit))"
         ) in out
         t.ask.assert_not_called()
         t.remove.assert_not_awaited()

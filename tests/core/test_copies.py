@@ -158,7 +158,7 @@ async def test_the_activity_uploaded_from_the_copy_is_found_by_its_file(
     copy = _cached(cache, "20", b"gpx", fmt="gpx")
     service = _service({"i1": b"fit", "i2": b"gpx", "i3": b"another ride"})
     found = await plan_removals(cache, {"icu": service})
-    assert found == [FoundCopy("icu", "i2", copy, kept)]
+    assert found == [FoundCopy("icu", "i2", copy, kept, "i1")]
 
 
 async def test_every_activity_made_from_the_copy_is_found(
@@ -239,7 +239,10 @@ async def test_removal_deletes_what_was_found_and_reports_failures(
     copy = _cached(cache, "20", b"gpx", fmt="gpx")
     service = _service({})
     service.delete_activity.side_effect = [None, RuntimeError("refused")]
-    found = [FoundCopy("icu", "i2", copy, kept), FoundCopy("icu", "i3", copy, kept)]
+    found = [
+        FoundCopy("icu", "i2", copy, kept, "i1"),
+        FoundCopy("icu", "i3", copy, kept, "i1"),
+    ]
     failed = await remove_copies(found, {"icu": service})
     assert [c.args for c in service.delete_activity.await_args_list] == [
         ("i2",),
@@ -275,7 +278,7 @@ async def test_a_file_trainings_sync_uploaded_into_a_source_is_found(
     found = await plan_removals(cache, {"garmin": garmin})
     kept = cache.get_entry("10", "garmin")
     assert kept is not None
-    assert found == [FoundCopy("garmin", "20", strava, kept)]
+    assert found == [FoundCopy("garmin", "20", strava, kept, "10")]
     garmin.download_activity.assert_not_awaited()
 
 

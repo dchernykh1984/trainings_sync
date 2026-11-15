@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1354,7 +1355,11 @@ class TestSyncExecutorTracking:
         self, cache: ActivityCache
     ) -> None:
         cache.put(_entry(external_id="a1", source_id="garmin"), b"content-a1")
-        cache.put(_entry(external_id="a2", source_id="garmin"), b"content-a2")
+        later = _T0 + timedelta(hours=2)
+        cache.put(
+            _entry(external_id="a2", source_id="garmin", start_time=later),
+            b"content-a2",
+        )
         tracker = _make_tracker()
         executor = SyncExecutor(
             sources=[(_spec("garmin"), _source_conn())],
@@ -1665,6 +1670,27 @@ class TestSyncExecutorUploadPriority:
         assert dest.upload_activity.call_count == 1
         uploaded: Activity = dest.upload_activity.call_args[0][0]
         assert uploaded.external_id == "hi-act"
+
+    async def test_a_source_holding_one_ride_twice_uploads_one_copy(
+        self, cache: ActivityCache
+    ) -> None:
+        # Garmin's own FIT, and a GPX of the same ride uploaded to it later.
+        cache.put(dataclasses.replace(_entry(external_id="20"), format="gpx"), b"g")
+        cache.put(_entry(external_id="10"), b"f")
+        dest = _dest_conn()
+        tracker = _make_tracker()
+        tracker.sync_logger = MagicMock()
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), _source_conn())],
+            destinations=[("strava", dest)],
+            cache=cache,
+            tracker=tracker,
+        )
+        await executor.run(_START, _END)
+        [upload] = dest.upload_activity.call_args_list
+        assert upload.args[0].external_id == "10"
+        plan = [c.args[0] for c in tracker.sync_logger.debug.call_args_list]
+        assert any("'20'" in m and "copy of '10', not uploaded" in m for m in plan)
 
     async def test_both_uploaded_when_no_time_overlap(
         self, cache: ActivityCache

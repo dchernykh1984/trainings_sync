@@ -238,13 +238,17 @@ async def plan_removals(
         key=lambda pair: pair[0].start_time,
     )
     sources = {e.source_id for e in healthy}
-    found: list[FoundCopy] = []
+    found: dict[tuple[str, str], FoundCopy] = {}
     for uid, connector in connectors.items():
         if uid in sources:
-            found += await _own_copies(uid, connector, healthy, cache, pairs)
+            items = await _own_copies(uid, connector, healthy, cache, pairs)
         else:
-            found += await _uploaded_copies(uid, connector, cache, pairs)
-    return found
+            items = await _uploaded_copies(uid, connector, cache, pairs)
+        # Two pairs can share a file - a GPX built from one Strava copy and
+        # uploaded into Garmin, say - and so name one activity twice.
+        for item in items:
+            found.setdefault((item.connector_id, item.activity_id), item)
+    return list(found.values())
 
 
 async def remove_copies(

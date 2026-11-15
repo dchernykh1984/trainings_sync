@@ -171,6 +171,20 @@ async def test_every_activity_made_from_the_copy_is_found(
     assert [f.activity_id for f in found] == ["i2", "i3"]
 
 
+async def test_an_activity_two_pairs_share_is_listed_once(
+    cache: ActivityCache,
+) -> None:
+    # Garmin's GPX copy of a ride is Strava's copy byte for byte: each pair
+    # finds the same intervals.icu activity.
+    _cached(cache, "10", b"fit")
+    _cached(cache, "20", b"gpx", fmt="gpx")
+    _cached(cache, "s1", b"strava", source_id="strava")
+    _cached(cache, "s2", b"gpx", fmt="gpx", source_id="strava")
+    service = _service({"i1": b"fit", "i2": b"gpx", "i3": b"strava"})
+    found = await plan_removals(cache, {"icu": service})
+    assert [f.activity_id for f in found] == ["i2"]
+
+
 @pytest.mark.parametrize(
     "files",
     [

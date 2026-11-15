@@ -14,7 +14,9 @@ from app.credentials.base import CredentialRequest
 # connector across renames instead of being silently orphaned. Configs written
 # before uids existed simply get uid == id (see `_parse_connector`).
 @dataclass(frozen=True)
-class GarminConnectorConfig:
+class CredentialOnlyConfig:
+    """A connector whose config holds nothing but a credential."""
+
     id: str
     credential: CredentialRequest
     uid: str = ""
@@ -26,6 +28,10 @@ class GarminConnectorConfig:
         # pre-uid config file gets too.
         if not self.uid:
             object.__setattr__(self, "uid", self.id)
+
+
+class GarminConnectorConfig(CredentialOnlyConfig):
+    pass
 
 
 @dataclass(frozen=True)
@@ -44,16 +50,8 @@ class StravaConnectorConfig:
             object.__setattr__(self, "uid", self.id)
 
 
-@dataclass(frozen=True)
-class IntervalsIcuConnectorConfig:
-    id: str
-    credential: CredentialRequest
-    uid: str = ""
-
-    def __post_init__(self) -> None:
-        # Same identity rule as GarminConnectorConfig.
-        if not self.uid:
-            object.__setattr__(self, "uid", self.id)
+class IntervalsIcuConnectorConfig(CredentialOnlyConfig):
+    pass
 
 
 @dataclass(frozen=True)
@@ -79,11 +77,19 @@ ConnectorConfig = (
 )
 
 # The connector configs that sign in with a credential; the rest need none.
-CREDENTIAL_CONNECTOR_CONFIGS = (
-    GarminConnectorConfig,
-    StravaConnectorConfig,
-    IntervalsIcuConnectorConfig,
-)
+CREDENTIAL_CONNECTOR_CONFIGS = (CredentialOnlyConfig, StravaConnectorConfig)
+
+# The connector types whose config holds nothing but a credential, by type
+# name. Adding such a connector takes no parser branch: a config subclass in
+# `_CredentialOnly` and `ConnectorConfig`, its entry here, its connector in
+# connector_factory._CREDENTIAL_ONLY_CONNECTORS and its type in the GUI's
+# CONNECTOR_TYPES (tests check the last two against this table).
+# The union, not the base class, lets a parsed config keep its own type.
+_CredentialOnly = GarminConnectorConfig | IntervalsIcuConnectorConfig
+CREDENTIAL_ONLY_CONFIGS: dict[str, type[_CredentialOnly]] = {
+    "garmin": GarminConnectorConfig,
+    "intervals_icu": IntervalsIcuConnectorConfig,
+}
 
 # Connector types that can play only one role in a sync group: a service that
 # hands out no files cannot be a source, and one that takes none cannot be a
@@ -190,8 +196,9 @@ def _parse_connector(raw: object, index: int, base_dir: Path) -> ConnectorConfig
         raise ConfigError(f"{where}: 'uid' must be a string")
     connector_uid = raw_uid or connector_id
 
-    if connector_type == "garmin":
-        return GarminConnectorConfig(
+    credential_only = CREDENTIAL_ONLY_CONFIGS.get(connector_type)
+    if credential_only is not None:
+        return credential_only(
             id=connector_id,
             uid=connector_uid,
             credential=_parse_credential(raw, where),
@@ -201,12 +208,6 @@ def _parse_connector(raw: object, index: int, base_dir: Path) -> ConnectorConfig
             id=connector_id,
             uid=connector_uid,
             client_id=_require_int(raw, "client_id", where),
-            credential=_parse_credential(raw, where),
-        )
-    if connector_type == "intervals_icu":
-        return IntervalsIcuConnectorConfig(
-            id=connector_id,
-            uid=connector_uid,
             credential=_parse_credential(raw, where),
         )
     if connector_type == "local_folder":

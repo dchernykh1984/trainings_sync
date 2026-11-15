@@ -15,6 +15,7 @@ from app.connectors.local_folder import LocalFolderConnector
 from app.connectors.strava import StravaConnector
 from app.core.cache import ActivityCache, CacheEntry
 from app.core.config import (
+    CREDENTIAL_ONLY_CONFIGS,
     AppConfig,
     ConnectorConfig,
     GarminConnectorConfig,
@@ -25,6 +26,7 @@ from app.core.config import (
     SyncGroupConfig,
 )
 from app.core.connector_factory import (
+    _CREDENTIAL_ONLY_CONNECTORS,
     build_connectors,
     build_wellness_connectors,
     resolve_group_destinations,
@@ -192,6 +194,12 @@ async def test_intervals_icu_connector_gets_its_own_credential(
     assert isinstance(intervals, IntervalsIcuConnector)
     assert intervals._athlete_id == "i42"
     assert intervals._session.auth == ("API_KEY", "api-key")
+
+
+def test_every_credential_only_config_builds_a_connector() -> None:
+    # A type added to the config table alone would be requested a credential
+    # and then fail to build.
+    assert set(_CREDENTIAL_ONLY_CONNECTORS) == set(CREDENTIAL_ONLY_CONFIGS.values())
 
 
 async def test_local_connector_builds_local_connector(

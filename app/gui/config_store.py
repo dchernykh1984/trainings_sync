@@ -7,11 +7,10 @@ from datetime import date
 from pathlib import Path
 
 from app.core.config import (
+    CREDENTIAL_ONLY_CONFIGS,
     AppConfig,
     ConnectorConfig,
-    GarminConnectorConfig,
     GroupSourceConfig,
-    IntervalsIcuConnectorConfig,
     LocalFolderConnectorConfig,
     StravaConnectorConfig,
     SyncGroupConfig,
@@ -23,12 +22,13 @@ _DEFAULT_CONFIG_DIR = Path.home() / ".config" / "trainings-sync"
 
 # Single source of truth for the connector types the GUI supports. The GUI's
 # type dropdown is built from this, and every entry must be handled by
-# _connector_to_app / _serialize_connector below. To add a new connector,
-# append its type here and extend those two functions (the round-trip test
-# test_every_connector_type_is_convertible enforces the latter).
+# _connector_to_app / _serialize_connector below. To add a connector that needs
+# only a credential, append its type here and give it an entry in
+# CREDENTIAL_ONLY_CONFIGS (app.core.config); any other kind also extends those
+# two functions (test_every_connector_type_is_convertible checks).
 CONNECTOR_TYPES: tuple[str, ...] = ("garmin", "strava", "intervals_icu", "local_folder")
 # The types that sign in with an account from the Credentials tab.
-CREDENTIAL_TYPES: tuple[str, ...] = ("garmin", "strava", "intervals_icu")
+CREDENTIAL_TYPES: tuple[str, ...] = ("strava", *CREDENTIAL_ONLY_CONFIGS)
 
 
 # ---------------------------------------------------------------------------
@@ -57,7 +57,7 @@ class CredentialEntry:
 @dataclass
 class ConnectorEntry:
     id: str
-    type: str  # "garmin" | "strava" | "intervals_icu" | "local_folder"
+    type: str  # one of CONNECTOR_TYPES
     # Stable identity, unaffected by renaming `id`. Empty means the parsers
     # fill it in from the name, which is what a pre-uid config gets.
     uid: str = ""
@@ -314,14 +314,13 @@ def _connector_to_app(c: ConnectorEntry) -> ConnectorConfig:
         url=c.credential_url,
         login=c.credential_login or None,
     )
-    if c.type == "garmin":
-        return GarminConnectorConfig(id=c.id, uid=uid, credential=credential)
+    credential_only = CREDENTIAL_ONLY_CONFIGS.get(c.type)
+    if credential_only is not None:
+        return credential_only(id=c.id, uid=uid, credential=credential)
     if c.type == "strava":
         return StravaConnectorConfig(
             id=c.id, uid=uid, client_id=c.client_id, credential=credential
         )
-    if c.type == "intervals_icu":
-        return IntervalsIcuConnectorConfig(id=c.id, uid=uid, credential=credential)
     if c.type == "local_folder":
         return LocalFolderConnectorConfig(
             id=c.id,

@@ -11,6 +11,7 @@ from app.connectors.wellness_base import WellnessConnector
 from app.core.config import (
     CREDENTIAL_CONNECTOR_CONFIGS,
     AppConfig,
+    CredentialOnlyConfig,
     GarminConnectorConfig,
     IntervalsIcuConnectorConfig,
     LocalFolderConnectorConfig,
@@ -18,10 +19,19 @@ from app.core.config import (
     SyncGroupConfig,
 )
 from app.core.planner import SourceSpec
-from app.credentials.base import CredentialProvider, StravaCredentials
+from app.credentials.base import CredentialProvider, Credentials, StravaCredentials
 from app.tracking.tracker import TaskTracker
 
 OnStravaTokenRefresh = Callable[[str, StravaCredentials, str], None]
+
+# The connector each credential-only config builds, from that credential and
+# the tracker alone.
+_CREDENTIAL_ONLY_CONNECTORS: dict[
+    type[CredentialOnlyConfig], Callable[[Credentials, TaskTracker], ServiceConnector]
+] = {
+    GarminConnectorConfig: GarminConnector,
+    IntervalsIcuConnectorConfig: IntervalsIcuConnector,
+}
 
 
 def _strava_callback(
@@ -53,9 +63,7 @@ async def build_connectors(
     result: dict[str, ServiceConnector] = {}
     for cfg in config.connectors:
         connector: ServiceConnector
-        if isinstance(cfg, GarminConnectorConfig):
-            connector = GarminConnector(credentials=next(creds), tracker=tracker)
-        elif isinstance(cfg, StravaConnectorConfig):
+        if isinstance(cfg, StravaConnectorConfig):
             raw = next(creds)
             strava_creds = StravaCredentials(
                 client_id=cfg.client_id,
@@ -67,8 +75,9 @@ async def build_connectors(
                 tracker=tracker,
                 on_token_refresh=_strava_callback(cfg.uid, on_strava_token_refresh),
             )
-        elif isinstance(cfg, IntervalsIcuConnectorConfig):
-            connector = IntervalsIcuConnector(credentials=next(creds), tracker=tracker)
+        elif isinstance(cfg, CredentialOnlyConfig):
+            make = _CREDENTIAL_ONLY_CONNECTORS[type(cfg)]
+            connector = make(next(creds), tracker)
         else:  # LocalFolderConnectorConfig - source mode (no cache/dest_id)
             connector = LocalFolderConnector(folder=cfg.folder, tracker=tracker)
         result[cfg.uid] = connector

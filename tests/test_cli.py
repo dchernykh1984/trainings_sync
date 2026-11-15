@@ -1115,6 +1115,8 @@ class TestRunCopies:
         captured = capsys.readouterr()
         assert "Deleted 0 of 1." in captured.out
         assert "error: intervals: 'i2': refused" in captured.err
+        log = (tmp_path / "sync.log").read_text(encoding="utf-8")
+        assert "[copies] intervals: 'i2' kept: refused" in log
 
     async def test_missing_credentials_exit_1(self, tmp_path: Path) -> None:
         missing = AsyncMock(side_effect=CredentialsNotFoundError(_STRAVA_CRED))

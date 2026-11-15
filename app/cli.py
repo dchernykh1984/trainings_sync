@@ -397,6 +397,7 @@ async def _delete_copies(
     for item, exc in failed:
         where = names.get(item.connector_id, item.connector_id)
         print(f"error: {where}: {item.activity_id!r}: {exc}", file=sys.stderr)
+        sync_logger.warning(f"[copies] {where}: {item.activity_id!r} kept: {exc}")
     if failed:
         sys.exit(1)
 

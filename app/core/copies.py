@@ -3,13 +3,35 @@ two devices at once."""
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-from datetime import timedelta
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 
-from app.core.cache import CacheEntry
+from app.connectors.base import (
+    ActivityMeta,
+    ActivityUnavailableError,
+    ServiceConnector,
+    TransientDownloadError,
+)
+from app.core.cache import ActivityCache, CacheEntry
 
 # A device's own file first: a GPX is most often a conversion of one.
 _FORMAT_RANK: dict[str, int] = {"fit": 0, "tcx": 1, "gpx": 2}
+# A service files an activity under its local day, a day off the UTC one.
+_DAY = timedelta(days=1)
+# A service may read the start of a file a little differently.
+_SLACK = timedelta(minutes=5)
+
+
+@dataclass(frozen=True)
+class FoundCopy:
+    """An activity to delete: a service holds it because trainings-sync
+    uploaded a copy of a workout there, and holds the kept copy's too."""
+
+    connector_id: str  # the connector's uid
+    activity_id: str  # the activity there
+    copy: CacheEntry  # the entry it was uploaded from
+    kept: CacheEntry  # the entry whose activity stays
 
 
 def _key(entry: CacheEntry) -> tuple[str, str]:
@@ -62,3 +84,98 @@ def find_copies(
         if kept:
             better[_key(entry)] = min(kept, key=_rank)
     return better
+
+
+def _end(entry: CacheEntry) -> datetime:
+    return entry.start_time + timedelta(seconds=entry.elapsed_s or 0)
+
+
+async def _uploads_of(
+    connector: ServiceConnector,
+    metas: list[ActivityMeta],
+    cache: ActivityCache,
+    copy: CacheEntry,
+    kept: CacheEntry,
+) -> tuple[list[str], list[str]]:
+    """The ids of the listed activities whose file is the copy's, and of
+    those whose file is the kept one's."""
+    lo = min(copy.start_time, kept.start_time) - _SLACK
+    hi = max(_end(copy), _end(kept))
+    files = (cache.read_content(copy), cache.read_content(kept))
+    found: tuple[list[str], list[str]] = ([], [])
+    for meta in metas:
+        if not meta.downloadable or not lo <= meta.start_time <= hi:
+            continue
+        try:
+            content = (await connector.download_activity(meta)).content
+        except (ActivityUnavailableError, TransientDownloadError):
+            continue  # unread, so it is taken for neither
+        for ids, file in zip(found, files, strict=True):
+            if content == file:
+                ids.append(meta.external_id)
+    return found
+
+
+async def _check(
+    uid: str,
+    connector: ServiceConnector,
+    metas: list[ActivityMeta],
+    cache: ActivityCache,
+    copy: CacheEntry,
+    kept: CacheEntry,
+) -> list[FoundCopy]:
+    """The activities the copy's file made there, if the kept copy's is
+    there as well: else the service holds the workout once, and that stays."""
+    if uid not in kept.uploaded_to:
+        return []
+    copy_ids, kept_ids = await _uploads_of(connector, metas, cache, copy, kept)
+    if not kept_ids:
+        return []
+    # Two copies of one file are one activity there: it is the kept one.
+    return [FoundCopy(uid, i, copy, kept) for i in copy_ids if i not in kept_ids]
+
+
+async def plan_removals(
+    cache: ActivityCache,
+    connectors: Mapping[str, ServiceConnector],
+    min_overlap_s: int = 60,
+) -> list[FoundCopy]:
+    """The activities `connectors` (keyed by uid) hold twice because
+    trainings-sync uploaded two copies of one workout there.
+
+    Both activities are found by the files the service hands back, which must
+    match the cached ones byte for byte, so nothing is deleted on a guess.
+    """
+    healthy = cache.healthy_entries()
+    entries = {(e.external_id, e.source_id): e for e in healthy}
+    pairs = sorted(
+        (
+            (entries[key], kept)
+            for key, kept in find_copies(healthy, min_overlap_s).items()
+        ),
+        key=lambda pair: pair[0].start_time,
+    )
+    found: list[FoundCopy] = []
+    for uid, connector in connectors.items():
+        theirs = [(copy, kept) for copy, kept in pairs if uid in copy.uploaded_to]
+        if not theirs:
+            continue
+        first = min(min(c.start_time, k.start_time) for c, k in theirs).date() - _DAY
+        last = max(max(_end(c), _end(k)) for c, k in theirs).date() + _DAY
+        metas = await connector.list_activities(first, last)
+        for copy, kept in theirs:
+            found += await _check(uid, connector, metas, cache, copy, kept)
+    return found
+
+
+async def remove_copies(
+    found: Iterable[FoundCopy], connectors: Mapping[str, ServiceConnector]
+) -> list[tuple[FoundCopy, Exception]]:
+    """Delete every activity `found` names, one by one; the ones that failed."""
+    failed: list[tuple[FoundCopy, Exception]] = []
+    for item in found:
+        try:
+            await connectors[item.connector_id].delete_activity(item.activity_id)
+        except Exception as exc:  # one refused delete must not stop the rest
+            failed.append((item, exc))
+    return failed

@@ -486,6 +486,24 @@ Limits to know about:
   below that. On a `429` the sync waits until the used-up window starts over (at
   most 15 minutes at a time) and retries.
 
+### Extra copies of one workout
+
+Earlier versions sent on both copies of a workout that one source held twice
+(it was uploaded again, or two devices recorded it), so a destination could end
+up with the workout twice. To find the copies that went out that way:
+
+```bash
+uv run trainings-sync --config config/config.json --creds-json config/creds.json --copies
+```
+
+It lists each extra activity with the copy it was uploaded from and the copy
+that stays, and changes nothing. `--delete-copies` lists them the same way and
+then, once you type `yes`, deletes them; deleting cannot be undone. Only
+intervals.icu activities are deleted, and only when the service hands back both
+files - the extra one and the kept one - byte for byte as they were uploaded,
+so an activity is never deleted on a guess. A workout a destination holds once
+is left as it is.
+
 ## Desktop GUI
 
 If you would rather not edit JSON config files by hand, a desktop GUI is

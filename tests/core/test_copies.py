@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import dataclasses
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
-from app.core.cache import CacheEntry
-from app.core.copies import find_copies
+import pytest
+
+from app.connectors.base import Activity, ActivityMeta, ActivityUnavailableError
+from app.core.cache import ActivityCache, CacheEntry
+from app.core.copies import FoundCopy, find_copies, plan_removals, remove_copies
 
 _T0 = datetime(2026, 5, 1, 8, 0, tzinfo=timezone.utc)
 
@@ -84,3 +90,158 @@ def test_an_entry_stays_when_its_only_copy_goes() -> None:
         _entry("3", minutes_later=40),
     )
     assert _dropped(*entries) == {"2": "1"}
+
+
+# ---------------------------------------------------------------------------
+# plan_removals / remove_copies
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def cache(tmp_path: Path) -> ActivityCache:
+    c = ActivityCache(tmp_path)
+    c.load()
+    return c
+
+
+def _cached(
+    cache: ActivityCache,
+    external_id: str,
+    content: bytes,
+    *,
+    fmt: str = "fit",
+    uploaded_to: tuple[str, ...] = ("icu",),
+) -> CacheEntry:
+    entry = dataclasses.replace(_entry(external_id, fmt=fmt), uploaded_to=uploaded_to)
+    return cache.put(entry, content)
+
+
+def _service(files: dict[str, bytes], **starts: datetime) -> MagicMock:
+    """A service holding one activity per id in `files`, at _T0 unless the id
+    is given another start in `starts`."""
+
+    def meta(activity_id: str) -> ActivityMeta:
+        start = starts.get(activity_id, _T0)
+        return ActivityMeta(
+            external_id=activity_id,
+            name="",
+            sport_type="",
+            start_time=start,
+            elapsed_s=3600,
+        )
+
+    async def download(m: ActivityMeta) -> Activity:
+        content = files[m.external_id]
+        if content == b"unreadable":
+            raise ActivityUnavailableError(m.external_id)
+        return Activity(
+            external_id=m.external_id,
+            name="",
+            sport_type="",
+            start_time=m.start_time,
+            content=content,
+            format="fit",
+        )
+
+    service = MagicMock()
+    service.list_activities = AsyncMock(return_value=[meta(i) for i in files])
+    service.download_activity = AsyncMock(side_effect=download)
+    service.delete_activity = AsyncMock()
+    return service
+
+
+async def test_the_activity_uploaded_from_the_copy_is_found_by_its_file(
+    cache: ActivityCache,
+) -> None:
+    kept = _cached(cache, "10", b"fit")
+    copy = _cached(cache, "20", b"gpx", fmt="gpx")
+    service = _service({"i1": b"fit", "i2": b"gpx", "i3": b"another ride"})
+    found = await plan_removals(cache, {"icu": service})
+    assert found == [FoundCopy("icu", "i2", copy, kept)]
+
+
+async def test_every_activity_made_from_the_copy_is_found(
+    cache: ActivityCache,
+) -> None:
+    _cached(cache, "10", b"fit")
+    _cached(cache, "20", b"gpx", fmt="gpx")
+    service = _service({"i1": b"fit", "i2": b"gpx", "i3": b"gpx"})
+    found = await plan_removals(cache, {"icu": service})
+    assert [f.activity_id for f in found] == ["i2", "i3"]
+
+
+@pytest.mark.parametrize(
+    "files",
+    [
+        {"i2": b"gpx"},  # the kept copy is not there
+        {"i1": b"unreadable", "i2": b"gpx"},  # nor can it be read
+        {"i1": b"fit"},  # the copy is not there, or is gone already
+    ],
+)
+async def test_a_workout_held_once_is_left_alone(
+    cache: ActivityCache, files: dict[str, bytes]
+) -> None:
+    _cached(cache, "10", b"fit")
+    _cached(cache, "20", b"gpx", fmt="gpx")
+    assert await plan_removals(cache, {"icu": _service(files)}) == []
+
+
+async def test_a_copy_whose_kept_one_was_never_uploaded_there_is_left_alone(
+    cache: ActivityCache,
+) -> None:
+    _cached(cache, "10", b"fit", uploaded_to=())
+    _cached(cache, "20", b"gpx", fmt="gpx")
+    service = _service({"i2": b"gpx"})
+    assert await plan_removals(cache, {"icu": service}) == []
+    service.download_activity.assert_not_awaited()
+
+
+async def test_two_copies_of_one_file_are_one_activity_that_stays(
+    cache: ActivityCache,
+) -> None:
+    _cached(cache, "10", b"same")
+    _cached(cache, "20", b"same", fmt="gpx")
+    assert await plan_removals(cache, {"icu": _service({"i1": b"same"})}) == []
+
+
+async def test_only_activities_at_the_copy_time_are_downloaded(
+    cache: ActivityCache,
+) -> None:
+    _cached(cache, "10", b"fit")
+    _cached(cache, "20", b"gpx", fmt="gpx")
+    service = _service(
+        {"i1": b"fit", "i2": b"gpx", "i9": b"next day"},
+        i9=_T0 + timedelta(days=1),
+    )
+    await plan_removals(cache, {"icu": service})
+    downloaded = [
+        c.args[0].external_id for c in service.download_activity.await_args_list
+    ]
+    assert sorted(downloaded) == ["i1", "i2"]
+    first, last = service.list_activities.await_args.args
+    assert first < _T0.date() < last
+
+
+async def test_a_service_no_copy_went_to_is_not_asked(cache: ActivityCache) -> None:
+    _cached(cache, "10", b"fit")
+    _cached(cache, "20", b"gpx", fmt="gpx")
+    icu, other = _service({}), _service({})
+    await plan_removals(cache, {"icu": icu, "elsewhere": other})
+    icu.list_activities.assert_awaited_once()
+    other.list_activities.assert_not_awaited()
+
+
+async def test_removal_deletes_what_was_found_and_reports_failures(
+    cache: ActivityCache,
+) -> None:
+    kept = _cached(cache, "10", b"fit")
+    copy = _cached(cache, "20", b"gpx", fmt="gpx")
+    service = _service({})
+    service.delete_activity.side_effect = [None, RuntimeError("refused")]
+    found = [FoundCopy("icu", "i2", copy, kept), FoundCopy("icu", "i3", copy, kept)]
+    failed = await remove_copies(found, {"icu": service})
+    assert [c.args for c in service.delete_activity.await_args_list] == [
+        ("i2",),
+        ("i3",),
+    ]
+    assert [(item.activity_id, str(exc)) for item, exc in failed] == [("i3", "refused")]

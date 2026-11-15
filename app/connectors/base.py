@@ -210,6 +210,9 @@ class Activity(ActivityMeta):
 class ServiceConnector(ABC):
     _max_concurrent: int = 5
     supports_media_upload: bool = False
+    # Whether delete_activity works: only then may trainings-sync remove the
+    # extra copies it put on the service (see app/core/copies.py).
+    supports_delete: bool = False
 
     def __init__(self, tracker: TaskTracker) -> None:
         self._tracker = tracker
@@ -235,6 +238,10 @@ class ServiceConnector(ABC):
     async def upload_activity(
         self, activity: Activity, *, task_name: str | None = None
     ) -> str | None: ...
+
+    async def delete_activity(self, external_id: str) -> None:
+        """Delete one activity from the service, where supports_delete."""
+        raise NotImplementedError(f"{type(self).__name__} cannot delete activities")
 
     def has_activity(self, external_id: str, source_id: str) -> bool:
         """Return True if the activity is known to exist at this destination.

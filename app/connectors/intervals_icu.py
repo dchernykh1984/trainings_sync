@@ -120,6 +120,7 @@ class IntervalsIcuConnector(HttpApiConnector):
     _default_retry_after_s = _DEFAULT_RETRY_AFTER_S
     # Few calls in flight: the API also caps every IP at 10 calls per second.
     _max_concurrent = 2
+    supports_delete = True
 
     def __init__(self, credentials: Credentials, tracker: TaskTracker) -> None:
         super().__init__(tracker)
@@ -264,6 +265,12 @@ class IntervalsIcuConnector(HttpApiConnector):
             format=fmt,
             description=self._descriptions.get(meta.external_id),
         )
+
+    async def delete_activity(self, external_id: str) -> None:
+        await self._request("DELETE", f"/activity/{external_id}")
+        log = self._tracker.sync_logger
+        if log:
+            log.info(f"[intervals.icu] Delete ({self.user_label}): {external_id!r}")
 
     async def upload_activity(
         self, activity: Activity, *, task_name: str | None = None

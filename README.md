@@ -606,7 +606,9 @@ Build the sync configuration visually:
   only what its own sources have. When one source holds a workout twice (it
   was uploaded again, or two devices recorded it) and the two overlap for at
   least half of the longer one, only one copy goes out: a FIT before a TCX
-  before a GPX, and of two alike the first upload. When one group writes to a folder and another
+  before a GPX, and of two alike the longer, then the first upload. A copy that
+  runs over a tenth longer than the one it would give way to holds part of the
+  workout the other lacks, so then both go out. When one group writes to a folder and another
   reads that folder, a new activity reaches the second group on the next run; to
   send it on in the same run, give the second group the folder's sources instead. A
   connector whose service only gives or only takes activities is offered only in

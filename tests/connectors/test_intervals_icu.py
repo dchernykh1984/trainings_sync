@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import gzip
-import json
 import ssl
 from collections.abc import Coroutine
 from datetime import date, datetime, timezone
@@ -41,7 +40,13 @@ from app.core.cache import ActivityCache, CacheEntry
 from app.core.planner import SourceSpec
 from app.core.sync import SyncExecutor
 from app.credentials.base import Credentials
-from app.tracking.tracker import ProgressRenderer, Task, TaskStatus, TaskTracker
+from app.tracking.tracker import TaskStatus, TaskTracker
+
+from .api_fakes import FIT as _FIT
+from .api_fakes import FakeRenderer as _FakeRenderer
+from .api_fakes import calls as _calls
+from .api_fakes import logged as _logged
+from .api_fakes import resp as _resp
 
 _KEY = "secret-api-key"
 _CREDENTIALS = Credentials(login="", password=_KEY)
@@ -49,48 +54,8 @@ _DT = datetime(2026, 1, 1, 8, 0, tzinfo=timezone.utc)
 _META = ActivityMeta(
     external_id="i101", name="Ride", sport_type="Ride", start_time=_DT, elapsed_s=60
 )
-_FIT = b"\x0e\x10\x00\x00\x00\x00\x00\x00.FIT" + b"\x00" * 8
 _GPX = b'<?xml version="1.0"?><gpx version="1.1"><trk/></gpx>'
 _TCX = b'<?xml version="1.0"?><TrainingCenterDatabase xmlns="x"/>'
-
-
-class _FakeRenderer(ProgressRenderer):
-    def __init__(self) -> None:
-        self.failed: list[Task] = []
-        self.warnings: list[str] = []
-
-    def on_task_added(self, task: Task) -> None:
-        pass
-
-    def on_progress(self, task: Task) -> None:
-        pass
-
-    def on_task_done(self, task: Task) -> None:
-        pass
-
-    def on_task_failed(self, task: Task) -> None:
-        self.failed.append(task)
-
-    def on_task_warning(self, task: Task, message: str) -> None:
-        self.warnings.append(message)
-
-    def on_total_updated(self, task: Task) -> None:
-        pass
-
-
-def _resp(
-    status: int = 200,
-    *,
-    body: object = None,
-    content: bytes = b"",
-    headers: dict[str, str] | None = None,
-) -> requests.Response:
-    r = requests.Response()
-    r.status_code = status
-    r._content = json.dumps(body).encode() if body is not None else content
-    r.headers.update(headers or {})
-    r.url = f"{_BASE_URL}/x"
-    return r
 
 
 @pytest.fixture
@@ -116,14 +81,6 @@ def connector(
     c = IntervalsIcuConnector(_CREDENTIALS, TaskTracker(renderer, sync_logger=log))
     c._session = MagicMock(request=http)
     return c
-
-
-def _calls(http: MagicMock) -> list[tuple[str, str]]:
-    return [(call.args[0], call.args[1]) for call in http.call_args_list]
-
-
-def _logged(log: MagicMock, level: str) -> str:
-    return " ".join(str(call.args[0]) for call in getattr(log, level).call_args_list)
 
 
 @pytest.fixture
@@ -722,7 +679,7 @@ async def test_only_an_upload_gets_the_longer_call_bound(
         bounds.append(timeout_s)
         return await _run_with_timeout(coro, timeout_s)
 
-    monkeypatch.setattr("app.connectors.intervals_icu._run_with_timeout", spy)
+    monkeypatch.setattr("app.connectors.http_api._run_with_timeout", spy)
     http.side_effect = [_resp(body=[]), _resp(201, body={"activities": [{"id": "i9"}]})]
     await connector.list_activities(date(2026, 1, 1), date(2026, 1, 1))
     await connector.upload_activity(_activity())

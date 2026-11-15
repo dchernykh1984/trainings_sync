@@ -3,6 +3,7 @@ two devices at once."""
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -21,6 +22,8 @@ _FORMAT_RANK: dict[str, int] = {"fit": 0, "tcx": 1, "gpx": 2}
 _DAY = timedelta(days=1)
 # A service may read the start of a file a little differently.
 _SLACK = timedelta(minutes=5)
+# The root of a GPX trainings-sync builds (see app/connectors/strava.py).
+_OWN_GPX = re.compile(rb'<gpx\b[^>]*\bcreator="trainings-sync"')
 
 
 @dataclass(frozen=True)
@@ -162,16 +165,26 @@ def _origin(
     healthy: list[CacheEntry], cache: ActivityCache, uid: str, entry: CacheEntry
 ) -> CacheEntry | None:
     """The entry of another source that trainings-sync uploaded to `uid` and
-    that became `entry` there, byte for byte; None when it came from elsewhere."""
-    near = [
-        e
-        for e in healthy
-        if e.source_id != uid
-        and uid in e.uploaded_to
-        and abs(e.start_time - entry.start_time) <= _SLACK
-    ]
-    content = cache.read_content(entry) if near else b""
-    return next((e for e in near if cache.read_content(e) == content), None)
+    that became `entry` there, byte for byte; None when it came from elsewhere.
+
+    Only a file trainings-sync built itself counts. A device's own file can sit
+    in two services byte for byte with no upload by trainings-sync, and
+    uploaded_to also marks an activity that was only matched to one there.
+    """
+    content = cache.read_content(entry)
+    if _OWN_GPX.search(content, 0, 1024) is None:
+        return None
+    return next(
+        (
+            e
+            for e in healthy
+            if e.source_id != uid
+            and uid in e.uploaded_to
+            and abs(e.start_time - entry.start_time) <= _SLACK
+            and cache.read_content(e) == content
+        ),
+        None,
+    )
 
 
 async def _own_copies(

@@ -63,7 +63,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         prog="trainings-sync",
         description=(
             "Sync training activities between Garmin, Strava, intervals.icu,"
-            " and local folders."
+            " Ride with GPS, and local folders."
         ),
     )
     parser.add_argument(
@@ -102,7 +102,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help=(
             "JSON credentials file"
-            " (required for Garmin/Strava/intervals.icu connectors)"
+            " (required for every connector that signs in to a service)"
         ),
     )
     creds_group.add_argument(

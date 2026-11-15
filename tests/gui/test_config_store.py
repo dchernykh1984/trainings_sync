@@ -16,6 +16,7 @@ from app.core.config import (
     GarminConnectorConfig,
     IntervalsIcuConnectorConfig,
     LocalFolderConnectorConfig,
+    RideWithGpsConnectorConfig,
     StravaConnectorConfig,
 )
 from app.credentials.base import CredentialRequest
@@ -609,6 +610,37 @@ def test_to_app_config_strava_connector_with_login(store: ConfigStore) -> None:
     strava = app_cfg.connectors[0]
     assert isinstance(strava, StravaConnectorConfig)
     assert strava.credential.login == "my_client_secret"
+
+
+def test_ride_with_gps_connector_round_trips_to_the_app_config() -> None:
+    entry = ConnectorEntry(
+        id="rwgps",
+        uid="u2",
+        type="ride_with_gps",
+        credential_service="Ride with GPS",
+        credential_url="https://ridewithgps.com/api/v1",
+        credential_login="api-key",
+    )
+    saved = _serialize_connector(entry)
+    assert saved == {
+        "id": "rwgps",
+        "uid": "u2",
+        "type": "ride_with_gps",
+        "credential_service": "Ride with GPS",
+        "credential_url": "https://ridewithgps.com/api/v1",
+        "credential_login": "api-key",
+    }
+    assert _connector_to_app(_parse_connector_entry(saved)) == (
+        RideWithGpsConnectorConfig(
+            id="rwgps",
+            uid="u2",
+            credential=CredentialRequest(
+                service="Ride with GPS",
+                url="https://ridewithgps.com/api/v1",
+                login="api-key",
+            ),
+        )
+    )
 
 
 def test_intervals_icu_connector_round_trips_to_the_app_config() -> None:

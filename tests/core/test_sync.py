@@ -14,6 +14,7 @@ from app.connectors.base import (
     MediaItem,
     RateLimitError,
     TransientDownloadError,
+    UploadDeferredError,
     UploadRefusedError,
 )
 from app.core.cache import ActivityCache, CacheEntry
@@ -550,6 +551,37 @@ class TestSyncExecutorUpload:
             logged
         )
         assert "[upload] 'ride' (garmin) -> strava: ok" in logged
+
+    async def test_a_deferred_file_waits_for_the_next_run_and_the_rest_goes(
+        self, cache: ActivityCache
+    ) -> None:
+        cache.put(_entry("odd", "garmin"), b"content")
+        cache.put(_entry("ride", "garmin", _T0 + timedelta(days=1)), b"content")
+
+        async def _upload(activity: Activity, *, task_name: str | None = None) -> None:
+            if activity.external_id == "odd":
+                raise UploadDeferredError("no trip made (internal error)")
+
+        dest = _dest_conn()
+        dest.upload_activity = AsyncMock(side_effect=_upload)
+        tracker = _make_tracker()
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), _source_conn())],
+            destinations=[("rwgps", dest)],
+            cache=cache,
+            tracker=tracker,
+        )
+        await executor.run(_START, _END)
+        assert dest.upload_activity.await_count == 2
+        tracker.fail.assert_not_called()
+        tracker.warn.assert_any_await(
+            "Upload to rwgps",
+            "'odd' 2026-01-01 - no trip made (internal error), left for the next run",
+        )
+        odd = cache.get_entry("odd", "garmin")
+        ride = cache.get_entry("ride", "garmin")
+        assert odd is not None and "rwgps" not in odd.uploaded_to
+        assert ride is not None and "rwgps" in ride.uploaded_to
 
     async def test_a_rate_limit_leaves_the_rest_for_the_next_run(
         self, cache: ActivityCache

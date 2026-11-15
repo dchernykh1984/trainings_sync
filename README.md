@@ -5,7 +5,7 @@
 > Check the sync log file for rate limit messages and review your current usage on the [Strava API settings page](https://www.strava.com/settings/api).
 > See the [Strava rate limits documentation](https://developers.strava.com/docs/rate-limits/) for details.
 
-CLI tool for syncing training activities between Garmin Connect and a local folder (FIT/GPX/TCX). Strava and [intervals.icu](https://intervals.icu) are supported as sources and destinations too.
+CLI tool for syncing training activities between Garmin Connect and a local folder (FIT/GPX/TCX). Strava, [intervals.icu](https://intervals.icu) and [Ride with GPS](https://ridewithgps.com) are supported as sources and destinations too.
 
 ## Download a ready-made app
 
@@ -246,7 +246,7 @@ uv run trainings-sync \
 | Option                 | Description                                                                                                                                                               |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--config PATH`        | Path to the JSON config file. Required.                                                                                                                                   |
-| `--creds-json PATH`    | JSON credentials file. Required for Garmin, Strava and intervals.icu connectors.                                                                                          |
+| `--creds-json PATH`    | JSON credentials file. Required for every connector that signs in to a service.                                                                                           |
 | `--creds-keepass PATH` | KeePass database (.kdbx) instead of a JSON file. Master password is read from `KEEPASS_PASSWORD` env var, or prompted from stdin. Not supported with Strava sources or destinations. |
 | `--start DATE`         | Start date (YYYY-MM-DD). Overrides the value in config. Defaults to `2000-01-01` if not set anywhere.                                                                     |
 | `--end DATE`           | End date (YYYY-MM-DD). Overrides the value in config. Defaults to today.                                                                                                  |
@@ -323,6 +323,54 @@ Limits to know about:
   session entered by hand, or one too big) is skipped with a warning that gives
   intervals.icu's reason, and is not sent again.
 
+### Ride with GPS
+
+Ride with GPS works as a source (each trip is downloaded as a FIT file: the
+original one if the trip was uploaded as FIT and not edited since) and as a
+destination (activities are uploaded with their name and description).
+
+1. In Ride with GPS open the
+   [API clients page](https://ridewithgps.com/api/api_clients), create a client and
+   copy its **API key**. Create an **auth token** for your account on the same page.
+2. Add a connector to your config and use its `id` in `sync_groups`:
+   ```json
+   {
+     "id": "rwgps",
+     "type": "ride_with_gps",
+     "credential_service": "Ride with GPS",
+     "credential_url": "https://ridewithgps.com/api/v1"
+   }
+   ```
+3. Add the account to your credentials file. `login` is the API key, `password` is
+   the auth token:
+   ```json
+   {
+     "service": "Ride with GPS",
+     "url": "https://ridewithgps.com/api/v1",
+     "login": "YOUR_API_KEY",
+     "password": "YOUR_AUTH_TOKEN"
+   }
+   ```
+
+Neither the key nor the token rotates, so a KeePass entry works with
+`--creds-keepass` too: URL `https://ridewithgps.com/api/v1`, user name = API key,
+password = auth token.
+
+Limits to know about:
+
+- The trips list cannot be filtered by date, so every sync reads the whole list,
+  200 trips per request.
+- An upload is processed in the background. The sync waits up to a minute for the
+  result; a trip still being processed after that counts as uploaded. A file Ride
+  with GPS already has is reported as a duplicate and skipped, and a file it cannot
+  make a trip of (no timestamps, no track, unreadable) is skipped with a warning.
+  If its own processing of the file fails, the file is tried again on the next
+  run.
+- A trip's visibility follows your account's default privacy setting; the API
+  cannot set it. Photos are not uploaded.
+- Ride with GPS publishes no fixed rate limit. On a `429` the sync waits (5 s if
+  the server does not say how long) and retries.
+
 ## Desktop GUI
 
 If you would rather not edit JSON config files by hand, a desktop GUI is
@@ -378,7 +426,9 @@ password. For Strava, *Login* is your Client Secret and the password is the
 refresh token (see [Getting Strava credentials](#getting-strava-credentials)).
 For intervals.icu, pick the `https://intervals.icu/api/v1` URL; *Login* is your
 athlete id (empty for the owner of the key) and the password is the API key (see
-[intervals.icu](#intervalsicu)).
+[intervals.icu](#intervalsicu)). For Ride with GPS, pick the
+`https://ridewithgps.com/api/v1` URL; *Login* is the API key and the password is the
+auth token (see [Ride with GPS](#ride-with-gps)).
 Strava must use a **manual** account - its refresh token is rotated and written
 back, which a read-only KeePass file cannot store.
 
@@ -394,7 +444,7 @@ Build the sync configuration visually:
 
 - **Connectors** - add each data source/destination. Give it a **Name** (used to
   reference it from sync groups) and a **Type** (`garmin`, `strava`,
-  `intervals_icu`, or `local_folder`). For Garmin/Strava/intervals.icu pick a
+  `intervals_icu`, `ride_with_gps`, or `local_folder`). For a service pick a
   **Credentials** account from the dropdown (populated from the Credentials
   tab) - its URL and login come from that account. For a local folder pick the directory with **Browse...** (or type
   the path). A connector used by a sync group cannot be deleted until you remove

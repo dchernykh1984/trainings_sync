@@ -112,6 +112,15 @@ class UploadRefusedError(Exception):
     """
 
 
+class UploadDeferredError(Exception):
+    """Raised when a destination could not take an activity this time, for a
+    reason that may not last (its own processing of the file failed, say).
+
+    The sync engine warns why, leaves the activity for the next run and goes
+    on with the other uploads.
+    """
+
+
 class TransientDownloadError(Exception):
     """Raised by connectors for transient network errors that are worth retrying."""
 

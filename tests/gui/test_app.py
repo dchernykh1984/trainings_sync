@@ -144,6 +144,7 @@ def test_credential_dialog_url_dropdown_presets_and_free_text(qtbot) -> None:
         "https://connect.garmin.com",
         "https://www.strava.com/api/v3",
         "https://intervals.icu/api/v1",
+        "https://ridewithgps.com/api/v1",
     ]
     assert dlg._url.isEditable()
     # A custom URL can still be typed.

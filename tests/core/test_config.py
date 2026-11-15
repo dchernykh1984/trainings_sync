@@ -12,6 +12,7 @@ from app.core.config import (
     GroupSourceConfig,
     IntervalsIcuConnectorConfig,
     LocalFolderConnectorConfig,
+    RideWithGpsConnectorConfig,
     StravaConnectorConfig,
     SyncGroupConfig,
     load_config,
@@ -126,6 +127,30 @@ def test_intervals_icu_connector(tmp_path: Path) -> None:
         uid="intervals",
         credential=CredentialRequest(
             service="intervals.icu", url="https://intervals.icu/api/v1", login="i12345"
+        ),
+    )
+
+
+def test_ride_with_gps_connector(tmp_path: Path) -> None:
+    rwgps = {
+        "id": "rwgps",
+        "type": "ride_with_gps",
+        "credential_service": "Ride with GPS",
+        "credential_url": "https://ridewithgps.com/api/v1",
+        "credential_login": "api-key",
+    }
+    data = {**_minimal(), "connectors": [rwgps, _LOCAL_CONNECTOR]}
+    data["sync_groups"] = [
+        {"id": "g", "sources": [{"id": "rwgps", "priority": 1}], "destinations": []}
+    ]
+    c = load_config(_write(tmp_path, data)).connectors[0]
+    assert c == RideWithGpsConnectorConfig(
+        id="rwgps",
+        uid="rwgps",
+        credential=CredentialRequest(
+            service="Ride with GPS",
+            url="https://ridewithgps.com/api/v1",
+            login="api-key",
         ),
     )
 

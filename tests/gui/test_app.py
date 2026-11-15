@@ -1261,6 +1261,70 @@ def test_editing_a_connector_without_renaming_leaves_the_groups_alone(
     assert group.destinations == ["Garmin"]
 
 
+@pytest.mark.parametrize(
+    ("as_source", "new_id", "new_type", "refused"),
+    [
+        (True, "svc", "uploader", "'svc' (uploader) can only be a destination"),
+        (True, "renamed", "uploader", "'svc' (uploader) can only be a destination"),
+        (False, "svc", "reader", "'svc' (reader) can only be a source"),
+        (True, "svc", "reader", ""),
+        (False, "svc", "uploader", ""),
+    ],
+)
+def test_a_new_type_must_suit_the_connector_role_in_its_groups(
+    qtbot,
+    monkeypatch,
+    store: ConfigStore,
+    as_source: bool,
+    new_id: str,
+    new_type: str,
+    refused: str,
+) -> None:
+    # Saved anyway, the next run would refuse the whole config.
+    from PySide6.QtWidgets import QMessageBox
+
+    import app.gui.app as gui_app
+
+    monkeypatch.setattr("app.core.config.SOURCE_ONLY_TYPES", frozenset({"reader"}))
+    monkeypatch.setattr(
+        "app.core.config.DESTINATION_ONLY_TYPES", frozenset({"uploader"})
+    )
+    store.save_gui_config(
+        GuiConfig(
+            connectors=[ConnectorEntry(id="svc", uid="u1", type="garmin")],
+            sync_groups=[
+                SyncGroupEntry(
+                    id="g1",
+                    sources=[GroupSourceEntry(id="svc", priority=1)]
+                    if as_source
+                    else [],
+                    destinations=[] if as_source else ["svc"],
+                )
+            ],
+        )
+    )
+    tab = ConfigTab(store)
+    qtbot.addWidget(tab)
+    changed = ConnectorEntry(id=new_id, uid="u1", type=new_type)
+    monkeypatch.setattr(
+        gui_app, "ConnectorDialog", lambda **kw: _FakeConnectorDialog(changed)
+    )
+    warned: dict = {}
+    monkeypatch.setattr(
+        QMessageBox, "warning", lambda _s, title, text, *a, **k: warned.update(t=text)
+    )
+    tab._conn_list.setCurrentRow(0)
+    tab._edit_connector()
+
+    saved = store.load_gui_config().connectors[0]
+    if refused:
+        assert f"sync group 'g1': {refused}" in warned["t"]
+        assert (saved.id, saved.type) == ("svc", "garmin")
+    else:
+        assert not warned
+        assert saved.type == new_type
+
+
 class _FakeGroupDialog:
     def __init__(self, entry: SyncGroupEntry) -> None:
         self._entry = entry
@@ -1924,3 +1988,55 @@ def test_make_app_icon_renders(qtbot) -> None:
     icon = make_app_icon(64)
     assert not icon.isNull()
     assert not icon.pixmap(64, 64).isNull()
+
+
+def test_sync_group_dialog_offers_each_connector_only_in_its_roles(
+    qtbot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("app.core.config.SOURCE_ONLY_TYPES", frozenset({"reader"}))
+    monkeypatch.setattr(
+        "app.core.config.DESTINATION_ONLY_TYPES", frozenset({"uploader"})
+    )
+    dlg = SyncGroupDialog(
+        connector_ids=["src", "both", "dst"],
+        connector_types={"src": "reader", "both": "garmin", "dst": "uploader"},
+    )
+    qtbot.addWidget(dlg)
+    sources = [
+        dlg._src_add_combo.itemText(i) for i in range(dlg._src_add_combo.count())
+    ]
+    targets = [
+        dlg._dst_add_combo.itemText(i) for i in range(dlg._dst_add_combo.count())
+    ]
+    assert sources == ["src", "both"]
+    assert targets == ["both", "dst"]
+
+
+@pytest.mark.parametrize("handler", ["_add_group", "_edit_group"])
+def test_config_tab_gives_the_group_dialog_each_connector_type(
+    qtbot, monkeypatch: pytest.MonkeyPatch, store: ConfigStore, handler: str
+) -> None:
+    # The dialog needs the types to offer each connector only in its roles.
+    import app.gui.app as gui_app
+
+    store.save_gui_config(
+        GuiConfig(
+            connectors=[
+                ConnectorEntry(id="local", type="local_folder", folder="/x"),
+                ConnectorEntry(id="garmin", type="garmin"),
+            ],
+            sync_groups=[SyncGroupEntry(id="g", sources=[], destinations=[])],
+        )
+    )
+    tab = ConfigTab(store)
+    qtbot.addWidget(tab)
+    tab._grp_list.setCurrentRow(0)
+    opened: dict = {}
+
+    def fake_dialog(**kw: object) -> _RejectingDialog:
+        opened.update(kw)
+        return _RejectingDialog({}, kw.get("entry"))
+
+    monkeypatch.setattr(gui_app, "SyncGroupDialog", fake_dialog)
+    getattr(tab, handler)()
+    assert opened["connector_types"] == {"local": "local_folder", "garmin": "garmin"}

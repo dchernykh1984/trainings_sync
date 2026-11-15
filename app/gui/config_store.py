@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -14,6 +15,7 @@ from app.core.config import (
     LocalFolderConnectorConfig,
     StravaConnectorConfig,
     SyncGroupConfig,
+    check_roles,
 )
 from app.credentials.base import CredentialRequest
 
@@ -165,7 +167,10 @@ class ConfigStore:
         raw = json.loads(Path(path).read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
             raise ValueError("config file must contain a JSON object")
-        return _parse_gui_config(raw)
+        config = _parse_gui_config(raw)
+        types = {c.id: c.type for c in config.connectors}
+        check_group_roles(types, config.sync_groups)
+        return config
 
     def save_gui_config(self, config: GuiConfig) -> None:
         data: dict = {
@@ -192,6 +197,7 @@ class ConfigStore:
         if len(uids) != len(set(uids)):
             raise ValueError("two connectors share a uid")
         sync_groups = tuple(_group_to_app(g) for g in config.sync_groups)
+        check_roles({c.id: c.type for c in config.connectors}, sync_groups)
         start = date.fromisoformat(config.start) if config.start else None
         end = date.fromisoformat(config.end) if config.end else None
         return AppConfig(
@@ -323,6 +329,17 @@ def _connector_to_app(c: ConnectorEntry) -> ConnectorConfig:
             folder=Path(c.folder).expanduser().resolve(),
         )
     raise ValueError(f"unknown connector type: {c.type!r}")
+
+
+def check_group_roles(
+    types: Mapping[str, str], groups: Iterable[SyncGroupEntry]
+) -> None:
+    """Refuse a group that gives a connector a role its type cannot play.
+
+    `types` maps connector ids to their types; a connector left out of it is
+    not checked. Raises ConfigError, as check_roles does.
+    """
+    check_roles(types, [_group_to_app(g) for g in groups])
 
 
 def _group_to_app(g: SyncGroupEntry) -> SyncGroupConfig:

@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.1](https://github.com/dchernykh1984/trainings_sync/compare/v0.3.0...v0.3.1) (2026-11-15)
+
+
+### Bug Fixes
+
+* **connectors:** send an intervals.icu upload again after a timeout ([c69345b](https://github.com/dchernykh1984/trainings_sync/commit/c69345b18c454cd58eb8bc92b82ac941938e0f75))
+* **sync:** upload only the activities of a group's own sources ([05a1903](https://github.com/dchernykh1984/trainings_sync/commit/05a19034aaf1584f565ffd6e9eb661b6e0ce5616))
+
 ## [0.3.0](https://github.com/dchernykh1984/trainings_sync/compare/v0.2.3...v0.3.0) (2026-11-15)
 
 

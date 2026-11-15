@@ -12,6 +12,7 @@ from app.core.config import (
     GroupSourceConfig,
     IntervalsIcuConnectorConfig,
     LocalFolderConnectorConfig,
+    PolarConnectorConfig,
     RideWithGpsConnectorConfig,
     RunalyzeConnectorConfig,
     StravaConnectorConfig,
@@ -501,7 +502,7 @@ def test_connector_missing_type(tmp_path: Path) -> None:
 
 
 def test_connector_unknown_type(tmp_path: Path) -> None:
-    c = {**_GARMIN_CONNECTOR, "type": "polar"}
+    c = {**_GARMIN_CONNECTOR, "type": "no_such_service"}
     data = {**_minimal(), "connectors": [c, _LOCAL_CONNECTOR]}
     with pytest.raises(ConfigError, match="unknown connector type"):
         load_config(_write(tmp_path, data))
@@ -820,6 +821,46 @@ def test_runalyze_cannot_be_a_source(tmp_path: Path) -> None:
         }
     ]
     with pytest.raises(ConfigError, match="can only be a destination"):
+        load_config(_write(tmp_path, data))
+
+
+_POLAR_CONNECTOR: dict = {
+    "id": "polar",
+    "type": "polar",
+    "credential_service": "Polar Flow",
+    "credential_url": "https://www.polaraccesslink.com/v3",
+}
+
+
+def test_polar_connector(tmp_path: Path) -> None:
+    data = {**_minimal(), "connectors": [_POLAR_CONNECTOR, _LOCAL_CONNECTOR]}
+    data["sync_groups"] = [
+        {
+            "id": "g",
+            "sources": [{"id": "polar", "priority": 1}],
+            "destinations": ["local"],
+        }
+    ]
+    c = load_config(_write(tmp_path, data)).connectors[0]
+    assert c == PolarConnectorConfig(
+        id="polar",
+        uid="polar",
+        credential=CredentialRequest(
+            service="Polar Flow", url="https://www.polaraccesslink.com/v3", login=None
+        ),
+    )
+
+
+def test_polar_cannot_be_a_destination(tmp_path: Path) -> None:
+    data = {**_minimal(), "connectors": [_GARMIN_CONNECTOR, _POLAR_CONNECTOR]}
+    data["sync_groups"] = [
+        {
+            "id": "g",
+            "sources": [{"id": "garmin", "priority": 1}],
+            "destinations": ["polar"],
+        }
+    ]
+    with pytest.raises(ConfigError, match="can only be a source"):
         load_config(_write(tmp_path, data))
 
 

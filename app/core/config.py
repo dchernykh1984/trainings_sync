@@ -62,6 +62,10 @@ class RunalyzeConnectorConfig(CredentialOnlyConfig):
     pass
 
 
+class PolarConnectorConfig(CredentialOnlyConfig):
+    pass
+
+
 @dataclass(frozen=True)
 class LocalFolderConnectorConfig:
     id: str
@@ -83,6 +87,7 @@ ConnectorConfig = (
     | IntervalsIcuConnectorConfig
     | RideWithGpsConnectorConfig
     | RunalyzeConnectorConfig
+    | PolarConnectorConfig
     | LocalFolderConnectorConfig
 )
 
@@ -100,18 +105,20 @@ _CredentialOnly = (
     | IntervalsIcuConnectorConfig
     | RideWithGpsConnectorConfig
     | RunalyzeConnectorConfig
+    | PolarConnectorConfig
 )
 CREDENTIAL_ONLY_CONFIGS: dict[str, type[_CredentialOnly]] = {
     "garmin": GarminConnectorConfig,
     "intervals_icu": IntervalsIcuConnectorConfig,
     "ride_with_gps": RideWithGpsConnectorConfig,
     "runalyze": RunalyzeConnectorConfig,
+    "polar": PolarConnectorConfig,
 }
 
 # Connector types that can play only one role in a sync group: a service that
 # hands out no files cannot be a source, and one that takes none cannot be a
 # destination.
-SOURCE_ONLY_TYPES: frozenset[str] = frozenset()
+SOURCE_ONLY_TYPES: frozenset[str] = frozenset({"polar"})
 DESTINATION_ONLY_TYPES: frozenset[str] = frozenset({"runalyze"})
 
 

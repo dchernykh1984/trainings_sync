@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 
 from app.connectors.base import ServiceConnector
 from app.connectors.garmin import GarminConnector
 from app.connectors.intervals_icu import IntervalsIcuConnector
 from app.connectors.local_folder import LocalFolderConnector
+from app.connectors.polar import PolarConnector
 from app.connectors.ride_with_gps import RideWithGpsConnector
 from app.connectors.runalyze import RunalyzeConnector
 from app.connectors.strava import StravaConnector
@@ -13,10 +14,12 @@ from app.connectors.wellness_base import WellnessConnector
 from app.core.config import (
     CREDENTIAL_CONNECTOR_CONFIGS,
     AppConfig,
+    ConfigError,
     CredentialOnlyConfig,
     GarminConnectorConfig,
     IntervalsIcuConnectorConfig,
     LocalFolderConnectorConfig,
+    PolarConnectorConfig,
     RideWithGpsConnectorConfig,
     RunalyzeConnectorConfig,
     StravaConnectorConfig,
@@ -37,6 +40,7 @@ _CREDENTIAL_ONLY_CONNECTORS: dict[
     IntervalsIcuConnectorConfig: IntervalsIcuConnector,
     RideWithGpsConnectorConfig: RideWithGpsConnector,
     RunalyzeConnectorConfig: RunalyzeConnector,
+    PolarConnectorConfig: PolarConnector,
 }
 
 
@@ -88,7 +92,23 @@ async def build_connectors(
             connector = LocalFolderConnector(folder=cfg.folder, tracker=tracker)
         result[cfg.uid] = connector
 
+    _check_polar_members(result.values())
     return result
+
+
+def _check_polar_members(connectors: Iterable[ServiceConnector]) -> None:
+    """Refuse two Polar Flow connectors on one member id.
+
+    AccessLink answers the second registration as if it were done, so that
+    account would list nothing, run after run, with no error to say why.
+    """
+    members = [c.user_label for c in connectors if isinstance(c, PolarConnector)]
+    taken = next((m for m in members if members.count(m) > 1), None)
+    if taken is not None:
+        raise ConfigError(
+            f"two Polar Flow connectors use the member id {taken!r}:"
+            " give each account its own login"
+        )
 
 
 async def build_wellness_connectors(

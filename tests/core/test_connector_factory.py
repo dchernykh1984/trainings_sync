@@ -12,6 +12,7 @@ from app.connectors.base import ServiceConnector
 from app.connectors.garmin import GarminConnector
 from app.connectors.intervals_icu import IntervalsIcuConnector
 from app.connectors.local_folder import LocalFolderConnector
+from app.connectors.polar import PolarConnector
 from app.connectors.ride_with_gps import RideWithGpsConnector
 from app.connectors.runalyze import RunalyzeConnector
 from app.connectors.strava import StravaConnector
@@ -19,11 +20,13 @@ from app.core.cache import ActivityCache, CacheEntry
 from app.core.config import (
     CREDENTIAL_ONLY_CONFIGS,
     AppConfig,
+    ConfigError,
     ConnectorConfig,
     GarminConnectorConfig,
     GroupSourceConfig,
     IntervalsIcuConnectorConfig,
     LocalFolderConnectorConfig,
+    PolarConnectorConfig,
     RideWithGpsConnectorConfig,
     RunalyzeConnectorConfig,
     StravaConnectorConfig,
@@ -114,6 +117,12 @@ _RWGPS_CFG = RideWithGpsConnectorConfig(
 _RUNALYZE_CFG = RunalyzeConnectorConfig(
     id="runalyze",
     credential=CredentialRequest(service="Runalyze", url="https://runalyze.com/api/v1"),
+)
+_POLAR_CFG = PolarConnectorConfig(
+    id="polar",
+    credential=CredentialRequest(
+        service="Polar Flow", url="https://www.polaraccesslink.com/v3"
+    ),
 )
 _STRAVA_CFG = StravaConnectorConfig(
     id="strava", client_id=99999, credential=_STRAVA_CRED
@@ -239,6 +248,36 @@ def test_every_credential_only_config_builds_a_connector() -> None:
     # A type added to the config table alone would be requested a credential
     # and then fail to build.
     assert set(_CREDENTIAL_ONLY_CONNECTORS) == set(CREDENTIAL_ONLY_CONFIGS.values())
+
+
+async def test_polar_connector_gets_its_own_credential(
+    tracker: TaskTracker,
+) -> None:
+    provider = _FakeProvider([_GARMIN_CREDS, Credentials("me", "access-token")])
+    result = await build_connectors(
+        _cfg(connectors=(_GARMIN_CFG, _POLAR_CFG)), provider, tracker
+    )
+    polar = result["polar"]
+    assert isinstance(polar, PolarConnector)
+    assert polar._session.headers["Authorization"] == "Bearer access-token"
+    assert polar.user_label == "me"
+
+
+@pytest.mark.parametrize(
+    ("logins", "refused"), [(("", " "), True), (("me", "me"), True), (("a", ""), False)]
+)
+async def test_two_polar_accounts_need_two_member_ids(
+    tracker: TaskTracker, logins: tuple[str, str], refused: bool
+) -> None:
+    # AccessLink takes the second one's registration as done, and it lists nothing.
+    second = replace(_POLAR_CFG, id="polar2", uid="polar2")
+    provider = _FakeProvider([Credentials(login, "token") for login in logins])
+    build = build_connectors(_cfg(connectors=(_POLAR_CFG, second)), provider, tracker)
+    if refused:
+        with pytest.raises(ConfigError, match="use the member id"):
+            await build
+    else:
+        assert len(await build) == 2
 
 
 async def test_local_connector_builds_local_connector(

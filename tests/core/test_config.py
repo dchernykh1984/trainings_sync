@@ -13,6 +13,7 @@ from app.core.config import (
     IntervalsIcuConnectorConfig,
     LocalFolderConnectorConfig,
     RideWithGpsConnectorConfig,
+    RunalyzeConnectorConfig,
     StravaConnectorConfig,
     SyncGroupConfig,
     load_config,
@@ -779,6 +780,46 @@ def test_two_connectors_sharing_a_uid_are_rejected(tmp_path: Path) -> None:
         {**_LOCAL_CONNECTOR, "uid": "same"},
     ]
     with pytest.raises(ConfigError, match="duplicate connector uid"):
+        load_config(_write(tmp_path, data))
+
+
+_RUNALYZE_CONNECTOR: dict = {
+    "id": "runalyze",
+    "type": "runalyze",
+    "credential_service": "Runalyze",
+    "credential_url": "https://runalyze.com/api/v1",
+}
+
+
+def test_runalyze_connector(tmp_path: Path) -> None:
+    data = {**_minimal(), "connectors": [_GARMIN_CONNECTOR, _RUNALYZE_CONNECTOR]}
+    data["sync_groups"] = [
+        {
+            "id": "g",
+            "sources": [{"id": "garmin", "priority": 1}],
+            "destinations": ["runalyze"],
+        }
+    ]
+    c = load_config(_write(tmp_path, data)).connectors[1]
+    assert c == RunalyzeConnectorConfig(
+        id="runalyze",
+        uid="runalyze",
+        credential=CredentialRequest(
+            service="Runalyze", url="https://runalyze.com/api/v1", login=None
+        ),
+    )
+
+
+def test_runalyze_cannot_be_a_source(tmp_path: Path) -> None:
+    data = {**_minimal(), "connectors": [_RUNALYZE_CONNECTOR, _LOCAL_CONNECTOR]}
+    data["sync_groups"] = [
+        {
+            "id": "g",
+            "sources": [{"id": "runalyze", "priority": 1}],
+            "destinations": ["local"],
+        }
+    ]
+    with pytest.raises(ConfigError, match="can only be a destination"):
         load_config(_write(tmp_path, data))
 
 

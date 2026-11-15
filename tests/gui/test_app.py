@@ -145,6 +145,7 @@ def test_credential_dialog_url_dropdown_presets_and_free_text(qtbot) -> None:
         "https://www.strava.com/api/v3",
         "https://intervals.icu/api/v1",
         "https://ridewithgps.com/api/v1",
+        "https://runalyze.com/api/v1",
     ]
     assert dlg._url.isEditable()
     # A custom URL can still be typed.
@@ -2041,3 +2042,18 @@ def test_config_tab_gives_the_group_dialog_each_connector_type(
     monkeypatch.setattr(gui_app, "SyncGroupDialog", fake_dialog)
     getattr(tab, handler)()
     assert opened["connector_types"] == {"local": "local_folder", "garmin": "garmin"}
+
+
+def test_sync_group_dialog_offers_runalyze_only_as_a_destination(qtbot) -> None:
+    dlg = SyncGroupDialog(
+        connector_ids=["garmin", "runalyze"],
+        connector_types={"garmin": "garmin", "runalyze": "runalyze"},
+    )
+    qtbot.addWidget(dlg)
+    sources = [
+        dlg._src_add_combo.itemText(i) for i in range(dlg._src_add_combo.count())
+    ]
+    targets = [
+        dlg._dst_add_combo.itemText(i) for i in range(dlg._dst_add_combo.count())
+    ]
+    assert (sources, targets) == (["garmin"], ["garmin", "runalyze"])

@@ -448,6 +448,7 @@ _KNOWN_CREDENTIAL_URLS = (
     "https://www.strava.com/api/v3",
     "https://intervals.icu/api/v1",
     "https://ridewithgps.com/api/v1",
+    "https://runalyze.com/api/v1",
 )
 
 
@@ -503,7 +504,8 @@ class CredentialDialog(QDialog):
             "For Strava: login = client_secret, password = refresh_token. "
             "For intervals.icu: login = athlete id (empty = the key's owner), "
             "password = API key. "
-            "For Ride with GPS: login = API key, password = auth token"
+            "For Ride with GPS: login = API key, password = auth token. "
+            "For Runalyze: login = empty, password = personal API token"
         )
         hint.setWordWrap(True)
         form.addRow(hint)

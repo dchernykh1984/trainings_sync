@@ -63,7 +63,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         prog="trainings-sync",
         description=(
             "Sync training activities between Garmin, Strava, intervals.icu,"
-            " Ride with GPS, and local folders."
+            " Ride with GPS, Runalyze, and local folders."
         ),
     )
     parser.add_argument(

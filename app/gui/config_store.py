@@ -31,6 +31,7 @@ CONNECTOR_TYPES: tuple[str, ...] = (
     "strava",
     "intervals_icu",
     "ride_with_gps",
+    "runalyze",
     "local_folder",
 )
 # The types that sign in with an account from the Credentials tab.

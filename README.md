@@ -5,7 +5,7 @@
 > Check the sync log file for rate limit messages and review your current usage on the [Strava API settings page](https://www.strava.com/settings/api).
 > See the [Strava rate limits documentation](https://developers.strava.com/docs/rate-limits/) for details.
 
-CLI tool for syncing training activities between Garmin Connect and a local folder (FIT/GPX/TCX). Strava, [intervals.icu](https://intervals.icu) and [Ride with GPS](https://ridewithgps.com) are supported as sources and destinations too.
+CLI tool for syncing training activities between Garmin Connect and a local folder (FIT/GPX/TCX). Strava, [intervals.icu](https://intervals.icu) and [Ride with GPS](https://ridewithgps.com) are supported as sources and destinations too, and [Runalyze](https://runalyze.com) as a destination.
 
 ## Download a ready-made app
 
@@ -371,6 +371,54 @@ Limits to know about:
 - Ride with GPS publishes no fixed rate limit. On a `429` the sync waits (5 s if
   the server does not say how long) and retries.
 
+### Runalyze
+
+Runalyze works as a destination only: activities are uploaded as files. Its
+Personal API lets every account upload, but reading activities back needs a paid
+plan and is not documented, so a sync group can only send to Runalyze.
+
+1. In Runalyze open
+   [Settings -> Personal API](https://runalyze.com/settings/personal-api) and create a
+   token. Runalyze makes you pick an expiry date: replace the token before then.
+2. Add a connector to your config and use its `id` in the `destinations` of a sync
+   group:
+   ```json
+   {
+     "id": "runalyze",
+     "type": "runalyze",
+     "credential_service": "Runalyze",
+     "credential_url": "https://runalyze.com/api/v1"
+   }
+   ```
+3. Add the account to your credentials file. `login` stays empty, `password` is the
+   token:
+   ```json
+   {
+     "service": "Runalyze",
+     "url": "https://runalyze.com/api/v1",
+     "login": "",
+     "password": "YOUR_TOKEN"
+   }
+   ```
+
+The token can live in KeePass too: URL `https://runalyze.com/api/v1`, empty user
+name, password = token.
+
+Limits to know about:
+
+- Runalyze imports uploads from a queue, so a new activity shows up there a little
+  later. It skips a file it already has, and the sync cannot tell the difference:
+  the log says "queued" either way.
+- The Personal API counts requests per hour (40 for Supporter and 150 for Premium
+  accounts at the time of writing), so the first upload of a long history takes
+  many runs. When a run reaches the limit, it stops uploading to Runalyze with a
+  warning and leaves the rest for the next run. Set `start` to a recent date, or
+  import the history with Runalyze's own tools, and let the sync carry the new
+  activities.
+- Names, descriptions and photos are not sent: the upload takes only the file.
+- A file Runalyze refuses outright (too big, say) is skipped with a warning and
+  not sent again.
+
 ## Desktop GUI
 
 If you would rather not edit JSON config files by hand, a desktop GUI is
@@ -428,7 +476,9 @@ For intervals.icu, pick the `https://intervals.icu/api/v1` URL; *Login* is your
 athlete id (empty for the owner of the key) and the password is the API key (see
 [intervals.icu](#intervalsicu)). For Ride with GPS, pick the
 `https://ridewithgps.com/api/v1` URL; *Login* is the API key and the password is the
-auth token (see [Ride with GPS](#ride-with-gps)).
+auth token (see [Ride with GPS](#ride-with-gps)). For Runalyze, pick the
+`https://runalyze.com/api/v1` URL, leave *Login* empty, and the password is the
+personal API token (see [Runalyze](#runalyze)).
 Strava must use a **manual** account - its refresh token is rotated and written
 back, which a read-only KeePass file cannot store.
 
@@ -444,7 +494,7 @@ Build the sync configuration visually:
 
 - **Connectors** - add each data source/destination. Give it a **Name** (used to
   reference it from sync groups) and a **Type** (`garmin`, `strava`,
-  `intervals_icu`, `ride_with_gps`, or `local_folder`). For a service pick a
+  `intervals_icu`, `ride_with_gps`, `runalyze`, or `local_folder`). For a service pick a
   **Credentials** account from the dropdown (populated from the Credentials
   tab) - its URL and login come from that account. For a local folder pick the directory with **Browse...** (or type
   the path). A connector used by a sync group cannot be deleted until you remove

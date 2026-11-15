@@ -146,6 +146,7 @@ def test_credential_dialog_url_dropdown_presets_and_free_text(qtbot) -> None:
         "https://intervals.icu/api/v1",
         "https://ridewithgps.com/api/v1",
         "https://runalyze.com/api/v1",
+        "https://www.polaraccesslink.com/v3",
     ]
     assert dlg._url.isEditable()
     # A custom URL can still be typed.
@@ -2044,10 +2045,12 @@ def test_config_tab_gives_the_group_dialog_each_connector_type(
     assert opened["connector_types"] == {"local": "local_folder", "garmin": "garmin"}
 
 
-def test_sync_group_dialog_offers_runalyze_only_as_a_destination(qtbot) -> None:
+def test_sync_group_dialog_offers_runalyze_and_polar_only_in_their_role(
+    qtbot,
+) -> None:
     dlg = SyncGroupDialog(
-        connector_ids=["garmin", "runalyze"],
-        connector_types={"garmin": "garmin", "runalyze": "runalyze"},
+        connector_ids=["garmin", "runalyze", "polar"],
+        connector_types={"garmin": "garmin", "runalyze": "runalyze", "polar": "polar"},
     )
     qtbot.addWidget(dlg)
     sources = [
@@ -2056,4 +2059,4 @@ def test_sync_group_dialog_offers_runalyze_only_as_a_destination(qtbot) -> None:
     targets = [
         dlg._dst_add_combo.itemText(i) for i in range(dlg._dst_add_combo.count())
     ]
-    assert (sources, targets) == (["garmin"], ["garmin", "runalyze"])
+    assert (sources, targets) == (["garmin", "polar"], ["garmin", "runalyze"])

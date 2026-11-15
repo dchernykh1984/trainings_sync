@@ -141,7 +141,7 @@ class HttpApiConnector(ServiceConnector):
             if resp.status_code != 429:
                 resp.raise_for_status()
                 return resp
-            pause = _parse_retry_after(resp.headers, self._default_retry_after_s)
+            pause = self._pause_after_429(resp)
             if attempt == self._max_attempts:
                 # A download hands this to the engine, which then pauses every
                 # download from this source together.
@@ -187,3 +187,7 @@ class HttpApiConnector(ServiceConnector):
             if not _refused_file(exc):
                 raise
             raise UploadRefusedError(f"refused ({_reason(exc)})") from exc
+
+    def _pause_after_429(self, resp: requests.Response) -> float:
+        """How long to wait before sending a call refused with a 429 again."""
+        return _parse_retry_after(resp.headers, self._default_retry_after_s)

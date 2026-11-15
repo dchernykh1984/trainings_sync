@@ -16,6 +16,7 @@ from app.core.config import (
     GarminConnectorConfig,
     IntervalsIcuConnectorConfig,
     LocalFolderConnectorConfig,
+    PolarConnectorConfig,
     RideWithGpsConnectorConfig,
     RunalyzeConnectorConfig,
     StravaConnectorConfig,
@@ -666,6 +667,37 @@ def test_runalyze_connector_round_trips_to_the_app_config() -> None:
             uid="u3",
             credential=CredentialRequest(
                 service="Runalyze", url="https://runalyze.com/api/v1", login=None
+            ),
+        )
+    )
+
+
+def test_polar_connector_round_trips_to_the_app_config() -> None:
+    entry = ConnectorEntry(
+        id="polar",
+        uid="u4",
+        type="polar",
+        credential_service="Polar Flow",
+        credential_url="https://www.polaraccesslink.com/v3",
+        credential_login="me",
+    )
+    saved = _serialize_connector(entry)
+    assert saved == {
+        "id": "polar",
+        "uid": "u4",
+        "type": "polar",
+        "credential_service": "Polar Flow",
+        "credential_url": "https://www.polaraccesslink.com/v3",
+        "credential_login": "me",
+    }
+    assert _connector_to_app(_parse_connector_entry(saved)) == (
+        PolarConnectorConfig(
+            id="polar",
+            uid="u4",
+            credential=CredentialRequest(
+                service="Polar Flow",
+                url="https://www.polaraccesslink.com/v3",
+                login="me",
             ),
         )
     )

@@ -5,7 +5,7 @@
 > Check the sync log file for rate limit messages and review your current usage on the [Strava API settings page](https://www.strava.com/settings/api).
 > See the [Strava rate limits documentation](https://developers.strava.com/docs/rate-limits/) for details.
 
-CLI tool for syncing training activities between Garmin Connect and a local folder (FIT/GPX/TCX). Strava, [intervals.icu](https://intervals.icu) and [Ride with GPS](https://ridewithgps.com) are supported as sources and destinations too, and [Runalyze](https://runalyze.com) as a destination.
+CLI tool for syncing training activities between Garmin Connect and a local folder (FIT/GPX/TCX). Strava, [intervals.icu](https://intervals.icu) and [Ride with GPS](https://ridewithgps.com) are supported as sources and destinations too, [Runalyze](https://runalyze.com) as a destination, and [Polar Flow](https://flow.polar.com) as a source.
 
 ## Download a ready-made app
 
@@ -419,6 +419,73 @@ Limits to know about:
 - A file Runalyze refuses outright (too big, say) is skipped with a warning and
   not sent again.
 
+### Polar Flow
+
+Polar Flow works as a source only: each training session is downloaded as a FIT
+file through Polar's AccessLink API, which cannot take uploads.
+
+1. Sign in at [admin.polaraccesslink.com](https://admin.polaraccesslink.com) with
+   your Polar Flow account and create an API client. As its redirect URL enter
+   `http://localhost`: nothing has to answer there, the address bar is only where
+   you copy a code from in the next step. Note the client id and secret.
+2. Open
+   `https://flow.polar.com/oauth2/authorization?response_type=code&client_id=YOUR_CLIENT_ID`
+   in a browser and allow the access. The browser goes to
+   `http://localhost/?code=...`; copy that code and trade it for an access token
+   right away:
+   ```bash
+   curl -u YOUR_CLIENT_ID:YOUR_CLIENT_SECRET -H "Accept: application/json" \
+     -d grant_type=authorization_code -d code=THE_CODE \
+     https://polarremote.com/v2/oauth2/token
+   ```
+   The `access_token` in the answer is the password. Polar gives it about a year
+   (`expires_in`, in seconds): when the sync starts failing with a `401`, repeat
+   this step for a new one.
+3. Add a connector to your config and use its `id` in the `sources` of a sync group:
+   ```json
+   {
+     "id": "polar",
+     "type": "polar",
+     "credential_service": "Polar Flow",
+     "credential_url": "https://www.polaraccesslink.com/v3"
+   }
+   ```
+4. Add the account to your credentials file. `login` is the member id your account
+   is registered under with the client (any name, but each account that uses the
+   client needs its own; empty means `trainings-sync`), `password` is the access
+   token:
+   ```json
+   {
+     "service": "Polar Flow",
+     "url": "https://www.polaraccesslink.com/v3",
+     "login": "",
+     "password": "YOUR_ACCESS_TOKEN"
+   }
+   ```
+
+The token does not rotate, so a KeePass entry works with `--creds-keepass` too:
+URL `https://www.polaraccesslink.com/v3`, user name = member id (or empty),
+password = access token.
+
+Limits to know about:
+
+- The first sync registers your account with the client. Polar Flow refuses it
+  until all its mandatory consents are accepted in your Flow account settings.
+  A member id another account already holds on the same client gets the same
+  answer as one registered on an earlier run, and that account would list
+  nothing. So two Polar Flow connectors on one member id are refused before the
+  sync starts: give each account its own login.
+- AccessLink lists only the sessions uploaded to Flow in the last 30 days, and
+  only those uploaded after that registration. Polar Flow keeps the destinations
+  up to date with new sessions; it does not copy your history. Export older
+  sessions from Flow by hand.
+- A session has no title of its own, so its sport stands in for the name (for
+  example *Road running*). Notes and photos are not downloaded.
+- A session without a FIT file (one entered by hand, say) is skipped with a warning.
+- AccessLink counts requests per 15 minutes and per day; one account stays far
+  below that. On a `429` the sync waits until the used-up window starts over (at
+  most 15 minutes at a time) and retries.
+
 ## Desktop GUI
 
 If you would rather not edit JSON config files by hand, a desktop GUI is
@@ -478,7 +545,10 @@ athlete id (empty for the owner of the key) and the password is the API key (see
 `https://ridewithgps.com/api/v1` URL; *Login* is the API key and the password is the
 auth token (see [Ride with GPS](#ride-with-gps)). For Runalyze, pick the
 `https://runalyze.com/api/v1` URL, leave *Login* empty, and the password is the
-personal API token (see [Runalyze](#runalyze)).
+personal API token (see [Runalyze](#runalyze)). For Polar Flow, pick the
+`https://www.polaraccesslink.com/v3` URL; *Login* is the member id (empty for
+`trainings-sync`) and the password is the access token (see
+[Polar Flow](#polar-flow)).
 Strava must use a **manual** account - its refresh token is rotated and written
 back, which a read-only KeePass file cannot store.
 
@@ -494,7 +564,7 @@ Build the sync configuration visually:
 
 - **Connectors** - add each data source/destination. Give it a **Name** (used to
   reference it from sync groups) and a **Type** (`garmin`, `strava`,
-  `intervals_icu`, `ride_with_gps`, `runalyze`, or `local_folder`). For a service pick a
+  `intervals_icu`, `ride_with_gps`, `runalyze`, `polar`, or `local_folder`). For a service pick a
   **Credentials** account from the dropdown (populated from the Credentials
   tab) - its URL and login come from that account. For a local folder pick the directory with **Browse...** (or type
   the path). A connector used by a sync group cannot be deleted until you remove

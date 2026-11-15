@@ -449,6 +449,7 @@ _KNOWN_CREDENTIAL_URLS = (
     "https://intervals.icu/api/v1",
     "https://ridewithgps.com/api/v1",
     "https://runalyze.com/api/v1",
+    "https://www.polaraccesslink.com/v3",
 )
 
 
@@ -505,7 +506,9 @@ class CredentialDialog(QDialog):
             "For intervals.icu: login = athlete id (empty = the key's owner), "
             "password = API key. "
             "For Ride with GPS: login = API key, password = auth token. "
-            "For Runalyze: login = empty, password = personal API token"
+            "For Runalyze: login = empty, password = personal API token. "
+            "For Polar Flow: login = member id (empty = trainings-sync), "
+            "password = AccessLink access token"
         )
         hint.setWordWrap(True)
         form.addRow(hint)

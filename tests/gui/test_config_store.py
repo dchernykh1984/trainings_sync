@@ -17,6 +17,7 @@ from app.core.config import (
     IntervalsIcuConnectorConfig,
     LocalFolderConnectorConfig,
     RideWithGpsConnectorConfig,
+    RunalyzeConnectorConfig,
     StravaConnectorConfig,
 )
 from app.credentials.base import CredentialRequest
@@ -638,6 +639,33 @@ def test_ride_with_gps_connector_round_trips_to_the_app_config() -> None:
                 service="Ride with GPS",
                 url="https://ridewithgps.com/api/v1",
                 login="api-key",
+            ),
+        )
+    )
+
+
+def test_runalyze_connector_round_trips_to_the_app_config() -> None:
+    entry = ConnectorEntry(
+        id="runalyze",
+        uid="u3",
+        type="runalyze",
+        credential_service="Runalyze",
+        credential_url="https://runalyze.com/api/v1",
+    )
+    saved = _serialize_connector(entry)
+    assert saved == {
+        "id": "runalyze",
+        "uid": "u3",
+        "type": "runalyze",
+        "credential_service": "Runalyze",
+        "credential_url": "https://runalyze.com/api/v1",
+    }
+    assert _connector_to_app(_parse_connector_entry(saved)) == (
+        RunalyzeConnectorConfig(
+            id="runalyze",
+            uid="u3",
+            credential=CredentialRequest(
+                service="Runalyze", url="https://runalyze.com/api/v1", login=None
             ),
         )
     )

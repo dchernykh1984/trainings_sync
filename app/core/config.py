@@ -58,6 +58,10 @@ class RideWithGpsConnectorConfig(CredentialOnlyConfig):
     pass
 
 
+class RunalyzeConnectorConfig(CredentialOnlyConfig):
+    pass
+
+
 @dataclass(frozen=True)
 class LocalFolderConnectorConfig:
     id: str
@@ -78,6 +82,7 @@ ConnectorConfig = (
     | StravaConnectorConfig
     | IntervalsIcuConnectorConfig
     | RideWithGpsConnectorConfig
+    | RunalyzeConnectorConfig
     | LocalFolderConnectorConfig
 )
 
@@ -91,19 +96,23 @@ CREDENTIAL_CONNECTOR_CONFIGS = (CredentialOnlyConfig, StravaConnectorConfig)
 # CONNECTOR_TYPES (tests check the last two against this table).
 # The union, not the base class, lets a parsed config keep its own type.
 _CredentialOnly = (
-    GarminConnectorConfig | IntervalsIcuConnectorConfig | RideWithGpsConnectorConfig
+    GarminConnectorConfig
+    | IntervalsIcuConnectorConfig
+    | RideWithGpsConnectorConfig
+    | RunalyzeConnectorConfig
 )
 CREDENTIAL_ONLY_CONFIGS: dict[str, type[_CredentialOnly]] = {
     "garmin": GarminConnectorConfig,
     "intervals_icu": IntervalsIcuConnectorConfig,
     "ride_with_gps": RideWithGpsConnectorConfig,
+    "runalyze": RunalyzeConnectorConfig,
 }
 
 # Connector types that can play only one role in a sync group: a service that
 # hands out no files cannot be a source, and one that takes none cannot be a
 # destination.
 SOURCE_ONLY_TYPES: frozenset[str] = frozenset()
-DESTINATION_ONLY_TYPES: frozenset[str] = frozenset()
+DESTINATION_ONLY_TYPES: frozenset[str] = frozenset({"runalyze"})
 
 
 def can_be_source(connector_type: str) -> bool:

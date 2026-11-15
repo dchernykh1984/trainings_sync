@@ -712,8 +712,11 @@ class SyncExecutor:
     async def _compute_borrowed_media(
         self,
         candidates: list[CacheEntry],
+        winners: list[CacheEntry],
         tracking: tuple[TaskTracker, str] | None = None,
     ) -> dict[tuple[str, str], list[MediaItem]]:
+        """Media each of `winners` borrows from the lower-priority candidates
+        it overlaps."""
         source_priority = {spec.source_id: spec.priority for spec, _ in self._sources}
         source_order = {spec.source_id: i for i, (spec, _) in enumerate(self._sources)}
         min_overlap_s = self._planner.min_overlap_s
@@ -730,7 +733,7 @@ class SyncExecutor:
         )
 
         result: dict[tuple[str, str], list[MediaItem]] = {}
-        for winner in candidates:
+        for winner in winners:
             if tracking is not None:
                 await tracking[0].advance(tracking[1])
             if self._cache.has_media(winner):
@@ -773,25 +776,27 @@ class SyncExecutor:
         return result
 
     def _compute_borrowed_descriptions(
-        self, candidates: list[CacheEntry]
+        self, candidates: list[CacheEntry], winners: list[CacheEntry]
     ) -> dict[tuple[str, str], str]:
+        """The description each of `winners` borrows from a lower-priority
+        candidate it overlaps."""
         source_priority = {spec.source_id: spec.priority for spec, _ in self._sources}
         source_order = {spec.source_id: i for i, (spec, _) in enumerate(self._sources)}
         min_overlap_s = self._planner.min_overlap_s
         fallback_s = self._planner.fallback_s
 
+        # Only an entry with a description can lend one; usually there are few.
+        donors = [(c, c.description) for c in candidates if c.description is not None]
         result: dict[tuple[str, str], str] = {}
-        for winner in candidates:
+        for winner in winners:
             if winner.description is not None:
                 continue
             winner_key = (
                 source_priority.get(winner.source_id, _UNKNOWN_PRIORITY),
                 source_order.get(winner.source_id, _UNKNOWN_ORDER),
             )
-            for other in candidates:
+            for other, description in donors:
                 if other.source_id == winner.source_id:
-                    continue
-                if other.description is None:
                     continue
                 other_key = (
                     source_priority.get(other.source_id, _UNKNOWN_PRIORITY),
@@ -800,7 +805,7 @@ class SyncExecutor:
                 if winner_key < other_key and _entries_overlap(
                     winner, other, min_overlap_s, fallback_s
                 ):
-                    result[(winner.external_id, winner.source_id)] = other.description
+                    result[(winner.external_id, winner.source_id)] = description
                     break
         return result
 
@@ -903,20 +908,20 @@ class SyncExecutor:
             del self._list_cache[k]
 
     async def _tracked_compute_borrowed_media(
-        self, candidates: list[CacheEntry]
+        self, candidates: list[CacheEntry], winners: list[CacheEntry]
     ) -> dict[tuple[str, str], list[MediaItem]]:
         tracker = self._tracker
         borrow_task: str | None = None
         borrow_tracking: tuple[TaskTracker, str] | None = None
-        if tracker is not None and candidates:
+        if tracker is not None and winners:
             borrow_task = await tracker.add_task(
                 f"{self._task_prefix}Sync: compute borrowed media",
-                total=len(candidates),
+                total=len(winners),
             )
             borrow_tracking = (tracker, borrow_task)
         try:
             result = await self._compute_borrowed_media(
-                candidates, tracking=borrow_tracking
+                candidates, winners, tracking=borrow_tracking
             )
         except Exception as exc:
             if borrow_task is not None and tracker is not None:
@@ -929,16 +934,22 @@ class SyncExecutor:
     async def _do_upload(self, start: date, end: date) -> None:
         tracker = self._tracker
         candidates = self._get_candidates(start, end)
+        # The cache is shared by every group. What another group's sources left
+        # there may lend a description or photos, but is not this group's to
+        # upload: it has no priority here, so two copies of one activity from
+        # two such sources would both go out.
+        source_ids = {spec.source_id for spec, _ in self._sources}
+        own = [e for e in candidates if e.source_id in source_ids]
         collect_task: str | None = None
         collect_tracking: tuple[TaskTracker, str] | None = None
-        if tracker is not None and candidates:
+        if tracker is not None and own:
             collect_task = await tracker.add_task(
-                f"{self._task_prefix}Sync: collect uploads", total=len(candidates)
+                f"{self._task_prefix}Sync: collect uploads", total=len(own)
             )
             collect_tracking = (tracker, collect_task)
         try:
             by_dest = await self._collect_uploads(
-                candidates, start, end, tracking=collect_tracking
+                own, start, end, tracking=collect_tracking
             )
         except Exception as exc:
             if collect_task is not None and tracker is not None:
@@ -949,8 +960,13 @@ class SyncExecutor:
         if not by_dest:
             return
 
-        borrowed_descriptions = self._compute_borrowed_descriptions(candidates)
-        borrowed_media = await self._tracked_compute_borrowed_media(candidates)
+        # Every candidate may lend; only the entries queued here borrow.
+        queued_keys = {
+            (e.external_id, e.source_id) for es in by_dest.values() for e in es
+        }
+        queued = [e for e in own if (e.external_id, e.source_id) in queued_keys]
+        borrowed_descriptions = self._compute_borrowed_descriptions(candidates, queued)
+        borrowed_media = await self._tracked_compute_borrowed_media(candidates, queued)
 
         tracker = self._tracker
         dest_map = {dest_id: conn for dest_id, conn in self._destinations}

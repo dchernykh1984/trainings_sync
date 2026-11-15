@@ -1,26 +1,39 @@
 from __future__ import annotations
 
+import asyncio
 import gzip
 import json
+import ssl
+from collections.abc import Coroutine
 from datetime import date, datetime, timezone
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import requests
+import urllib3
 
 from app.connectors.base import (
     Activity,
     ActivityMeta,
     ActivityUnavailableError,
+    CallTimeoutError,
     RateLimitError,
     TransientDownloadError,
+    _run_with_timeout,
 )
 from app.connectors.intervals_icu import (
     _BASE_URL,
+    _CALL_TIMEOUT_S,
     _DEFAULT_RETRY_AFTER_S,
     _MAX_ATTEMPTS,
+    _REQUEST_TIMEOUT_S,
     _STUB_MATCH_S,
+    _UPLOAD_ATTEMPTS,
+    _UPLOAD_CALL_TIMEOUT_S,
+    _UPLOAD_RESPONSE_TIMEOUT_S,
+    _UPLOAD_RETRY_PAUSE_S,
     IntervalsIcuConnector,
     _decode_file,
 )
@@ -44,6 +57,7 @@ _TCX = b'<?xml version="1.0"?><TrainingCenterDatabase xmlns="x"/>'
 class _FakeRenderer(ProgressRenderer):
     def __init__(self) -> None:
         self.failed: list[Task] = []
+        self.warnings: list[str] = []
 
     def on_task_added(self, task: Task) -> None:
         pass
@@ -58,7 +72,7 @@ class _FakeRenderer(ProgressRenderer):
         self.failed.append(task)
 
     def on_task_warning(self, task: Task, message: str) -> None:
-        pass
+        self.warnings.append(message)
 
     def on_total_updated(self, task: Task) -> None:
         pass
@@ -482,6 +496,25 @@ async def test_429_on_every_attempt_hands_the_pause_to_the_engine(
 # ---------------------------------------------------------------------------
 
 
+_POST = ("POST", f"{_BASE_URL}/athlete/0/activities")
+
+
+def _wrapped(error_type: type[Exception], reason: Exception) -> Exception:
+    """What requests raises for a failure urllib3 reports with `reason`."""
+    return error_type(urllib3.exceptions.MaxRetryError(MagicMock(), "/api", reason))
+
+
+# A refused connection or a name that did not resolve.
+_REFUSED = _wrapped(
+    requests.ConnectionError, urllib3.exceptions.NewConnectionError(MagicMock(), "x")
+)
+# A TLS connection dropped while the file was going out.
+_TLS_DROPPED = _wrapped(
+    requests.exceptions.SSLError,
+    urllib3.exceptions.SSLError(ssl.SSLEOFError(8, "EOF in violation of protocol")),
+)
+
+
 def _activity(**overrides: object) -> Activity:
     fields: dict = {
         "external_id": "g1",
@@ -536,7 +569,7 @@ async def test_upload_sets_the_description_in_a_separate_update(
 async def test_upload_of_a_duplicate_changes_nothing(
     connector: IntervalsIcuConnector, log: MagicMock, http: MagicMock
 ) -> None:
-    http.return_value = _resp(200, body={"activities": []})
+    http.return_value = _resp(200, content=b"")  # the body is not even read
     await connector.upload_activity(_activity(description="kept as is"))
     assert http.call_count == 1  # no description update
     assert "duplicate, skipped" in _logged(log, "info")
@@ -568,6 +601,181 @@ async def test_upload_rejected_by_the_server_raises(
     http.return_value = _resp(400)
     with pytest.raises(requests.HTTPError):
         await connector.upload_activity(_activity())
+    assert http.call_count == 1  # a 4xx does not change on a second try
+
+
+async def test_upload_waits_longer_for_its_answer_than_other_calls(
+    connector: IntervalsIcuConnector, http: MagicMock
+) -> None:
+    http.return_value = _resp(201, body={"activities": [{"id": "i9"}]})
+    await connector.upload_activity(_activity())
+    assert http.call_args.kwargs["timeout"] == (
+        _REQUEST_TIMEOUT_S,
+        _UPLOAD_RESPONSE_TIMEOUT_S,
+    )
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        # No answer, or one cut off.
+        requests.ReadTimeout("read timed out"),
+        requests.ConnectionError("reset"),
+        requests.exceptions.ChunkedEncodingError("cut off"),
+        requests.exceptions.ContentDecodingError("truncated gzip"),
+        _TLS_DROPPED,
+        # A server error, from intervals.icu or a gateway in front of it.
+        _resp(504),
+        _resp(524),
+        _resp(502),
+        _resp(408),
+        # Nothing reached the server.
+        requests.ConnectTimeout("connect timed out"),
+        _REFUSED,
+    ],
+)
+async def test_upload_is_sent_again_after_no_answer_or_a_server_error(
+    connector: IntervalsIcuConnector,
+    log: MagicMock,
+    no_sleep: AsyncMock,
+    http: MagicMock,
+    failure: object,
+) -> None:
+    # One pause for every failure: a server that may still be at work on the
+    # file gets time to finish it before the next send.
+    http.side_effect = [failure, _resp(201, body={"activities": [{"id": "i9"}]})]
+    assert await connector.upload_activity(_activity()) is None
+    assert _calls(http) == [_POST, _POST]
+    no_sleep.assert_awaited_once_with(_UPLOAD_RETRY_PAUSE_S)
+    assert f"attempt 1/{_UPLOAD_ATTEMPTS} failed" in _logged(log, "warning")
+    assert "success (id=i9)" in _logged(log, "info")
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        requests.ReadTimeout("read timed out"),
+        _resp(504),
+        _TLS_DROPPED,
+        _REFUSED,
+        _resp(502),
+    ],
+)
+async def test_a_200_after_a_failed_try_leaves_the_activity_as_it_is(
+    connector: IntervalsIcuConnector,
+    log: MagicMock,
+    no_sleep: AsyncMock,
+    http: MagicMock,
+    failure: object,
+) -> None:
+    # The 200 cannot tell this upload's earlier try from an activity that was
+    # there before and may have been edited, so nothing is written over it.
+    http.side_effect = [failure, _resp(200, body={"activities": [{"id": "i7"}]})]
+    assert await connector.upload_activity(_activity(description="d")) is None
+    assert _calls(http) == [_POST, _POST]  # no description update
+    assert "duplicate, skipped" in _logged(log, "info")
+    assert "left as it is: description not set" in _logged(log, "warning")
+
+
+async def test_a_failed_try_shows_on_the_upload_task(
+    connector: IntervalsIcuConnector,
+    renderer: _FakeRenderer,
+    log: MagicMock,
+    no_sleep: AsyncMock,
+    http: MagicMock,
+) -> None:
+    # A wait of minutes must not look like a hung upload.
+    task = await connector._tracker.add_task("Upload to intervals.icu", total=1)
+    http.side_effect = [
+        requests.ReadTimeout("read timed out"),
+        _resp(201, body={"activities": [{"id": "i9"}]}),
+    ]
+    await connector.upload_activity(_activity(), task_name=task)
+    attempt = f"attempt 1/{_UPLOAD_ATTEMPTS} failed"
+    assert any(attempt in w for w in renderer.warnings)
+    assert _logged(log, "warning").count(attempt) == 1  # by the tracker alone
+
+
+@pytest.mark.parametrize("body", [b"", b"[]", b'{"activities": []}'])
+async def test_an_answer_without_a_usable_id_still_counts_as_uploaded(
+    connector: IntervalsIcuConnector,
+    log: MagicMock,
+    no_sleep: AsyncMock,
+    http: MagicMock,
+    body: bytes,
+) -> None:
+    # Reading the id must not turn an upload that went through into a failure.
+    http.return_value = _resp(201, content=body)
+    assert await connector.upload_activity(_activity(description="d")) is None
+    assert "activity ID unavailable" in _logged(log, "warning")
+    assert "success (id=None)" in _logged(log, "info")
+
+
+async def test_only_an_upload_gets_the_longer_call_bound(
+    connector: IntervalsIcuConnector,
+    monkeypatch: pytest.MonkeyPatch,
+    http: MagicMock,
+) -> None:
+    bounds: list[float] = []
+
+    async def spy(coro: Coroutine[Any, Any, Any], timeout_s: float) -> Any:
+        bounds.append(timeout_s)
+        return await _run_with_timeout(coro, timeout_s)
+
+    monkeypatch.setattr("app.connectors.intervals_icu._run_with_timeout", spy)
+    http.side_effect = [_resp(body=[]), _resp(201, body={"activities": [{"id": "i9"}]})]
+    await connector.list_activities(date(2026, 1, 1), date(2026, 1, 1))
+    await connector.upload_activity(_activity())
+    assert bounds == [_CALL_TIMEOUT_S, _UPLOAD_CALL_TIMEOUT_S]
+
+
+async def test_an_upload_cut_off_by_the_call_bound_is_not_sent_again(
+    connector: IntervalsIcuConnector,
+    monkeypatch: pytest.MonkeyPatch,
+    http: MagicMock,
+) -> None:
+    # Its thread may still be sending, and a second send could slip past the
+    # server's duplicate check.
+    async def call_bound_passes(coro: Coroutine[Any, Any, Any], timeout: float) -> Any:
+        coro.close()  # never started, so no thread is left behind
+        raise asyncio.TimeoutError
+
+    monkeypatch.setattr("app.connectors.base.asyncio.wait_for", call_bound_passes)
+    with pytest.raises(CallTimeoutError):
+        await connector.upload_activity(_activity())
+    http.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("failure", "raised"),
+    [
+        (requests.ReadTimeout("read timed out"), TransientDownloadError),
+        (_resp(503), requests.HTTPError),
+    ],
+)
+async def test_upload_gives_up_after_the_last_attempt(
+    connector: IntervalsIcuConnector,
+    no_sleep: AsyncMock,
+    http: MagicMock,
+    failure: object,
+    raised: type[Exception],
+) -> None:
+    http.side_effect = [failure] * _UPLOAD_ATTEMPTS
+    with pytest.raises(raised):
+        await connector.upload_activity(_activity())
+    assert _calls(http) == [_POST] * _UPLOAD_ATTEMPTS
+    assert [c.args[0] for c in no_sleep.await_args_list] == [_UPLOAD_RETRY_PAUSE_S] * (
+        _UPLOAD_ATTEMPTS - 1
+    )
+
+
+async def test_upload_hit_by_the_rate_limit_is_not_sent_again(
+    connector: IntervalsIcuConnector, no_sleep: AsyncMock, http: MagicMock
+) -> None:
+    http.return_value = _resp(429, headers={"Retry-After": "60"})
+    with pytest.raises(RateLimitError):
+        await connector.upload_activity(_activity())
+    assert http.call_count == _MAX_ATTEMPTS  # only the 429 waits, no second round
 
 
 async def test_upload_does_not_report_media(connector: IntervalsIcuConnector) -> None:

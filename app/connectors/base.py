@@ -106,6 +106,11 @@ class TransientDownloadError(Exception):
     """Raised by connectors for transient network errors that are worth retrying."""
 
 
+class CallTimeoutError(TransientDownloadError):
+    """A call ran past its time bound. Work in a thread cannot be stopped, so
+    the call itself may still be running."""
+
+
 class RateLimitError(TransientDownloadError):
     """Raised when the service returns HTTP 429; carries the suggested retry delay."""
 
@@ -131,9 +136,7 @@ async def _run_with_timeout(
     try:
         return await asyncio.wait_for(coro, timeout=timeout_s)
     except asyncio.TimeoutError:
-        raise TransientDownloadError(
-            f"operation timed out after {timeout_s:.0f}s"
-        ) from None
+        raise CallTimeoutError(f"operation timed out after {timeout_s:.0f}s") from None
 
 
 @dataclass(frozen=True)

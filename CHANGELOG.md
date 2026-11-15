@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/dchernykh1984/trainings_sync/compare/v0.2.3...v0.3.0) (2026-11-15)
+
+
+### Features
+
+* **connectors:** sync activities from and to intervals.icu ([c28aa8e](https://github.com/dchernykh1984/trainings_sync/commit/c28aa8e4114c7315286039a5a3684304f191cc1b))
+
 ## [0.2.3](https://github.com/dchernykh1984/trainings_sync/compare/v0.2.2...v0.2.3) (2026-11-07)
 
 

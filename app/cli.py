@@ -371,13 +371,14 @@ async def _run_copies(
     for item in found:
         print(_describe(item, names))
     if found and args.delete_copies:
-        await _delete_copies(found, deletable, names)
+        await _delete_copies(found, deletable, names, sync_logger)
 
 
 async def _delete_copies(
     to_delete: list[FoundCopy],
     connectors: Mapping[str, ServiceConnector],
     names: Mapping[str, str],
+    sync_logger: SyncLogger,
 ) -> None:
     try:
         answer = input(
@@ -389,6 +390,8 @@ async def _delete_copies(
     if answer.strip() != "yes":
         print("Nothing deleted.")
         return
+    for item in to_delete:  # what went and why, for after the fact
+        sync_logger.info(f"[copies] {_describe(item, names).strip()}")
     failed = await remove_copies(to_delete, connectors)
     print(f"Deleted {len(to_delete) - len(failed)} of {len(to_delete)}.")
     for item, exc in failed:

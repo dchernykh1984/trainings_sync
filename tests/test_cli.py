@@ -1087,6 +1087,8 @@ class TestRunCopies:
         t = await self._run_copies(tmp_path, [_TO_DELETE], delete=True)
         t.remove.assert_awaited_once_with([_TO_DELETE], {"intervals": t.icu})
         assert "Deleted 1 of 1." in capsys.readouterr().out
+        log = (tmp_path / "sync.log").read_text(encoding="utf-8")
+        assert "[copies] intervals: 2024-05-01 delete 'i2'" in log
 
     @pytest.mark.parametrize("answer", ["no", "", EOFError()])
     async def test_without_a_yes_nothing_is_deleted(

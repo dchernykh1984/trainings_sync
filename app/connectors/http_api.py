@@ -13,6 +13,7 @@ from app.connectors.base import (
     RateLimitError,
     ServiceConnector,
     TransientDownloadError,
+    UploadRefusedError,
     _parse_retry_after,
     _run_with_timeout,
     attach_debug_logging,
@@ -30,6 +31,12 @@ def _transient_status(exc: requests.HTTPError) -> bool:
     return status >= 500 or status == 408
 
 
+def _refused_file(exc: requests.HTTPError) -> bool:
+    """A 413 or a 422: the service refuses this very file (too big, or nothing
+    in it that it can use), and sending it again gets the same answer."""
+    return _status(exc) in (413, 422)
+
+
 def _parse_start(value: str, zone: tzinfo = timezone.utc) -> datetime:
     """A start time in UTC; a value without an offset is read in `zone`."""
     dt = datetime.fromisoformat(value)
@@ -41,6 +48,12 @@ def _parse_start(value: str, zone: tzinfo = timezone.utc) -> datetime:
 def _is_fit(content: bytes) -> bool:
     """Whether bytes are a FIT file: its header holds ".FIT" at offset 8."""
     return content[8:12] == b".FIT"
+
+
+def _reason(exc: requests.HTTPError) -> str:
+    """The service's own words for an error, on one line and kept short."""
+    text = exc.response.text if exc.response is not None else ""
+    return " ".join(text.split())[:200] or str(exc)
 
 
 class HttpApiConnector(ServiceConnector):
@@ -138,3 +151,16 @@ class HttpApiConnector(ServiceConnector):
             if _transient_status(exc):
                 raise TransientDownloadError(str(exc)) from exc
             raise ActivityUnavailableError(str(exc)) from exc
+
+    async def _send_file(
+        self, method: str, path: str, **kwargs: Any
+    ) -> requests.Response:
+        """_request for an upload: a file the service refuses for good (see
+        _refused_file) raises UploadRefusedError, which the engine passes over
+        instead of stopping every upload queued behind it."""
+        try:
+            return await self._request(method, path, **kwargs)
+        except requests.HTTPError as exc:
+            if not _refused_file(exc):
+                raise
+            raise UploadRefusedError(f"refused ({_reason(exc)})") from exc

@@ -270,6 +270,7 @@ class IntervalsIcuConnector(HttpApiConnector):
     ) -> str | None:
         log = self._tracker.sync_logger
         account = self.user_label
+        # A file with no data points in it, say, raises UploadRefusedError.
         created, uploaded_id = await self._post_file(activity, task_name)
         if not created:
             if log:
@@ -312,7 +313,7 @@ class IntervalsIcuConnector(HttpApiConnector):
         attempt = 1
         while True:
             try:
-                resp = await self._request(
+                resp = await self._send_file(
                     "POST",
                     f"/athlete/{self._athlete_id}/activities",
                     timeout=(_REQUEST_TIMEOUT_S, _UPLOAD_RESPONSE_TIMEOUT_S),

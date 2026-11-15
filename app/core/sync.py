@@ -14,6 +14,7 @@ from app.connectors.base import (
     RateLimitError,
     ServiceConnector,
     TransientDownloadError,
+    UploadRefusedError,
 )
 from app.core.cache import ActivityCache, CacheEntry
 from app.core.planner import DownloadItem, SourceSpec, SyncPlanner
@@ -824,6 +825,49 @@ class SyncExecutor:
             f" to {self._name(dest_id)} (not supported)",
         )
 
+    def _log_upload(self, entry: CacheEntry, dest: str, result: str) -> None:
+        log = self._tracker.sync_logger if self._tracker is not None else None
+        if not log:
+            return
+        src_label = self._source_user_label(entry.source_id)
+        src_suffix = f" ({src_label})" if src_label else ""
+        log.info(
+            f"[upload] {entry.external_id!r}"
+            f" ({self._name(entry.source_id)}{src_suffix}) -> {dest}: {result}"
+        )
+
+    async def _warn(
+        self, tracking: tuple[TaskTracker, str] | None, message: str
+    ) -> None:
+        if tracking is not None:  # without one, the upload log line says it
+            await tracking[0].warn(tracking[1], message)
+
+    async def _upload_entry(
+        self,
+        dest_id: str,
+        entry: CacheEntry,
+        activity: Activity,
+        connector: ServiceConnector,
+        tracking: tuple[TaskTracker, str] | None,
+    ) -> tuple[str, bool]:
+        """Upload one entry and mark it: (what the log says, whether it went up)."""
+        what = f"{entry.external_id!r} {entry.start_time.date()}"
+        try:
+            local_path = await connector.upload_activity(
+                activity, task_name=tracking[1] if tracking is not None else None
+            )
+        except UploadRefusedError as exc:
+            # Marked all the same, so that later runs do not stop at it.
+            await self._warn(tracking, f"{what} - {exc}, skipped")
+            self._cache.mark_uploaded(entry, dest_id, local_path=None)
+            return f"skipped: {exc}", False
+        if activity.media and not connector.supports_media_upload:
+            await self._warn_media_not_uploaded(
+                entry.external_id, dest_id, len(activity.media), tracking
+            )
+        self._cache.mark_uploaded(entry, dest_id, local_path=local_path)
+        return (local_path if local_path is not None else "ok"), True
+
     def _build_upload_activity(
         self,
         entry: CacheEntry,
@@ -860,34 +904,19 @@ class SyncExecutor:
         borrowed_descriptions: dict[tuple[str, str], str] | None = None,
         borrowed_media: dict[tuple[str, str], list[MediaItem]] | None = None,
     ) -> None:
-        log = self._tracker.sync_logger if self._tracker is not None else None
         dest_label = connector.user_label
-        dest_suffix = f" ({dest_label})" if dest_label else ""
+        dest = self._name(dest_id) + (f" ({dest_label})" if dest_label else "")
         any_uploaded = False
         try:
             for entry in entries:
                 activity = self._build_upload_activity(
                     entry, borrowed_descriptions, borrowed_media
                 )
-                local_path = await connector.upload_activity(
-                    activity,
-                    task_name=tracking[1] if tracking is not None else None,
+                result, uploaded = await self._upload_entry(
+                    dest_id, entry, activity, connector, tracking
                 )
-                if activity.media and not connector.supports_media_upload:
-                    await self._warn_media_not_uploaded(
-                        entry.external_id, dest_id, len(activity.media), tracking
-                    )
-                self._cache.mark_uploaded(entry, dest_id, local_path=local_path)
-                any_uploaded = True
-                if log:
-                    result = local_path if local_path is not None else "ok"
-                    src_label = self._source_user_label(entry.source_id)
-                    src_suffix = f" ({src_label})" if src_label else ""
-                    log.info(
-                        f"[upload] {entry.external_id!r}"
-                        f" ({self._name(entry.source_id)}{src_suffix})"
-                        f" -> {self._name(dest_id)}{dest_suffix}: {result}"
-                    )
+                any_uploaded = any_uploaded or uploaded
+                self._log_upload(entry, dest, result)
                 if tracking is not None:
                     await tracking[0].advance(tracking[1])
         except BaseException as exc:

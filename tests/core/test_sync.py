@@ -13,6 +13,7 @@ from app.connectors.base import (
     ActivityUnavailableError,
     MediaItem,
     TransientDownloadError,
+    UploadRefusedError,
 )
 from app.core.cache import ActivityCache, CacheEntry
 from app.core.planner import SourceSpec
@@ -505,6 +506,59 @@ class TestSyncExecutorUpload:
         executor = SyncExecutor(
             sources=[(_spec("garmin"), _source_conn())],
             destinations=[("strava", _dest_conn())],
+            cache=cache,
+        )
+        await executor.run(_START, _END)
+        entry = cache.get_entry("act-1", "garmin")
+        assert entry is not None
+        assert "strava" in entry.uploaded_to
+
+    async def test_a_refused_file_is_marked_and_the_next_one_still_goes(
+        self, cache: ActivityCache
+    ) -> None:
+        # The destination will never take "empty": the run says why, marks it so
+        # that later runs do not stop at it, and still uploads "ride".
+        cache.put(_entry("empty", "garmin"), b"content")
+        cache.put(_entry("ride", "garmin", _T0 + timedelta(days=1)), b"content")
+
+        async def _upload(activity: Activity, *, task_name: str | None = None) -> None:
+            if activity.external_id == "empty":
+                raise UploadRefusedError("refused (no data)")
+
+        dest = _dest_conn()
+        dest.upload_activity = AsyncMock(side_effect=_upload)
+        tracker = _make_tracker()
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), _source_conn())],
+            destinations=[("strava", dest)],
+            cache=cache,
+            tracker=tracker,
+        )
+        await executor.run(_START, _END)
+        assert dest.upload_activity.await_count == 2
+        tracker.fail.assert_not_called()
+        tracker.warn.assert_any_await(
+            "Upload to strava", "'empty' 2026-01-01 - refused (no data), skipped"
+        )
+        for external_id in ("empty", "ride"):
+            entry = cache.get_entry(external_id, "garmin")
+            assert entry is not None
+            assert "strava" in entry.uploaded_to
+        logged = [str(c.args[0]) for c in tracker.sync_logger.info.call_args_list]
+        assert "[upload] 'empty' (garmin) -> strava: skipped: refused (no data)" in (
+            logged
+        )
+        assert "[upload] 'ride' (garmin) -> strava: ok" in logged
+
+    async def test_a_refused_file_is_marked_without_a_tracker_too(
+        self, cache: ActivityCache
+    ) -> None:
+        cache.put(_entry(source_id="garmin"), b"content")
+        dest = _dest_conn()
+        dest.upload_activity = AsyncMock(side_effect=UploadRefusedError("refused"))
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), _source_conn())],
+            destinations=[("strava", dest)],
             cache=cache,
         )
         await executor.run(_START, _END)

@@ -46,6 +46,22 @@ def test_between_two_files_of_one_format_the_first_upload_is_kept() -> None:
     assert _dropped(_entry("1000"), _entry("999", minutes_later=5)) == {"1000": "999"}
 
 
+def test_of_two_recordings_of_one_format_the_longer_is_kept() -> None:
+    # A second device started 6 minutes late and stopped an hour early.
+    whole = _entry("2", elapsed_s=158 * 60)
+    part = _entry("1", minutes_later=6, elapsed_s=97 * 60)
+    assert _dropped(whole, part) == {"1": "2"}
+
+
+def test_a_copy_well_longer_than_the_device_file_is_not_dropped() -> None:
+    # The FIT missed the first 20 minutes the TCX holds: neither gives way.
+    tcx = _entry("1", fmt="tcx", elapsed_s=134 * 60)
+    fit = _entry("2", minutes_later=20, elapsed_s=94 * 60)
+    assert _dropped(tcx, fit) == {}
+    # A few seconds more is the same recording, and the FIT stays.
+    assert _dropped(_entry("1", fmt="gpx", elapsed_s=3605), _entry("2")) == {"1": "2"}
+
+
 def test_a_second_recording_that_overlaps_half_of_the_longer_is_a_copy() -> None:
     # 08:00-09:00 and 08:30-09:10: 30 minutes shared, half of the hour.
     late = _entry("2", minutes_later=30, elapsed_s=40 * 60)

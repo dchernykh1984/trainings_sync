@@ -1090,7 +1090,7 @@ wheels = [
 
 [[package]]
 name = "trainings-sync"
-version = "0.2.3"
+version = "0.3.0"
 source = { editable = "." }
 default-groups = "all"
 dependencies = [
@@ -1144,7 +1144,7 @@ dev = [
     { name = "pytest-cov", specifier = ">=7.1.0,<8" },
     { name = "pytest-qt", specifier = ">=4.4,<5" },
     { name = "pytest-xdist", specifier = ">=3.8.0,<4" },
-    { name = "ruff", specifier = ">=0.15.12,<0.17" },
+    { name = "ruff", specifier = ">=0.15.12,<0.18" },
     { name = "types-requests", specifier = ">=2.32,<3" },
 ]
 

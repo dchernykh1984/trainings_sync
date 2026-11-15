@@ -392,7 +392,10 @@ Build the sync configuration visually:
   downloaded history stays attached to it.
 - **Sync Groups** - define what syncs where. Add sources (each with a priority;
   higher priority wins when the same activity exists in several sources) and
-  destinations, both chosen from the connectors you defined.
+  destinations, both chosen from the connectors you defined. A group uploads
+  only what its own sources have. When one group writes to a folder and another
+  reads that folder, a new activity reaches the second group on the next run; to
+  send it on in the same run, give the second group the folder's sources instead.
 - **Options** - optional custom start/end dates, *Force re-download* (ignore the
   cache), and *Skip wellness sync*. Click **Save configuration** to persist.
 

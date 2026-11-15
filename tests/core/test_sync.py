@@ -1686,6 +1686,20 @@ class TestSyncExecutorStravaSource:
 
 
 class TestBorrowedDescriptions:
+    async def test_an_entry_does_not_borrow_from_its_own_source(
+        self, cache: ActivityCache
+    ) -> None:
+        # Two overlapping entries of one source are two activities, not copies.
+        bare = _entry("g-1", "garmin")
+        described = _entry("g-2", "garmin", description="its own")
+        executor = SyncExecutor(
+            sources=[(_spec("garmin", priority=1), _source_conn())],
+            destinations=[("icu", _dest_conn())],
+            cache=cache,
+        )
+        entries = [bare, described]
+        assert executor._compute_borrowed_descriptions(entries, entries) == {}
+
     async def test_description_from_shadowed_entry_reaches_destination(
         self, cache: ActivityCache
     ) -> None:
@@ -1710,7 +1724,9 @@ class TestBorrowedDescriptions:
             destinations=[("local", dest)],
             cache=cache,
         )
-        borrowed = executor._compute_borrowed_descriptions([garmin_entry, strava_entry])
+        borrowed = executor._compute_borrowed_descriptions(
+            [garmin_entry, strava_entry], [garmin_entry, strava_entry]
+        )
 
         assert borrowed == {("g-1", "garmin"): "A tough climb"}
 
@@ -1732,7 +1748,9 @@ class TestBorrowedDescriptions:
             destinations=[],
             cache=cache,
         )
-        borrowed = executor._compute_borrowed_descriptions([garmin_entry, strava_entry])
+        borrowed = executor._compute_borrowed_descriptions(
+            [garmin_entry, strava_entry], [garmin_entry, strava_entry]
+        )
 
         assert borrowed == {}
 
@@ -1799,7 +1817,9 @@ class TestComputeBorrowedMedia:
         cache.put_media(strava, [_PHOTO])
 
         executor = self._executor(cache)
-        result = await executor._compute_borrowed_media([garmin, strava])
+        result = await executor._compute_borrowed_media(
+            [garmin, strava], [garmin, strava]
+        )
 
         assert result == {("g-1", "garmin"): [_PHOTO]}
 
@@ -1810,7 +1830,9 @@ class TestComputeBorrowedMedia:
         cache.put_media(strava, [_PHOTO2])
 
         executor = self._executor(cache)
-        result = await executor._compute_borrowed_media([garmin, strava])
+        result = await executor._compute_borrowed_media(
+            [garmin, strava], [garmin, strava]
+        )
 
         assert result == {}
 
@@ -1831,7 +1853,9 @@ class TestComputeBorrowedMedia:
         cache.put_media(s2, [_PHOTO2])
 
         executor = self._executor(cache)
-        result = await executor._compute_borrowed_media([garmin, s1, s2])
+        result = await executor._compute_borrowed_media(
+            [garmin, s1, s2], [garmin, s1, s2]
+        )
 
         assert ("g-1", "garmin") in result
         assert _PHOTO in result[("g-1", "garmin")]
@@ -1846,7 +1870,9 @@ class TestComputeBorrowedMedia:
         cache.put_media(s2, [_PHOTO])  # same URL as s1
 
         executor = self._executor(cache)
-        result = await executor._compute_borrowed_media([garmin, s1, s2])
+        result = await executor._compute_borrowed_media(
+            [garmin, s1, s2], [garmin, s1, s2]
+        )
 
         borrowed = result.get(("g-1", "garmin"), [])
         assert borrowed.count(_PHOTO) == 1
@@ -1862,7 +1888,9 @@ class TestComputeBorrowedMedia:
         cache.put_media(s2, [_PHOTO_NO_URL])
 
         executor = self._executor(cache)
-        result = await executor._compute_borrowed_media([garmin, s1, s2])
+        result = await executor._compute_borrowed_media(
+            [garmin, s1, s2], [garmin, s1, s2]
+        )
 
         borrowed = result.get(("g-1", "garmin"), [])
         assert len(borrowed) == 2  # both kept - no URL-based dedup
@@ -1878,7 +1906,9 @@ class TestComputeBorrowedMedia:
         cache.put_media(strava, [_PHOTO])
 
         executor = self._executor(cache)
-        result = await executor._compute_borrowed_media([garmin, strava])
+        result = await executor._compute_borrowed_media(
+            [garmin, strava], [garmin, strava]
+        )
 
         assert result == {}
 
@@ -1900,7 +1930,9 @@ class TestComputeBorrowedMedia:
             destinations=[],
             cache=cache,
         )
-        result = await executor._compute_borrowed_media([garmin, strava])
+        result = await executor._compute_borrowed_media(
+            [garmin, strava], [garmin, strava]
+        )
 
         assert result == {}
 
@@ -1926,7 +1958,9 @@ class TestComputeBorrowedMedia:
             destinations=[],
             cache=cache,
         )
-        result = await executor._compute_borrowed_media([garmin, b_entry, c_entry])
+        result = await executor._compute_borrowed_media(
+            [garmin, b_entry, c_entry], [garmin, b_entry, c_entry]
+        )
 
         assert result == {("g-1", "garmin"): [_PHOTO2]}
 
@@ -2039,7 +2073,7 @@ class TestComputeBorrowedMedia:
             cache=cache,
             tracker=tracker,
         )
-        await executor._compute_borrowed_media([garmin, strava])
+        await executor._compute_borrowed_media([garmin, strava], [garmin, strava])
 
         sync_logger.debug.assert_called_once()
         msg = sync_logger.debug.call_args[0][0]
@@ -2397,6 +2431,91 @@ class TestUploadPhase:
 
         await executor.upload_phase(_START, _END)
 
+        dest.upload_activity.assert_not_awaited()
+
+    async def test_only_the_groups_own_sources_are_uploaded(
+        self, cache: ActivityCache
+    ) -> None:
+        # The cache is shared by all groups. Another group left a Garmin and a
+        # Strava copy of one ride there; this group's only source is a folder.
+        # Neither copy has a priority here, so both used to be uploaded.
+        cache.put(_entry("g-1", "garmin"), b"g")
+        cache.put(_entry("s-1", "strava"), b"s")
+        cache.put(_entry("f-1", "folder", start_time=_T0 + timedelta(days=1)), b"f")
+        dest = _dest_conn()
+        executor = SyncExecutor(
+            sources=[(_spec("folder", priority=1), _source_conn())],
+            destinations=[("icu", dest)],
+            cache=cache,
+        )
+
+        await executor.upload_phase(_START, _END)
+
+        uploaded = [c.args[0].external_id for c in dest.upload_activity.await_args_list]
+        assert uploaded == ["f-1"]
+
+    async def test_another_groups_copy_still_lends_its_description(
+        self, cache: ActivityCache
+    ) -> None:
+        # Not uploaded by this group, but its description still reaches the
+        # same ride from this group's own source.
+        cache.put(_entry("g-1", "garmin"), b"g")
+        cache.put(_entry("s-1", "strava", description="from strava"), b"s")
+        dest = _dest_conn()
+        executor = SyncExecutor(
+            sources=[(_spec("garmin", priority=1), _source_conn())],
+            destinations=[("icu", dest)],
+            cache=cache,
+        )
+
+        await executor.upload_phase(_START, _END)
+
+        (call,) = dest.upload_activity.await_args_list
+        assert (call.args[0].external_id, call.args[0].description) == (
+            "g-1",
+            "from strava",
+        )
+
+    async def test_only_the_groups_own_entries_borrow(
+        self, cache: ActivityCache
+    ) -> None:
+        # Other groups' entries may lend, but borrowing is worked out only for
+        # the entries this group queues: its own that are not uploaded yet.
+        cache.put(_entry("g-1", "garmin"), b"g")
+        later = _T0 + timedelta(days=3)
+        cache.put(_entry("g-2", "garmin", later, uploaded_to=("icu",)), b"g")
+        cache.put(_entry("s-1", "strava", start_time=_T0 + timedelta(days=1)), b"s")
+        cache.put(_entry("s-2", "strava", start_time=_T0 + timedelta(days=2)), b"s")
+        tracker = _make_tracker()
+        executor = SyncExecutor(
+            sources=[(_spec("garmin", priority=1), _source_conn())],
+            destinations=[("icu", _dest_conn())],
+            cache=cache,
+            tracker=tracker,
+        )
+
+        await executor.upload_phase(_START, _END)
+
+        totals = {
+            c.args[0]: c.kwargs["total"] for c in tracker.add_task.await_args_list
+        }
+        assert totals["Sync: collect uploads"] == 2
+        assert totals["Sync: compute borrowed media"] == 1
+
+    async def test_no_destination_is_listed_when_the_group_has_nothing_of_its_own(
+        self, cache: ActivityCache
+    ) -> None:
+        cache.put(_entry("s-1", "strava"), b"s")
+        dest = _dest_conn()
+        executor = SyncExecutor(
+            sources=[(_spec("garmin", priority=1), _source_conn())],
+            destinations=[("icu", dest)],
+            cache=cache,
+        )
+
+        await executor.upload_phase(_START, _END)
+
+        dest.list_activities.assert_not_awaited()
         dest.upload_activity.assert_not_awaited()
 
     async def test_phases_together_equal_run(self, cache: ActivityCache) -> None:

@@ -252,11 +252,16 @@ async def test_removal_deletes_what_was_found_and_reports_failures(
 # because trainings-sync once uploaded Strava's copy of it there.
 
 
-def _garmin_twins(cache: ActivityCache, strava_file: bytes = b"gpx") -> CacheEntry:
+_OWN_GPX = b'<?xml version="1.0"?><gpx version="1.1" creator="trainings-sync"/>'
+
+
+def _garmin_twins(
+    cache: ActivityCache, copy_file: bytes = _OWN_GPX, strava_file: bytes = _OWN_GPX
+) -> CacheEntry:
     """Garmin's TCX of a ride, its GPX copy, and the Strava activity that copy
     was uploaded from; the Strava one."""
     _cached(cache, "10", b"tcx", fmt="tcx", uploaded_to=())
-    _cached(cache, "20", b"gpx", fmt="gpx", uploaded_to=())
+    _cached(cache, "20", copy_file, fmt="gpx", uploaded_to=())
     return _cached(
         cache, "s1", strava_file, fmt="gpx", uploaded_to=("garmin",), source_id="strava"
     )
@@ -274,10 +279,19 @@ async def test_a_file_trainings_sync_uploaded_into_a_source_is_found(
     garmin.download_activity.assert_not_awaited()
 
 
-async def test_a_copy_the_user_made_in_a_source_is_left_alone(
-    cache: ActivityCache,
+@pytest.mark.parametrize(
+    ("copy_file", "strava_file"),
+    [
+        (_OWN_GPX, b"another file"),  # not what trainings-sync uploaded there
+        # A device's own file, in both services byte for byte: Strava's copy
+        # was only matched to Garmin's, never uploaded.
+        (b'<gpx creator="Edge 530"/>', b'<gpx creator="Edge 530"/>'),
+    ],
+)
+async def test_a_copy_trainings_sync_did_not_upload_is_left_alone(
+    cache: ActivityCache, copy_file: bytes, strava_file: bytes
 ) -> None:
-    _garmin_twins(cache, strava_file=b"another file")
+    _garmin_twins(cache, copy_file, strava_file)
     garmin = _service({"10": b"", "20": b""})
     assert await plan_removals(cache, {"garmin": garmin}) == []
     garmin.list_activities.assert_not_awaited()

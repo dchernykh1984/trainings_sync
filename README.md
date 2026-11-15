@@ -504,10 +504,11 @@ never deleted on a guess:
 
 - On intervals.icu, the service must hand back both files - the extra one and
   the kept one - byte for byte as they were uploaded.
-- In Garmin Connect, which is also a source, the extra activity must be a file
-  trainings-sync uploaded there from another source (from Strava, say) while
-  Garmin already had the workout, and Garmin must still list both. A workout
-  you uploaded twice yourself, or recorded with two devices, is left alone.
+- In Garmin Connect, which is also a source, the extra activity must be a GPX
+  that trainings-sync built and uploaded there from another source (from
+  Strava) while Garmin already had the workout, and Garmin must still list
+  both. A workout you uploaded twice yourself, or recorded with two devices, is
+  left alone.
 
 A workout a service holds once is left as it is.
 

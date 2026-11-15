@@ -179,6 +179,8 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          # No checkout here, so gh cannot read the repository from git.
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ inputs.release_tag }}
           MATRIX: ${{ needs.targets.outputs.matrix }}
           BUILDS: ${{ needs.build.result }}

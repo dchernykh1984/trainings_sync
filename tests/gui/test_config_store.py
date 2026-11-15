@@ -11,6 +11,7 @@ import pytest
 
 from app.core.config import (
     CREDENTIAL_CONNECTOR_CONFIGS,
+    ConfigError,
     GarminConnectorConfig,
     IntervalsIcuConnectorConfig,
     LocalFolderConnectorConfig,
@@ -325,6 +326,36 @@ def test_load_gui_config_from_rejects_non_object(
     src = tmp_path / "config.json"
     src.write_text(json.dumps([1, 2, 3]), encoding="utf-8")
     with pytest.raises(ValueError, match="must contain a JSON object"):
+        store.load_gui_config_from(src)
+
+
+def test_load_gui_config_from_refuses_a_connector_in_a_role_it_cannot_play(
+    store: ConfigStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Taken as it is, the config would only fail at the next run.
+    monkeypatch.setattr(
+        "app.core.config.SOURCE_ONLY_TYPES", frozenset({"local_folder"})
+    )
+    src = tmp_path / "config.json"
+    src.write_text(
+        json.dumps(
+            {
+                "connectors": [
+                    {"id": "a", "type": "local_folder", "folder": "/a"},
+                    {"id": "b", "type": "local_folder", "folder": "/b"},
+                ],
+                "sync_groups": [
+                    {
+                        "id": "g",
+                        "sources": [{"id": "a", "priority": 1}],
+                        "destinations": ["b"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError, match=r"'b' \(local_folder\) can only be a source"):
         store.load_gui_config_from(src)
 
 
@@ -787,4 +818,31 @@ def test_two_connectors_sharing_a_uid_are_refused(tmp_path: Path) -> None:
         sync_groups=[],
     )
     with pytest.raises(ValueError, match="share a uid"):
+        store.to_app_config(config)
+
+
+def test_a_group_giving_a_connector_a_role_it_cannot_play_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The GUI builds its config without the CLI parser, so it checks too.
+    monkeypatch.setattr(
+        "app.core.config.SOURCE_ONLY_TYPES", frozenset({"local_folder"})
+    )
+    store = ConfigStore(config_dir=tmp_path)
+    config = GuiConfig(
+        connectors=[
+            ConnectorEntry(id="A", type="local_folder", folder="/a"),
+            ConnectorEntry(id="B", type="local_folder", folder="/b"),
+        ],
+        sync_groups=[
+            SyncGroupEntry(
+                id="grp",
+                sources=[GroupSourceEntry(id="A", priority=1)],
+                destinations=["B"],
+            )
+        ],
+    )
+    with pytest.raises(
+        ConfigError, match="'B' \\(local_folder\\) can only be a source"
+    ):
         store.to_app_config(config)

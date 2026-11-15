@@ -406,7 +406,9 @@ Build the sync configuration visually:
   destinations, both chosen from the connectors you defined. A group uploads
   only what its own sources have. When one group writes to a folder and another
   reads that folder, a new activity reaches the second group on the next run; to
-  send it on in the same run, give the second group the folder's sources instead.
+  send it on in the same run, give the second group the folder's sources instead. A
+  connector whose service only gives or only takes activities is offered only in
+  that role.
 - **Options** - optional custom start/end dates, *Force re-download* (ignore the
   cache), and *Skip wellness sync*. Click **Save configuration** to persist.
 

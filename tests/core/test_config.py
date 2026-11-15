@@ -755,3 +755,41 @@ def test_two_connectors_sharing_a_uid_are_rejected(tmp_path: Path) -> None:
     ]
     with pytest.raises(ConfigError, match="duplicate connector uid"):
         load_config(_write(tmp_path, data))
+
+
+# ---------------------------------------------------------------------------
+# Roles: a connector type that can only be a source, or only a destination
+# ---------------------------------------------------------------------------
+
+
+def test_a_destination_only_type_cannot_be_a_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("app.core.config.DESTINATION_ONLY_TYPES", frozenset({"garmin"}))
+    with pytest.raises(
+        ConfigError, match=r"'garmin' \(garmin\) can only be a destination"
+    ):
+        load_config(_write(tmp_path, _minimal()))
+
+
+def test_a_source_only_type_cannot_be_a_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "app.core.config.SOURCE_ONLY_TYPES", frozenset({"local_folder"})
+    )
+    with pytest.raises(
+        ConfigError, match=r"'local' \(local_folder\) can only be a source"
+    ):
+        load_config(_write(tmp_path, _minimal()))
+
+
+def test_a_type_limited_to_one_role_is_fine_in_that_role(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The minimal config syncs garmin (source) to local (destination).
+    monkeypatch.setattr("app.core.config.SOURCE_ONLY_TYPES", frozenset({"garmin"}))
+    monkeypatch.setattr(
+        "app.core.config.DESTINATION_ONLY_TYPES", frozenset({"local_folder"})
+    )
+    assert load_config(_write(tmp_path, _minimal())).sync_groups

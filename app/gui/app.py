@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import math
 import sys
+from collections.abc import Mapping
 from datetime import date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -62,6 +63,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.core.config import ConfigError, can_be_destination, can_be_source
 from app.gui.config_store import (
     CONNECTOR_TYPES,
     CREDENTIAL_TYPES,
@@ -71,6 +73,7 @@ from app.gui.config_store import (
     GroupSourceEntry,
     GuiConfig,
     SyncGroupEntry,
+    check_group_roles,
 )
 from app.tracking.gui_renderer import GuiRenderer
 
@@ -847,6 +850,7 @@ class SyncGroupDialog(QDialog):
         connector_ids: list[str],
         entry: SyncGroupEntry | None = None,
         parent: QWidget | None = None,
+        connector_types: Mapping[str, str] | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Add Sync Group" if entry is None else "Edit Sync Group")
@@ -866,8 +870,12 @@ class SyncGroupDialog(QDialog):
         self._sources_widget = QListWidget()
         src_layout.addWidget(self._sources_widget)
         src_btn_row = QHBoxLayout()
+        # A type limited to one role is offered only for that role.
+        types = connector_types or {}
         self._src_add_combo = QComboBox()
-        self._src_add_combo.addItems(connector_ids)
+        self._src_add_combo.addItems(
+            [c for c in connector_ids if can_be_source(types.get(c, ""))]
+        )
         self._src_priority = QSpinBox()
         self._src_priority.setRange(1, 99)
         self._src_priority.setValue(1)
@@ -898,7 +906,9 @@ class SyncGroupDialog(QDialog):
         dst_layout.addWidget(self._destinations_widget)
         dst_btn_row = QHBoxLayout()
         self._dst_add_combo = QComboBox()
-        self._dst_add_combo.addItems(connector_ids)
+        self._dst_add_combo.addItems(
+            [c for c in connector_ids if can_be_destination(types.get(c, ""))]
+        )
         self._dst_add_btn = QPushButton("Add destination")
         self._dst_del_btn = QPushButton("Remove")
         self._dst_add_btn.clicked.connect(self._add_destination)
@@ -1170,6 +1180,16 @@ class ConfigTab(QWidget):
                 self._warn_duplicate_name(entry.id)
                 return
             old_id = self._config.connectors[row].id
+            try:
+                # Only this connector: the groups still use it by its old name.
+                check_group_roles({old_id: entry.type}, self._config.sync_groups)
+            except ConfigError as exc:
+                QMessageBox.warning(
+                    self,
+                    "Connector in use",
+                    f"{exc}.\n\nRemove it from that group before changing its type.",
+                )
+                return
             self._config.connectors[row] = entry
             self._retarget_groups(old_id, entry.id)
             self._store.save_gui_config(self._config)
@@ -1231,6 +1251,9 @@ class ConfigTab(QWidget):
     def _connector_ids(self) -> list[str]:
         return [c.id for c in self._config.connectors]
 
+    def _connector_types(self) -> dict[str, str]:
+        return {c.id: c.type for c in self._config.connectors}
+
     def _refresh_group_list(self) -> None:
         self._grp_list.clear()
         for g in self._config.sync_groups:
@@ -1246,7 +1269,11 @@ class ConfigTab(QWidget):
         )
 
     def _add_group(self) -> None:
-        dlg = SyncGroupDialog(connector_ids=self._connector_ids(), parent=self)
+        dlg = SyncGroupDialog(
+            connector_ids=self._connector_ids(),
+            parent=self,
+            connector_types=self._connector_types(),
+        )
         if dlg.exec() == QDialog.DialogCode.Accepted:
             entry = dlg.result_entry()
             if self._group_name_taken(entry.id, exclude_index=None):
@@ -1264,6 +1291,7 @@ class ConfigTab(QWidget):
             connector_ids=self._connector_ids(),
             entry=self._config.sync_groups[row],
             parent=self,
+            connector_types=self._connector_types(),
         )
         if dlg.exec() == QDialog.DialogCode.Accepted:
             entry = dlg.result_entry()

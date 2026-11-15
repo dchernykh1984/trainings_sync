@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -83,6 +84,20 @@ CREDENTIAL_CONNECTOR_CONFIGS = (
     StravaConnectorConfig,
     IntervalsIcuConnectorConfig,
 )
+
+# Connector types that can play only one role in a sync group: a service that
+# hands out no files cannot be a source, and one that takes none cannot be a
+# destination.
+SOURCE_ONLY_TYPES: frozenset[str] = frozenset()
+DESTINATION_ONLY_TYPES: frozenset[str] = frozenset()
+
+
+def can_be_source(connector_type: str) -> bool:
+    return connector_type not in DESTINATION_ONLY_TYPES
+
+
+def can_be_destination(connector_type: str) -> bool:
+    return connector_type not in SOURCE_ONLY_TYPES
 
 
 @dataclass(frozen=True)
@@ -285,6 +300,26 @@ def _parse_group(raw: object, index: int, connector_ids: set[str]) -> SyncGroupC
     )
 
 
+def check_roles(types: Mapping[str, str], groups: Iterable[SyncGroupConfig]) -> None:
+    """Refuse a group that gives a connector a role its type cannot play.
+
+    `types` maps each connector id to its type.
+    """
+    for group in groups:
+        for src in group.sources:
+            if not can_be_source(types.get(src.id, "")):
+                raise ConfigError(
+                    f"sync group {group.id!r}: {src.id!r} ({types[src.id]})"
+                    " can only be a destination"
+                )
+        for dest in group.destinations:
+            if not can_be_destination(types.get(dest, "")):
+                raise ConfigError(
+                    f"sync group {group.id!r}: {dest!r} ({types[dest]})"
+                    " can only be a source"
+                )
+
+
 def _check_unique_ids(ids: list[str], label: str) -> None:
     seen: set[str] = set()
     for sid in ids:
@@ -353,6 +388,7 @@ def load_config(path: Path) -> AppConfig:
         _parse_group(g, i, connector_ids) for i, g in enumerate(raw_groups)
     )
     _check_unique_ids([g.id for g in sync_groups], "sync group id")
+    check_roles({c["id"]: c["type"] for c in raw_connectors}, sync_groups)
 
     start = _parse_date_optional(raw, "start", "root")
     end = _parse_date_optional(raw, "end", "root")

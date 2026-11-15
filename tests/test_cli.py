@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import dataclasses
 import json
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -18,6 +20,7 @@ from app.cli import (
     _validate,
     main,
 )
+from app.core.cache import CacheEntry
 from app.core.config import (
     AppConfig,
     GarminConnectorConfig,
@@ -29,6 +32,7 @@ from app.core.config import (
     StravaConnectorConfig,
     SyncGroupConfig,
 )
+from app.core.copies import FoundCopy
 from app.credentials.base import (
     CredentialRequest,
     CredentialsNotFoundError,
@@ -996,3 +1000,129 @@ class TestMainIfNameMain:
                 str(Path(_cli_mod.__file__)),  # type: ignore[arg-type]
                 run_name="__main__",
             )
+
+
+_T = datetime(2024, 5, 1, 8, 0, tzinfo=timezone.utc)
+_KEPT = CacheEntry(
+    external_id="10", source_id="garmin-uid", format="fit", start_time=_T, elapsed_s=60
+)
+_COPY = dataclasses.replace(_KEPT, external_id="20", format="gpx")
+_TO_DELETE = FoundCopy("intervals", "i2", _COPY, _KEPT)
+
+
+class TestRunCopies:
+    @staticmethod
+    async def _run_copies(
+        tmp_path: Path,
+        found: list[FoundCopy],
+        *,
+        delete: bool = False,
+        answer: object = "yes",
+        failed: tuple = (),
+        build: AsyncMock | None = None,
+    ) -> SimpleNamespace:
+        creds = tmp_path / "creds.json"
+        creds.write_text("[]", encoding="utf-8")
+        args = argparse.Namespace(
+            config=tmp_path / "unused.json",
+            start=None,
+            end=None,
+            force=False,
+            creds_json=creds,
+            creds_keepass=None,
+            copies=not delete,
+            delete_copies=delete,
+        )
+        config = AppConfig(
+            cache_dir=tmp_path,
+            connectors=(_INTERVALS_CONNECTOR, _STRAVA_CONNECTOR),
+            sync_groups=(),
+        )
+        t = SimpleNamespace(
+            icu=MagicMock(supports_delete=True, login=AsyncMock()),
+            strava=MagicMock(supports_delete=False, login=AsyncMock()),
+            plan=AsyncMock(return_value=found),
+            remove=AsyncMock(return_value=list(failed)),
+        )
+        connectors = {"intervals": t.icu, "strava": t.strava}
+        with (
+            patch("app.cli.load_config", return_value=config),
+            patch(
+                "app.cli.build_connectors",
+                new=build or AsyncMock(return_value=connectors),
+            ),
+            patch("app.cli.ActivityCache"),
+            patch("app.cli.ConsoleRenderer"),
+            patch("app.cli.plan_removals", new=t.plan),
+            patch("app.cli.remove_copies", new=t.remove),
+            patch("builtins.input", side_effect=[answer]) as t.ask,
+        ):
+            await _run(args)
+        return t
+
+    async def test_copies_lists_them_and_deletes_nothing(
+        self, capsys: pytest.CaptureFixture, tmp_path: Path
+    ) -> None:
+        t = await self._run_copies(tmp_path, [_TO_DELETE])
+        out = capsys.readouterr().out
+        assert "Extra copies to delete: 1" in out
+        assert (
+            "intervals: 'i2' on 2024-05-01, uploaded from garmin-uid '20' (gpx);"
+            " the one from garmin-uid '10' (fit) stays"
+        ) in out
+        t.ask.assert_not_called()
+        t.remove.assert_not_awaited()
+
+    async def test_only_services_that_can_delete_are_signed_in_and_searched(
+        self, tmp_path: Path
+    ) -> None:
+        t = await self._run_copies(tmp_path, [])
+        t.icu.login.assert_awaited_once()
+        t.strava.login.assert_not_awaited()
+        assert t.plan.await_args.args[1] == {"intervals": t.icu}
+
+    async def test_delete_copies_deletes_them_once_yes_is_typed(
+        self, capsys: pytest.CaptureFixture, tmp_path: Path
+    ) -> None:
+        t = await self._run_copies(tmp_path, [_TO_DELETE], delete=True)
+        t.remove.assert_awaited_once_with([_TO_DELETE], {"intervals": t.icu})
+        assert "Deleted 1 of 1." in capsys.readouterr().out
+
+    @pytest.mark.parametrize("answer", ["no", "", EOFError()])
+    async def test_without_a_yes_nothing_is_deleted(
+        self, capsys: pytest.CaptureFixture, tmp_path: Path, answer: object
+    ) -> None:
+        t = await self._run_copies(tmp_path, [_TO_DELETE], delete=True, answer=answer)
+        t.remove.assert_not_awaited()
+        assert "Nothing deleted." in capsys.readouterr().out
+
+    async def test_with_nothing_to_delete_nothing_is_asked(
+        self, tmp_path: Path
+    ) -> None:
+        t = await self._run_copies(tmp_path, [], delete=True)
+        t.ask.assert_not_called()
+        t.remove.assert_not_awaited()
+
+    async def test_a_failed_delete_is_reported_and_exits_1(
+        self, capsys: pytest.CaptureFixture, tmp_path: Path
+    ) -> None:
+        failed = ((_TO_DELETE, RuntimeError("refused")),)
+        with pytest.raises(SystemExit) as exc:
+            await self._run_copies(tmp_path, [_TO_DELETE], delete=True, failed=failed)
+        assert exc.value.code == 1
+        captured = capsys.readouterr()
+        assert "Deleted 0 of 1." in captured.out
+        assert "error: intervals: 'i2': refused" in captured.err
+
+    async def test_missing_credentials_exit_1(self, tmp_path: Path) -> None:
+        missing = AsyncMock(side_effect=CredentialsNotFoundError(_STRAVA_CRED))
+        with pytest.raises(SystemExit) as exc:
+            await self._run_copies(tmp_path, [], build=missing)
+        assert exc.value.code == 1
+
+    def test_copies_and_delete_copies_exclude_each_other(self, tmp_path: Path) -> None:
+        parser = _build_arg_parser()
+        config = ["--config", str(tmp_path / "c.json")]
+        assert parser.parse_args([*config, "--delete-copies"]).delete_copies
+        with pytest.raises(SystemExit):
+            parser.parse_args([*config, "--copies", "--delete-copies"])

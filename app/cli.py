@@ -5,10 +5,12 @@ import asyncio
 import getpass
 import os
 import sys
+from collections.abc import Mapping
 from datetime import date, datetime
 from pathlib import Path
 
-from app.core.cache import ActivityCache
+from app.connectors.base import ServiceConnector
+from app.core.cache import ActivityCache, CacheEntry
 from app.core.config import (
     CREDENTIAL_CONNECTOR_CONFIGS,
     AppConfig,
@@ -17,6 +19,7 @@ from app.core.config import (
     load_config,
 )
 from app.core.connector_factory import build_connectors
+from app.core.copies import FoundCopy, plan_removals, remove_copies
 from app.core.orchestrator import SyncOrchestrator
 from app.credentials.base import (
     CredentialProvider,
@@ -94,6 +97,20 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--skip-wellness",
         action="store_true",
         help="skip wellness data sync",
+    )
+    copies_group = parser.add_mutually_exclusive_group(required=False)
+    copies_group.add_argument(
+        "--copies",
+        action="store_true",
+        help=(
+            "instead of syncing, list the extra copies of workouts that"
+            " trainings-sync uploaded and can delete"
+        ),
+    )
+    copies_group.add_argument(
+        "--delete-copies",
+        action="store_true",
+        help="as --copies, then delete the listed copies once you type yes",
     )
     creds_group = parser.add_mutually_exclusive_group(required=False)
     creds_group.add_argument(
@@ -196,6 +213,15 @@ async def _run_wellness_concurrent(
         sync_logger.warning(f"[wellness] sync failed: {exc}")
 
 
+def _keepass_password(args: argparse.Namespace, config: AppConfig) -> str | None:
+    """Asked before ConsoleRenderer starts - getpass conflicts with Rich."""
+    if not (_credentials_needed(config) and args.creds_keepass):
+        return None
+    return os.environ.get("KEEPASS_PASSWORD") or getpass.getpass(
+        "KeePass master password: "
+    )
+
+
 async def _run_sync(
     args: argparse.Namespace,
     config: AppConfig,
@@ -203,12 +229,7 @@ async def _run_sync(
     start: date,
     end: date,
 ) -> None:
-    # Prompt before ConsoleRenderer starts - getpass conflicts with Rich.
-    keepass_password: str | None = None
-    if _credentials_needed(config) and args.creds_keepass:
-        keepass_password = os.environ.get("KEEPASS_PASSWORD") or getpass.getpass(
-            "KeePass master password: "
-        )
+    keepass_password = _keepass_password(args, config)
 
     strava_cred_map = {
         c.uid: c.credential
@@ -310,6 +331,72 @@ async def _run_sync(
         )
 
 
+def _describe(item: FoundCopy, names: Mapping[str, str]) -> str:
+    def entry(e: CacheEntry) -> str:
+        return f"{names.get(e.source_id, e.source_id)} {e.external_id!r} ({e.format})"
+
+    return (
+        f"  {names.get(item.connector_id, item.connector_id)}:"
+        f" {item.activity_id!r} on {item.copy.start_time.date()}, uploaded from"
+        f" {entry(item.copy)}; the one from {entry(item.kept)} stays"
+    )
+
+
+async def _run_copies(
+    args: argparse.Namespace, config: AppConfig, sync_logger: SyncLogger
+) -> None:
+    """List, and with --delete-copies delete, the extra copies of workouts
+    that trainings-sync uploaded (see app/core/copies.py)."""
+    keepass_password = _keepass_password(args, config)
+    with ConsoleRenderer() as renderer:
+        tracker = TaskTracker(renderer, sync_logger=sync_logger)
+        provider = (
+            _make_provider(args, tracker, keepass_password=keepass_password)
+            if _credentials_needed(config)
+            else _NullProvider()
+        )
+        cache = ActivityCache(config.cache_dir)
+        cache.load()
+        try:
+            connectors = await build_connectors(config, provider, tracker)
+        except CredentialsNotFoundError:
+            sys.exit(1)  # already reported via tracker
+        deletable = {uid: c for uid, c in connectors.items() if c.supports_delete}
+        await asyncio.gather(*(c.login() for c in deletable.values()))
+        found = await plan_removals(cache, deletable)
+
+    names = {c.uid: c.id for c in config.connectors}
+    print(f"Extra copies to delete: {len(found)}")
+    for item in found:
+        print(_describe(item, names))
+    if found and args.delete_copies:
+        await _delete_copies(found, deletable, names)
+
+
+async def _delete_copies(
+    to_delete: list[FoundCopy],
+    connectors: Mapping[str, ServiceConnector],
+    names: Mapping[str, str],
+) -> None:
+    try:
+        answer = input(
+            f"Delete these {len(to_delete)} activities? It cannot be undone."
+            " Type yes to go on: "
+        )
+    except EOFError:
+        answer = ""
+    if answer.strip() != "yes":
+        print("Nothing deleted.")
+        return
+    failed = await remove_copies(to_delete, connectors)
+    print(f"Deleted {len(to_delete) - len(failed)} of {len(to_delete)}.")
+    for item, exc in failed:
+        where = names.get(item.connector_id, item.connector_id)
+        print(f"error: {where}: {item.activity_id!r}: {exc}", file=sys.stderr)
+    if failed:
+        sys.exit(1)
+
+
 async def _run(args: argparse.Namespace) -> None:
     try:
         config = load_config(args.config)
@@ -327,6 +414,10 @@ async def _run(args: argparse.Namespace) -> None:
         end: date = args.end if args.end is not None else (config.end or date.today())
 
         _validate(args, config, start, end)
+
+        if getattr(args, "copies", False) or getattr(args, "delete_copies", False):
+            await _run_copies(args, config, sync_logger)
+            return
 
         sync_logger.run_start(start=start, end=end, force=args.force)
         if _credentials_needed(config):

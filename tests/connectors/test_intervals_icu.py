@@ -758,3 +758,26 @@ async def test_upload_hit_by_the_rate_limit_is_not_sent_again(
 
 async def test_upload_does_not_report_media(connector: IntervalsIcuConnector) -> None:
     assert connector.supports_media_upload is False
+
+
+# ---------------------------------------------------------------------------
+# Delete
+# ---------------------------------------------------------------------------
+
+
+async def test_delete_removes_one_activity(
+    connector: IntervalsIcuConnector, log: MagicMock, http: MagicMock
+) -> None:
+    http.return_value = _resp(body={"id": "i101"})
+    await connector.delete_activity("i101")
+    assert _calls(http) == [("DELETE", f"{_BASE_URL}/activity/i101")]
+    assert "Delete" in _logged(log, "info")
+    assert "'i101'" in _logged(log, "info")
+
+
+async def test_a_refused_delete_raises(
+    connector: IntervalsIcuConnector, http: MagicMock
+) -> None:
+    http.return_value = _resp(404)
+    with pytest.raises(requests.HTTPError):
+        await connector.delete_activity("i101")

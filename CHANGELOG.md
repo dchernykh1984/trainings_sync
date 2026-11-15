@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.5.0](https://github.com/dchernykh1984/trainings_sync/compare/v0.4.0...v0.5.0) (2026-11-15)
+
+
+### Features
+
+* **cli:** find and delete extra workout copies on intervals.icu ([14099c5](https://github.com/dchernykh1984/trainings_sync/commit/14099c5a5135c2b03d7499b157192ee9c3638979))
+* **garmin:** delete the copies trainings-sync uploaded into Garmin ([0a9c442](https://github.com/dchernykh1984/trainings_sync/commit/0a9c442371c5b8044bb6255ac2739a13d033c12d))
+
+
+### Bug Fixes
+
+* **cli:** list an activity two pairs of copies share only once ([22fe456](https://github.com/dchernykh1984/trainings_sync/commit/22fe456145389a608f21bdd4817fb072a7671286))
+* **cli:** record a failed delete of a copy in the sync log ([1ddd4ca](https://github.com/dchernykh1984/trainings_sync/commit/1ddd4caf45fd8c43fabe9e9322820628dc4e251d))
+* **cli:** record each deleted copy and why in the sync log ([ad8a070](https://github.com/dchernykh1984/trainings_sync/commit/ad8a0706577f496aaa2df0d42b8f43e65220c516))
+* **cli:** show the activity that stays next to each copy to delete ([4df9d7f](https://github.com/dchernykh1984/trainings_sync/commit/4df9d7fb5513a9579f949bded12ca5781ed093f8))
+* **garmin:** delete only the GPX files trainings-sync built itself ([f4be5b8](https://github.com/dchernykh1984/trainings_sync/commit/f4be5b87a4a1ff3b5dde8de26b3f636fc8a318ff))
+* **sync:** never drop the longer recording of a workout for a shorter copy ([5a898f7](https://github.com/dchernykh1984/trainings_sync/commit/5a898f791218ca5eb7234c48eaeb1c9220df8d69))
+* **sync:** upload one copy of a workout its source holds twice ([6439da2](https://github.com/dchernykh1984/trainings_sync/commit/6439da253b844e4c7ceb17902274d4c4d93bc02a))
+
+
+### Documentation
+
+* **readme:** say which copy of a workout is kept ([fd2bba4](https://github.com/dchernykh1984/trainings_sync/commit/fd2bba4255fa9b1651fa6230a92fe8f85191574a))
+* **readme:** tell the two ways copies are found apart by role ([e08956f](https://github.com/dchernykh1984/trainings_sync/commit/e08956f1293e3ea3a00b921842c00706dd00b49b))
+
 ## [0.4.0](https://github.com/dchernykh1984/trainings_sync/compare/v0.3.1...v0.4.0) (2026-11-15)
 
 

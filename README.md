@@ -496,8 +496,9 @@ up with the workout twice. To find the copies that went out that way:
 uv run trainings-sync --config config/config.json --creds-json config/creds.json --copies
 ```
 
-It lists each extra activity with the copy it was uploaded from and the copy
-that stays, and changes nothing. `--delete-copies` lists them the same way and
+It lists each extra activity, and the activity on the same service that stays,
+with the copies they were uploaded from, and changes nothing: open both on the
+service to check them. `--delete-copies` lists them the same way and
 then, once you type `yes`, deletes them; deleting cannot be undone. Only
 intervals.icu and Garmin Connect activities are deleted, and an activity is
 never deleted on a guess:

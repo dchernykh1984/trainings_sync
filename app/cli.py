@@ -337,8 +337,9 @@ def _describe(item: FoundCopy, names: Mapping[str, str]) -> str:
 
     return (
         f"  {names.get(item.connector_id, item.connector_id)}:"
-        f" {item.activity_id!r} on {item.copy.start_time.date()}, uploaded from"
-        f" {entry(item.copy)}; the one from {entry(item.kept)} stays"
+        f" {item.copy.start_time.date()} delete {item.activity_id!r}"
+        f" (from {entry(item.copy)}), keep {item.kept_id!r}"
+        f" (from {entry(item.kept)})"
     )
 
 

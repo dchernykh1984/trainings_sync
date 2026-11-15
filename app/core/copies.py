@@ -35,6 +35,7 @@ class FoundCopy:
     activity_id: str  # the activity there
     copy: CacheEntry  # the entry it was uploaded from
     kept: CacheEntry  # the entry whose activity stays
+    kept_id: str  # that activity, to look at before deleting
 
 
 def _key(entry: CacheEntry) -> tuple[str, str]:
@@ -135,7 +136,11 @@ async def _check(
     if not kept_ids:
         return []
     # Two copies of one file are one activity there: it is the kept one.
-    return [FoundCopy(uid, i, copy, kept) for i in copy_ids if i not in kept_ids]
+    return [
+        FoundCopy(uid, i, copy, kept, kept_ids[0])
+        for i in copy_ids
+        if i not in kept_ids
+    ]
 
 
 def _span(pairs: list[tuple[CacheEntry, CacheEntry]]) -> tuple[date, date]:
@@ -206,7 +211,7 @@ async def _own_copies(
     metas = await connector.list_activities(*_span([(c, k) for c, k, _ in theirs]))
     listed = {m.external_id for m in metas}
     return [
-        FoundCopy(uid, copy.external_id, origin, kept)
+        FoundCopy(uid, copy.external_id, origin, kept, kept.external_id)
         for copy, kept, origin in theirs
         if copy.external_id in listed and kept.external_id in listed
     ]

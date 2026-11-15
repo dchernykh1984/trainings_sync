@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.4.0](https://github.com/dchernykh1984/trainings_sync/compare/v0.3.1...v0.4.0) (2026-11-15)
+
+
+### Features
+
+* **connectors:** read activities from Polar Flow ([537276d](https://github.com/dchernykh1984/trainings_sync/commit/537276dec89f8b403ac3bce68a28bc6608a877b3))
+* **connectors:** sync activities from and to Ride with GPS ([32e6421](https://github.com/dchernykh1984/trainings_sync/commit/32e64217c324d9205dabc7f307fc27415968c7b1))
+* **connectors:** upload activities to Runalyze ([269a3e3](https://github.com/dchernykh1984/trainings_sync/commit/269a3e378a5d877343a8d9b31d1ebf4b9d91da7e))
+
+
+### Bug Fixes
+
+* **connectors:** skip a file intervals.icu refuses instead of stopping the sync ([b0cc6f1](https://github.com/dchernykh1984/trainings_sync/commit/b0cc6f13a3c91bdcae8d83a098a07fc1891f39ea))
+* **sync:** leave the uploads past a destination's rate limit for the next run ([40258e9](https://github.com/dchernykh1984/trainings_sync/commit/40258e99813038779d8c80016da1b72a07d05338))
+
 ## [0.3.1](https://github.com/dchernykh1984/trainings_sync/compare/v0.3.0...v0.3.1) (2026-11-15)
 
 

@@ -1715,3 +1715,21 @@ class TestUploadActivityPhotos:
 class TestGarminMediaUploadSupport:
     def test_supports_media_upload_is_true(self, connector: GarminConnector) -> None:
         assert connector.supports_media_upload is True
+
+
+async def test_delete_removes_one_activity(
+    logged_in_with_log: GarminConnector,
+    mock_client: MagicMock,
+    tracker_with_log: TaskTracker,
+) -> None:
+    await logged_in_with_log.delete_activity("12345")
+    mock_client.delete_activity.assert_called_once_with("12345")
+    log = tracker_with_log.sync_logger
+    assert isinstance(log, MagicMock)
+    assert "Delete" in str(log.info.call_args)
+    assert "'12345'" in str(log.info.call_args)
+
+
+async def test_delete_needs_a_login(connector: GarminConnector) -> None:
+    with pytest.raises(RuntimeError, match="Not logged in"):
+        await connector.delete_activity("12345")

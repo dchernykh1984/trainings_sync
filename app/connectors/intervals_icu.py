@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import gzip
 import zlib
-from datetime import date, datetime, timezone, tzinfo
+from datetime import date, tzinfo
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -22,11 +22,13 @@ from app.connectors.base import (
     ActivityUnavailableError,
     CallTimeoutError,
     RateLimitError,
-    ServiceConnector,
     TransientDownloadError,
-    _parse_retry_after,
-    _run_with_timeout,
-    attach_debug_logging,
+)
+from app.connectors.http_api import (
+    HttpApiConnector,
+    _is_fit,
+    _parse_start,
+    _transient_status,
 )
 from app.credentials.base import Credentials
 from app.tracking.tracker import TaskTracker
@@ -60,14 +62,6 @@ _STRAVA_SOURCE = "STRAVA"
 _STUB_MATCH_S: int = 120
 
 
-def _parse_start(value: str, zone: tzinfo = timezone.utc) -> datetime:
-    """A start time in UTC; a value without an offset is read in `zone`."""
-    dt = datetime.fromisoformat(value)
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=zone)
-    return dt.astimezone(timezone.utc)
-
-
 def _zone(name: object) -> tzinfo | None:
     """The athlete's time zone, or None when it is missing or unknown here."""
     if not isinstance(name, str) or not name:
@@ -76,16 +70,6 @@ def _zone(name: object) -> tzinfo | None:
         return ZoneInfo(name)
     except (KeyError, ValueError):  # ZoneInfoNotFoundError is a KeyError
         return None
-
-
-def _status(exc: requests.HTTPError) -> int:
-    return exc.response.status_code if exc.response is not None else 0
-
-
-def _transient_status(exc: requests.HTTPError) -> bool:
-    """A 5xx or a 408: the same request may succeed later."""
-    status = _status(exc)
-    return status >= 500 or status == 408
 
 
 def _worth_resending(exc: Exception) -> bool:
@@ -115,7 +99,7 @@ def _decode_file(content: bytes) -> tuple[bytes, str] | None:
             content = gzip.decompress(content)
         except (OSError, EOFError, zlib.error):
             return None
-    if content[8:12] == b".FIT":
+    if _is_fit(content):
         return content, "fit"
     head = content[:2048].lower()
     if b"<gpx" in head:
@@ -125,7 +109,15 @@ def _decode_file(content: bytes) -> tuple[bytes, str] | None:
     return None
 
 
-class IntervalsIcuConnector(ServiceConnector):
+class IntervalsIcuConnector(HttpApiConnector):
+    _service = "intervals.icu"
+    _base_url = _BASE_URL
+    # intervals.icu's own limits, equal to the shared defaults today: set here
+    # so that a change of those defaults does not reach this service unnoticed.
+    _request_timeout_s = _REQUEST_TIMEOUT_S
+    _call_timeout_s = _CALL_TIMEOUT_S
+    _max_attempts = _MAX_ATTEMPTS
+    _default_retry_after_s = _DEFAULT_RETRY_AFTER_S
     # Few calls in flight: the API also caps every IP at 10 calls per second.
     _max_concurrent = 2
 
@@ -136,11 +128,7 @@ class IntervalsIcuConnector(ServiceConnector):
         self._label = ""  # set by login: the athlete's name, else their id
         # Set by login; places the local start time of a Strava stub in UTC.
         self._zone: tzinfo | None = None
-        self._session = requests.Session()
         self._session.auth = ("API_KEY", credentials.password)
-        log = tracker.sync_logger
-        if log:
-            attach_debug_logging(self._session, log.debug)
         # The listing already carries descriptions, so a download does not
         # spend one more request per activity fetching them again.
         self._descriptions: dict[str, str] = {}
@@ -148,57 +136,6 @@ class IntervalsIcuConnector(ServiceConnector):
     @property
     def user_label(self) -> str:
         return self._label or self._athlete_id
-
-    async def _request(
-        self,
-        method: str,
-        path: str,
-        *,
-        timeout: float | tuple[float, float] = _REQUEST_TIMEOUT_S,
-        call_timeout: float = _CALL_TIMEOUT_S,
-        **kwargs: Any,
-    ) -> requests.Response:
-        """Send one API call, waiting out 429s.
-
-        An error status raises HTTPError, a failed connection or call
-        TransientDownloadError, and a 429 on the last attempt RateLimitError.
-        `timeout` is the socket timeout, in the form requests takes, and
-        `call_timeout` the bound on the whole call.
-        """
-        log = self._tracker.sync_logger
-        attempt = 1
-        while True:
-            try:
-                resp: requests.Response = await _run_with_timeout(
-                    asyncio.to_thread(
-                        self._session.request,
-                        method,
-                        _BASE_URL + path,
-                        timeout=timeout,
-                        **kwargs,
-                    ),
-                    call_timeout,
-                )
-            except requests.RequestException as exc:
-                raise TransientDownloadError(str(exc)) from exc
-            if resp.status_code != 429:
-                resp.raise_for_status()
-                return resp
-            pause = _parse_retry_after(resp.headers, _DEFAULT_RETRY_AFTER_S)
-            if attempt == _MAX_ATTEMPTS:
-                # A download hands this to the engine, which then pauses every
-                # download from this source together.
-                raise RateLimitError(
-                    f"intervals.icu 429 after {_MAX_ATTEMPTS} attempts",
-                    retry_after=pause,
-                )
-            if log:
-                log.warning(
-                    f"[intervals.icu] 429 received, pausing {pause:.0f}s"
-                    f" (attempt {attempt}/{_MAX_ATTEMPTS})"
-                )
-            await asyncio.sleep(pause)
-            attempt += 1
 
     async def login(self) -> None:
         task_name = await self._tracker.add_task(
@@ -304,16 +241,7 @@ class IntervalsIcuConnector(ServiceConnector):
 
     async def download_activity(self, meta: ActivityMeta) -> Activity:
         log = self._tracker.sync_logger
-        try:
-            resp = await self._request("GET", f"/activity/{meta.external_id}/file")
-        except requests.HTTPError as exc:
-            if _status(exc) in (401, 403):
-                raise  # the key itself is refused: fail the run, do not skip
-            if _transient_status(exc):
-                raise TransientDownloadError(str(exc)) from exc
-            # Any other 4xx will not change on retry (a manual entry has no
-            # file), while the engine retries a transient error every minute.
-            raise ActivityUnavailableError(str(exc)) from exc
+        resp = await self._fetch_file(f"/activity/{meta.external_id}/file")
         decoded = _decode_file(resp.content)
         if decoded is None:
             if log:

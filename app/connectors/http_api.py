@@ -1,0 +1,140 @@
+"""Shared plumbing for connectors that talk to one REST API through requests."""
+
+from __future__ import annotations
+
+import asyncio
+from datetime import datetime, timezone, tzinfo
+from typing import Any
+
+import requests
+
+from app.connectors.base import (
+    ActivityUnavailableError,
+    RateLimitError,
+    ServiceConnector,
+    TransientDownloadError,
+    _parse_retry_after,
+    _run_with_timeout,
+    attach_debug_logging,
+)
+from app.tracking.tracker import TaskTracker
+
+
+def _status(exc: requests.HTTPError) -> int:
+    return exc.response.status_code if exc.response is not None else 0
+
+
+def _transient_status(exc: requests.HTTPError) -> bool:
+    """A 5xx or a 408: the same request may succeed later."""
+    status = _status(exc)
+    return status >= 500 or status == 408
+
+
+def _parse_start(value: str, zone: tzinfo = timezone.utc) -> datetime:
+    """A start time in UTC; a value without an offset is read in `zone`."""
+    dt = datetime.fromisoformat(value)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=zone)
+    return dt.astimezone(timezone.utc)
+
+
+def _is_fit(content: bytes) -> bool:
+    """Whether bytes are a FIT file: its header holds ".FIT" at offset 8."""
+    return content[8:12] == b".FIT"
+
+
+class HttpApiConnector(ServiceConnector):
+    """A connector behind one HTTP API: a requests session and its call loop.
+
+    A subclass names the service for log lines, gives the base URL, and puts
+    its auth on `self._session`.
+    """
+
+    _service: str = ""
+    _base_url: str = ""
+    # Socket timeout: catches a connection that stalls.
+    _request_timeout_s: float = 30.0
+    # Whole-call bound: a big file on a slow link can take minutes and still move.
+    _call_timeout_s: float = 300.0
+    _max_attempts: int = 3
+    # Pause after a 429 that does not say how long to wait.
+    _default_retry_after_s: float = 5.0
+
+    def __init__(self, tracker: TaskTracker) -> None:
+        super().__init__(tracker)
+        self._session = requests.Session()
+        log = tracker.sync_logger
+        if log:
+            attach_debug_logging(self._session, log.debug)
+
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        timeout: float | tuple[float, float] | None = None,
+        call_timeout: float | None = None,
+        **kwargs: Any,
+    ) -> requests.Response:
+        """Send one API call to `path` under the base URL, waiting out 429s.
+
+        An error status raises HTTPError, a failed connection or call
+        TransientDownloadError, and a 429 on the last attempt RateLimitError.
+        `timeout` is the socket timeout, in the form requests takes, and
+        `call_timeout` the bound on the whole call; both default to the
+        class settings.
+        """
+        log = self._tracker.sync_logger
+        socket_timeout = self._request_timeout_s if timeout is None else timeout
+        bound = self._call_timeout_s if call_timeout is None else call_timeout
+        attempt = 1
+        while True:
+            try:
+                resp: requests.Response = await _run_with_timeout(
+                    asyncio.to_thread(
+                        self._session.request,
+                        method,
+                        self._base_url + path,
+                        timeout=socket_timeout,
+                        **kwargs,
+                    ),
+                    bound,
+                )
+            except requests.RequestException as exc:
+                raise TransientDownloadError(str(exc)) from exc
+            if resp.status_code != 429:
+                resp.raise_for_status()
+                return resp
+            pause = _parse_retry_after(resp.headers, self._default_retry_after_s)
+            if attempt == self._max_attempts:
+                # A download hands this to the engine, which then pauses every
+                # download from this source together.
+                raise RateLimitError(
+                    f"{self._service} 429 after {self._max_attempts} attempts",
+                    retry_after=pause,
+                )
+            if log:
+                log.warning(
+                    f"[{self._service}] 429 received, pausing {pause:.0f}s"
+                    f" (attempt {attempt}/{self._max_attempts})"
+                )
+            await asyncio.sleep(pause)
+            attempt += 1
+
+    async def _fetch_file(self, path: str, **kwargs: Any) -> requests.Response:
+        """_request for a download, its failures sorted for the engine.
+
+        A 401 or a 403 is raised as it is: the account is refused, so the run
+        fails rather than skip every file quietly. A 5xx or a 408 becomes
+        TransientDownloadError, which the engine tries again; any other error
+        status (a file that is gone, or a manual entry with none) becomes
+        ActivityUnavailableError, which a retry would not change.
+        """
+        try:
+            return await self._request("GET", path, **kwargs)
+        except requests.HTTPError as exc:
+            if _status(exc) in (401, 403):
+                raise
+            if _transient_status(exc):
+                raise TransientDownloadError(str(exc)) from exc
+            raise ActivityUnavailableError(str(exc)) from exc

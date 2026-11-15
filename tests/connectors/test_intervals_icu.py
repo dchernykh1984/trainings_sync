@@ -20,6 +20,7 @@ from app.connectors.base import (
     CallTimeoutError,
     RateLimitError,
     TransientDownloadError,
+    UploadRefusedError,
     _run_with_timeout,
 )
 from app.connectors.intervals_icu import (
@@ -559,6 +560,26 @@ async def test_upload_rejected_by_the_server_raises(
     with pytest.raises(requests.HTTPError):
         await connector.upload_activity(_activity())
     assert http.call_count == 1  # a 4xx does not change on a second try
+
+
+@pytest.mark.parametrize("status", [413, 422])
+async def test_a_file_intervals_icu_refuses_is_refused_with_the_reason(
+    connector: IntervalsIcuConnector, http: MagicMock, status: int
+) -> None:
+    # A file with no data points gets a 422 for good; the engine passes over it.
+    http.return_value = _resp(status, content=b'{"error":\n  "No data in file"}')
+    with pytest.raises(UploadRefusedError) as refused:
+        await connector.upload_activity(_activity())
+    assert str(refused.value) == 'refused ({"error": "No data in file"})'
+    assert http.call_count == 1  # sending it again gets the same answer
+
+
+async def test_a_refusal_without_a_body_gives_the_status_line(
+    connector: IntervalsIcuConnector, http: MagicMock
+) -> None:
+    http.return_value = _resp(422)
+    with pytest.raises(UploadRefusedError, match=r"^refused \(422 Client Error"):
+        await connector.upload_activity(_activity())
 
 
 async def test_upload_waits_longer_for_its_answer_than_other_calls(

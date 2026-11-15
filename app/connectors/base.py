@@ -102,6 +102,16 @@ class ActivityUnavailableError(Exception):
     """
 
 
+class UploadRefusedError(Exception):
+    """Raised when a destination will never take an activity's file.
+
+    The service refuses the file itself (one with no data points, say), so
+    sending it again gets the same answer. The sync engine warns why, marks
+    the activity handled and goes on, rather than stopping every upload
+    queued behind it, run after run.
+    """
+
+
 class TransientDownloadError(Exception):
     """Raised by connectors for transient network errors that are worth retrying."""
 

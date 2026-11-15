@@ -319,6 +319,9 @@ Limits to know about:
   already has is answered 200, not stored a second time and left as it is: if
   that was this upload's own earlier try, its description is not set, and the
   log says so.
+- A file intervals.icu refuses (one with no data points, such as a strength
+  session entered by hand, or one too big) is skipped with a warning that gives
+  intervals.icu's reason, and is not sent again.
 
 ## Desktop GUI
 

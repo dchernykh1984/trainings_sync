@@ -11,6 +11,7 @@ import pytest
 
 from app.core.config import (
     CREDENTIAL_CONNECTOR_CONFIGS,
+    CREDENTIAL_ONLY_CONFIGS,
     ConfigError,
     GarminConnectorConfig,
     IntervalsIcuConnectorConfig,
@@ -664,6 +665,12 @@ def test_connector_to_app_unknown_type_raises() -> None:
     c = ConnectorEntry(id="x", type="unknown")
     with pytest.raises(ValueError, match="unknown connector type"):
         _connector_to_app(c)
+
+
+def test_every_credential_only_type_is_offered_in_the_gui() -> None:
+    # A type added to the config table alone would parse in the CLI and be
+    # missing from the GUI's type list.
+    assert set(CREDENTIAL_ONLY_CONFIGS) <= set(CONNECTOR_TYPES)
 
 
 def test_every_connector_type_is_convertible() -> None:

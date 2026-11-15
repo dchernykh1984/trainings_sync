@@ -12,6 +12,7 @@ from app.connectors.base import (
     ActivityMeta,
     ActivityUnavailableError,
     MediaItem,
+    RateLimitError,
     TransientDownloadError,
     UploadRefusedError,
 )
@@ -549,6 +550,38 @@ class TestSyncExecutorUpload:
             logged
         )
         assert "[upload] 'ride' (garmin) -> strava: ok" in logged
+
+    async def test_a_rate_limit_leaves_the_rest_for_the_next_run(
+        self, cache: ActivityCache
+    ) -> None:
+        # Runalyze's hourly limit, say: the run goes on, the rest waits.
+        for n in range(3):
+            cache.put(_entry(f"a{n}", "garmin", _T0 + timedelta(days=n)), b"content")
+        dest = _dest_conn()
+        dest.upload_activity = AsyncMock(
+            side_effect=[None, RateLimitError("Runalyze 429 after 3 attempts")]
+        )
+        tracker = _make_tracker()
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), _source_conn())],
+            destinations=[("runalyze", dest)],
+            cache=cache,
+            tracker=tracker,
+        )
+        await executor.run(_START, _END)
+        assert dest.upload_activity.await_count == 2
+        tracker.fail.assert_not_called()
+        tracker.warn.assert_any_await(
+            "Upload to runalyze",
+            "Runalyze 429 after 3 attempts; 2 upload(s) left for the next run",
+        )
+        marked = [
+            n
+            for n in range(3)
+            if "runalyze"
+            in (cache.get_entry(f"a{n}", "garmin") or _entry()).uploaded_to
+        ]
+        assert len(marked) == 1
 
     async def test_a_refused_file_is_marked_without_a_tracker_too(
         self, cache: ActivityCache

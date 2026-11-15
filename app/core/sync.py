@@ -908,13 +908,22 @@ class SyncExecutor:
         dest = self._name(dest_id) + (f" ({dest_label})" if dest_label else "")
         any_uploaded = False
         try:
-            for entry in entries:
+            for done, entry in enumerate(entries):
                 activity = self._build_upload_activity(
                     entry, borrowed_descriptions, borrowed_media
                 )
-                result, uploaded = await self._upload_entry(
-                    dest_id, entry, activity, connector, tracking
-                )
+                try:
+                    result, uploaded = await self._upload_entry(
+                        dest_id, entry, activity, connector, tracking
+                    )
+                except RateLimitError as exc:
+                    # The destination's own limit, an hourly one say: the rest
+                    # goes on the next run rather than failing this one.
+                    left = len(entries) - done
+                    await self._warn(
+                        tracking, f"{exc}; {left} upload(s) left for the next run"
+                    )
+                    break
                 any_uploaded = any_uploaded or uploaded
                 self._log_upload(entry, dest, result)
                 if tracking is not None:

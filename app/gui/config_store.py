@@ -26,7 +26,13 @@ _DEFAULT_CONFIG_DIR = Path.home() / ".config" / "trainings-sync"
 # only a credential, append its type here and give it an entry in
 # CREDENTIAL_ONLY_CONFIGS (app.core.config); any other kind also extends those
 # two functions (test_every_connector_type_is_convertible checks).
-CONNECTOR_TYPES: tuple[str, ...] = ("garmin", "strava", "intervals_icu", "local_folder")
+CONNECTOR_TYPES: tuple[str, ...] = (
+    "garmin",
+    "strava",
+    "intervals_icu",
+    "ride_with_gps",
+    "local_folder",
+)
 # The types that sign in with an account from the Credentials tab.
 CREDENTIAL_TYPES: tuple[str, ...] = ("strava", *CREDENTIAL_ONLY_CONFIGS)
 

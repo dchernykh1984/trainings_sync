@@ -14,6 +14,7 @@ from app.connectors.base import (
     RateLimitError,
     ServiceConnector,
     TransientDownloadError,
+    UploadDeferredError,
     UploadRefusedError,
 )
 from app.core.cache import ActivityCache, CacheEntry
@@ -861,6 +862,9 @@ class SyncExecutor:
             await self._warn(tracking, f"{what} - {exc}, skipped")
             self._cache.mark_uploaded(entry, dest_id, local_path=None)
             return f"skipped: {exc}", False
+        except UploadDeferredError as exc:
+            await self._warn(tracking, f"{what} - {exc}, left for the next run")
+            return f"left for the next run: {exc}", False
         if activity.media and not connector.supports_media_upload:
             await self._warn_media_not_uploaded(
                 entry.external_id, dest_id, len(activity.media), tracking

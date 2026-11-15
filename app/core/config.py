@@ -54,6 +54,10 @@ class IntervalsIcuConnectorConfig(CredentialOnlyConfig):
     pass
 
 
+class RideWithGpsConnectorConfig(CredentialOnlyConfig):
+    pass
+
+
 @dataclass(frozen=True)
 class LocalFolderConnectorConfig:
     id: str
@@ -73,6 +77,7 @@ ConnectorConfig = (
     GarminConnectorConfig
     | StravaConnectorConfig
     | IntervalsIcuConnectorConfig
+    | RideWithGpsConnectorConfig
     | LocalFolderConnectorConfig
 )
 
@@ -85,10 +90,13 @@ CREDENTIAL_CONNECTOR_CONFIGS = (CredentialOnlyConfig, StravaConnectorConfig)
 # connector_factory._CREDENTIAL_ONLY_CONNECTORS and its type in the GUI's
 # CONNECTOR_TYPES (tests check the last two against this table).
 # The union, not the base class, lets a parsed config keep its own type.
-_CredentialOnly = GarminConnectorConfig | IntervalsIcuConnectorConfig
+_CredentialOnly = (
+    GarminConnectorConfig | IntervalsIcuConnectorConfig | RideWithGpsConnectorConfig
+)
 CREDENTIAL_ONLY_CONFIGS: dict[str, type[_CredentialOnly]] = {
     "garmin": GarminConnectorConfig,
     "intervals_icu": IntervalsIcuConnectorConfig,
+    "ride_with_gps": RideWithGpsConnectorConfig,
 }
 
 # Connector types that can play only one role in a sync group: a service that

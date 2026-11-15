@@ -23,6 +23,7 @@ from app.core.config import (
     GarminConnectorConfig,
     GroupSourceConfig,
     IntervalsIcuConnectorConfig,
+    RideWithGpsConnectorConfig,
     StravaConnectorConfig,
     SyncGroupConfig,
 )
@@ -45,6 +46,12 @@ _INTERVALS_CONNECTOR = IntervalsIcuConnectorConfig(
     id="intervals",
     credential=CredentialRequest(
         service="intervals.icu", url="https://intervals.icu/api/v1"
+    ),
+)
+_RWGPS_CONNECTOR = RideWithGpsConnectorConfig(
+    id="rwgps",
+    credential=CredentialRequest(
+        service="Ride with GPS", url="https://ridewithgps.com/api/v1"
     ),
 )
 _DEFAULT_GROUP = SyncGroupConfig(
@@ -122,6 +129,13 @@ class TestValidate:
     ) -> None:
         with pytest.raises(SystemExit):
             _validate(_args(), _cfg(connectors=(_INTERVALS_CONNECTOR,)), _START, _END)
+        assert "credentials" in capsys.readouterr().err
+
+    def test_ride_with_gps_connector_requires_credentials(
+        self, capsys: pytest.CaptureFixture
+    ) -> None:
+        with pytest.raises(SystemExit):
+            _validate(_args(), _cfg(connectors=(_RWGPS_CONNECTOR,)), _START, _END)
         assert "credentials" in capsys.readouterr().err
 
     def test_keepass_with_intervals_icu_connector_is_allowed(self) -> None:

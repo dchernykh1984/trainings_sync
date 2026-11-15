@@ -56,11 +56,33 @@ def _reason(exc: requests.HTTPError) -> str:
     return " ".join(text.split())[:200] or str(exc)
 
 
+class _Session(requests.Session):
+    """A session that keeps a service's secret headers to the service's host.
+
+    On a redirect to another host requests drops Authorization, but not a
+    header of another name, such as Ride with GPS's key and token.
+    """
+
+    def __init__(self, secret_headers: tuple[str, ...]) -> None:
+        super().__init__()
+        self._secret_headers = secret_headers
+
+    def rebuild_auth(
+        self, prepared_request: requests.PreparedRequest, response: requests.Response
+    ) -> None:
+        super().rebuild_auth(prepared_request, response)
+        old_url = response.request.url or ""
+        if self.should_strip_auth(old_url, prepared_request.url or ""):
+            for name in self._secret_headers:
+                prepared_request.headers.pop(name, None)
+
+
 class HttpApiConnector(ServiceConnector):
     """A connector behind one HTTP API: a requests session and its call loop.
 
     A subclass names the service for log lines, gives the base URL, and puts
-    its auth on `self._session`.
+    its auth on `self._session`; auth in a header other than Authorization is
+    named in `_secret_headers`, so that no redirect carries it to another host.
     """
 
     _service: str = ""
@@ -72,10 +94,11 @@ class HttpApiConnector(ServiceConnector):
     _max_attempts: int = 3
     # Pause after a 429 that does not say how long to wait.
     _default_retry_after_s: float = 5.0
+    _secret_headers: tuple[str, ...] = ()
 
     def __init__(self, tracker: TaskTracker) -> None:
         super().__init__(tracker)
-        self._session = requests.Session()
+        self._session: requests.Session = _Session(self._secret_headers)
         log = tracker.sync_logger
         if log:
             attach_debug_logging(self._session, log.debug)

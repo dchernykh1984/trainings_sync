@@ -12,6 +12,7 @@ from app.connectors.base import ServiceConnector
 from app.connectors.garmin import GarminConnector
 from app.connectors.intervals_icu import IntervalsIcuConnector
 from app.connectors.local_folder import LocalFolderConnector
+from app.connectors.ride_with_gps import RideWithGpsConnector
 from app.connectors.strava import StravaConnector
 from app.core.cache import ActivityCache, CacheEntry
 from app.core.config import (
@@ -22,6 +23,7 @@ from app.core.config import (
     GroupSourceConfig,
     IntervalsIcuConnectorConfig,
     LocalFolderConnectorConfig,
+    RideWithGpsConnectorConfig,
     StravaConnectorConfig,
     SyncGroupConfig,
 )
@@ -99,6 +101,12 @@ _INTERVALS_CFG = IntervalsIcuConnectorConfig(
     id="intervals",
     credential=CredentialRequest(
         service="intervals.icu", url="https://intervals.icu/api/v1"
+    ),
+)
+_RWGPS_CFG = RideWithGpsConnectorConfig(
+    id="rwgps",
+    credential=CredentialRequest(
+        service="Ride with GPS", url="https://ridewithgps.com/api/v1"
     ),
 )
 _STRAVA_CFG = StravaConnectorConfig(
@@ -194,6 +202,19 @@ async def test_intervals_icu_connector_gets_its_own_credential(
     assert isinstance(intervals, IntervalsIcuConnector)
     assert intervals._athlete_id == "i42"
     assert intervals._session.auth == ("API_KEY", "api-key")
+
+
+async def test_ride_with_gps_connector_gets_its_own_credential(
+    tracker: TaskTracker,
+) -> None:
+    provider = _FakeProvider([_GARMIN_CREDS, Credentials("api-key", "auth-token")])
+    result = await build_connectors(
+        _cfg(connectors=(_GARMIN_CFG, _RWGPS_CFG)), provider, tracker
+    )
+    rwgps = result["rwgps"]
+    assert isinstance(rwgps, RideWithGpsConnector)
+    assert rwgps._session.headers["x-rwgps-api-key"] == "api-key"
+    assert rwgps._session.headers["x-rwgps-auth-token"] == "auth-token"
 
 
 def test_every_credential_only_config_builds_a_connector() -> None:

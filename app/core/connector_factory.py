@@ -6,6 +6,7 @@ from app.connectors.base import ServiceConnector
 from app.connectors.garmin import GarminConnector
 from app.connectors.intervals_icu import IntervalsIcuConnector
 from app.connectors.local_folder import LocalFolderConnector
+from app.connectors.ride_with_gps import RideWithGpsConnector
 from app.connectors.strava import StravaConnector
 from app.connectors.wellness_base import WellnessConnector
 from app.core.config import (
@@ -15,6 +16,7 @@ from app.core.config import (
     GarminConnectorConfig,
     IntervalsIcuConnectorConfig,
     LocalFolderConnectorConfig,
+    RideWithGpsConnectorConfig,
     StravaConnectorConfig,
     SyncGroupConfig,
 )
@@ -31,6 +33,7 @@ _CREDENTIAL_ONLY_CONNECTORS: dict[
 ] = {
     GarminConnectorConfig: GarminConnector,
     IntervalsIcuConnectorConfig: IntervalsIcuConnector,
+    RideWithGpsConnectorConfig: RideWithGpsConnector,
 }
 
 

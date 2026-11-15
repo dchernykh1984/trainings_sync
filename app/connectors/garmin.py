@@ -141,6 +141,7 @@ async def _find_uploaded_id(
 class GarminConnector(ServiceConnector):
     _max_concurrent = 3
     supports_media_upload = True
+    supports_delete = True
 
     def __init__(self, credentials: Credentials, tracker: TaskTracker) -> None:
         super().__init__(tracker)
@@ -488,6 +489,13 @@ class GarminConnector(ServiceConnector):
             description=description,
             media=tuple(media),
         )
+
+    async def delete_activity(self, external_id: str) -> None:
+        client = self._require_client()
+        await _run_with_timeout(asyncio.to_thread(client.delete_activity, external_id))
+        log = self._tracker.sync_logger
+        if log:
+            log.info(f"[garmin] Delete ({self.user_label}): {external_id!r}")
 
     async def upload_activity(
         self, activity: Activity, *, task_name: str | None = None

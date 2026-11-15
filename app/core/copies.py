@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from app.connectors.base import (
     ActivityMeta,
@@ -135,16 +135,80 @@ async def _check(
     return [FoundCopy(uid, i, copy, kept) for i in copy_ids if i not in kept_ids]
 
 
+def _span(pairs: list[tuple[CacheEntry, CacheEntry]]) -> tuple[date, date]:
+    first = min(min(c.start_time, k.start_time) for c, k in pairs).date() - _DAY
+    last = max(max(_end(c), _end(k)) for c, k in pairs).date() + _DAY
+    return first, last
+
+
+async def _uploaded_copies(
+    uid: str,
+    connector: ServiceConnector,
+    cache: ActivityCache,
+    pairs: list[tuple[CacheEntry, CacheEntry]],
+) -> list[FoundCopy]:
+    """What a destination holds twice: found by downloading its activities."""
+    theirs = [(copy, kept) for copy, kept in pairs if uid in copy.uploaded_to]
+    if not theirs:
+        return []
+    metas = await connector.list_activities(*_span(theirs))
+    found: list[FoundCopy] = []
+    for copy, kept in theirs:
+        found += await _check(uid, connector, metas, cache, copy, kept)
+    return found
+
+
+def _origin(
+    healthy: list[CacheEntry], cache: ActivityCache, uid: str, entry: CacheEntry
+) -> CacheEntry | None:
+    """The entry of another source that trainings-sync uploaded to `uid` and
+    that became `entry` there, byte for byte; None when it came from elsewhere."""
+    near = [
+        e
+        for e in healthy
+        if e.source_id != uid
+        and uid in e.uploaded_to
+        and abs(e.start_time - entry.start_time) <= _SLACK
+    ]
+    content = cache.read_content(entry) if near else b""
+    return next((e for e in near if cache.read_content(e) == content), None)
+
+
+async def _own_copies(
+    uid: str,
+    connector: ServiceConnector,
+    healthy: list[CacheEntry],
+    cache: ActivityCache,
+    pairs: list[tuple[CacheEntry, CacheEntry]],
+) -> list[FoundCopy]:
+    """What a source holds twice because trainings-sync uploaded a workout it
+    had already: its activities are cached, so nothing is downloaded."""
+    theirs = []
+    for copy, kept in pairs:
+        origin = _origin(healthy, cache, uid, copy) if copy.source_id == uid else None
+        if origin is not None:  # a copy of the user's own stays untouched
+            theirs.append((copy, kept, origin))
+    if not theirs:
+        return []
+    metas = await connector.list_activities(*_span([(c, k) for c, k, _ in theirs]))
+    listed = {m.external_id for m in metas}
+    return [
+        FoundCopy(uid, copy.external_id, origin, kept)
+        for copy, kept, origin in theirs
+        if copy.external_id in listed and kept.external_id in listed
+    ]
+
+
 async def plan_removals(
     cache: ActivityCache,
     connectors: Mapping[str, ServiceConnector],
     min_overlap_s: int = 60,
 ) -> list[FoundCopy]:
     """The activities `connectors` (keyed by uid) hold twice because
-    trainings-sync uploaded two copies of one workout there.
+    trainings-sync uploaded a second copy of a workout there.
 
-    Both activities are found by the files the service hands back, which must
-    match the cached ones byte for byte, so nothing is deleted on a guess.
+    Every one is matched byte for byte to a file trainings-sync uploaded, and
+    the kept copy must be there too, so nothing is deleted on a guess.
     """
     healthy = cache.healthy_entries()
     entries = {(e.external_id, e.source_id): e for e in healthy}
@@ -155,16 +219,13 @@ async def plan_removals(
         ),
         key=lambda pair: pair[0].start_time,
     )
+    sources = {e.source_id for e in healthy}
     found: list[FoundCopy] = []
     for uid, connector in connectors.items():
-        theirs = [(copy, kept) for copy, kept in pairs if uid in copy.uploaded_to]
-        if not theirs:
-            continue
-        first = min(min(c.start_time, k.start_time) for c, k in theirs).date() - _DAY
-        last = max(max(_end(c), _end(k)) for c, k in theirs).date() + _DAY
-        metas = await connector.list_activities(first, last)
-        for copy, kept in theirs:
-            found += await _check(uid, connector, metas, cache, copy, kept)
+        if uid in sources:
+            found += await _own_copies(uid, connector, healthy, cache, pairs)
+        else:
+            found += await _uploaded_copies(uid, connector, cache, pairs)
     return found
 
 

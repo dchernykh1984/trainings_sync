@@ -111,9 +111,10 @@ def _cached(
     *,
     fmt: str = "fit",
     uploaded_to: tuple[str, ...] = ("icu",),
+    source_id: str = "garmin",
 ) -> CacheEntry:
-    entry = dataclasses.replace(_entry(external_id, fmt=fmt), uploaded_to=uploaded_to)
-    return cache.put(entry, content)
+    entry = _entry(external_id, fmt=fmt, source_id=source_id)
+    return cache.put(dataclasses.replace(entry, uploaded_to=uploaded_to), content)
 
 
 def _service(files: dict[str, bytes], **starts: datetime) -> MagicMock:
@@ -245,3 +246,46 @@ async def test_removal_deletes_what_was_found_and_reports_failures(
         ("i3",),
     ]
     assert [(item.activity_id, str(exc)) for item, exc in failed] == [("i3", "refused")]
+
+
+# A source whose own activities are cached: Garmin, holding a ride twice
+# because trainings-sync once uploaded Strava's copy of it there.
+
+
+def _garmin_twins(cache: ActivityCache, strava_file: bytes = b"gpx") -> CacheEntry:
+    """Garmin's TCX of a ride, its GPX copy, and the Strava activity that copy
+    was uploaded from; the Strava one."""
+    _cached(cache, "10", b"tcx", fmt="tcx", uploaded_to=())
+    _cached(cache, "20", b"gpx", fmt="gpx", uploaded_to=())
+    return _cached(
+        cache, "s1", strava_file, fmt="gpx", uploaded_to=("garmin",), source_id="strava"
+    )
+
+
+async def test_a_file_trainings_sync_uploaded_into_a_source_is_found(
+    cache: ActivityCache,
+) -> None:
+    strava = _garmin_twins(cache)
+    garmin = _service({"10": b"", "20": b""})
+    found = await plan_removals(cache, {"garmin": garmin})
+    kept = cache.get_entry("10", "garmin")
+    assert kept is not None
+    assert found == [FoundCopy("garmin", "20", strava, kept)]
+    garmin.download_activity.assert_not_awaited()
+
+
+async def test_a_copy_the_user_made_in_a_source_is_left_alone(
+    cache: ActivityCache,
+) -> None:
+    _garmin_twins(cache, strava_file=b"another file")
+    garmin = _service({"10": b"", "20": b""})
+    assert await plan_removals(cache, {"garmin": garmin}) == []
+    garmin.list_activities.assert_not_awaited()
+
+
+@pytest.mark.parametrize("listed", [{"10": b""}, {"20": b""}])
+async def test_nothing_is_deleted_from_a_source_that_lacks_either_copy(
+    cache: ActivityCache, listed: dict[str, bytes]
+) -> None:
+    _garmin_twins(cache)
+    assert await plan_removals(cache, {"garmin": _service(listed)}) == []

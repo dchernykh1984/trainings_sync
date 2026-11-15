@@ -499,10 +499,17 @@ uv run trainings-sync --config config/config.json --creds-json config/creds.json
 It lists each extra activity with the copy it was uploaded from and the copy
 that stays, and changes nothing. `--delete-copies` lists them the same way and
 then, once you type `yes`, deletes them; deleting cannot be undone. Only
-intervals.icu activities are deleted, and only when the service hands back both
-files - the extra one and the kept one - byte for byte as they were uploaded,
-so an activity is never deleted on a guess. A workout a destination holds once
-is left as it is.
+intervals.icu and Garmin Connect activities are deleted, and an activity is
+never deleted on a guess:
+
+- On intervals.icu, the service must hand back both files - the extra one and
+  the kept one - byte for byte as they were uploaded.
+- In Garmin Connect, which is also a source, the extra activity must be a file
+  trainings-sync uploaded there from another source (from Strava, say) while
+  Garmin already had the workout, and Garmin must still list both. A workout
+  you uploaded twice yourself, or recorded with two devices, is left alone.
+
+A workout a service holds once is left as it is.
 
 ## Desktop GUI
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.1](https://github.com/dchernykh1984/trainings_sync/compare/v0.5.0...v0.5.1) (2026-11-24)
+
+
+### Bug Fixes
+
+* **strava:** a rebuilt TCX carries Strava's distance, per point and for the lap ([c1cb638](https://github.com/dchernykh1984/trainings_sync/commit/c1cb63819e5091f36aa248f6a07b0ab1bfed2562))
+* **strava:** keep a ride's power when its track goes on to Garmin ([125197d](https://github.com/dchernykh1984/trainings_sync/commit/125197d7363e2d8676de98b7fb2a7fd63b07b1df))
+
 ## [0.5.0](https://github.com/dchernykh1984/trainings_sync/compare/v0.4.0...v0.5.0) (2026-11-15)
 
 

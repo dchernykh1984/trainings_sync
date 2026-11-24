@@ -39,7 +39,15 @@ logging.getLogger("stravalib").setLevel(logging.ERROR)
 
 _log = logging.getLogger(__name__)
 
-_STREAM_TYPES = ["time", "latlng", "altitude", "heartrate", "cadence", "watts"]
+_STREAM_TYPES = [
+    "time",
+    "latlng",
+    "altitude",
+    "heartrate",
+    "cadence",
+    "watts",
+    "distance",
+]
 _GPX_NS = "http://www.topografix.com/GPX/1/1"
 _TPX_NS = "http://www.garmin.com/xmlschemas/TrackPointExtension/v1"
 _TCD_NS = "http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2"
@@ -465,6 +473,9 @@ def _build_tcx(meta: ActivityMeta, streams: Any) -> bytes:
     start_str = _fmt_time(meta.start_time)
     lap = ET.SubElement(act, f"{{{c}}}Lap", {"StartTime": start_str})
     ET.SubElement(lap, f"{{{c}}}TotalTimeSeconds").text = str(meta.elapsed_s or 0)
+    dist_data = _stream_data(streams, "distance")
+    if dist_data:
+        ET.SubElement(lap, f"{{{c}}}DistanceMeters").text = str(dist_data[-1])
     ET.SubElement(lap, f"{{{c}}}Intensity").text = "Active"
     ET.SubElement(lap, f"{{{c}}}TriggerMethod").text = "Manual"
 
@@ -489,6 +500,8 @@ def _build_tcx(meta: ActivityMeta, streams: Any) -> bytes:
                 ET.SubElement(pos, f"{{{c}}}LongitudeDegrees").text = str(lon)
             if alt_data is not None and i < len(alt_data):
                 ET.SubElement(tp, f"{{{c}}}AltitudeMeters").text = str(alt_data[i])
+            if dist_data is not None and i < len(dist_data):
+                ET.SubElement(tp, f"{{{c}}}DistanceMeters").text = str(dist_data[i])
             if hr_data is not None and i < len(hr_data):
                 hr_el = ET.SubElement(tp, f"{{{c}}}HeartRateBpm")
                 ET.SubElement(hr_el, f"{{{c}}}Value").text = str(hr_data[i])

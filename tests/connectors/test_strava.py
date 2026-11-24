@@ -153,6 +153,10 @@ def _make_gps_streams() -> dict:
     }
 
 
+def _make_gps_power_streams() -> dict:
+    return {**_make_gps_streams(), "watts": _make_stream([200, 210])}
+
+
 def _make_indoor_streams() -> dict:
     return {
         "time": _make_stream([0, 60]),
@@ -521,6 +525,72 @@ class TestDownloadActivity:
         watts_els = root.findall(".//ae:Watts", ns)
         assert len(watts_els) == 2
         assert watts_els[0].text == "200"
+
+    async def test_returns_tcx_for_a_track_with_power(
+        self, logged_in: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.get_activity_streams.return_value = _make_gps_power_streams()
+        with patch(
+            "app.connectors.strava.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            result = await logged_in.download_activity(_make_meta())
+
+        assert result.format == "tcx"
+
+    async def test_tcx_of_a_track_keeps_its_position_height_and_power(
+        self, logged_in: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.get_activity_streams.return_value = _make_gps_power_streams()
+        with patch(
+            "app.connectors.strava.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            result = await logged_in.download_activity(_make_meta())
+
+        root = ET.fromstring(result.content)  # noqa: S314
+        tcd = "{http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2}"
+        ae = "{http://www.garmin.com/xmlschemas/ActivityExtension/v2}"
+        trackpoints = root.findall(f".//{tcd}Trackpoint")
+        assert len(trackpoints) == 2
+        second = trackpoints[1]
+        # the order the TCX schema gives a trackpoint's fields
+        assert [child.tag.removeprefix(tcd) for child in second] == [
+            "Time",
+            "Position",
+            "AltitudeMeters",
+            "HeartRateBpm",
+            "Cadence",
+            "Extensions",
+        ]
+        assert second.findtext(f"{tcd}Position/{tcd}LatitudeDegrees") == "51.51"
+        assert second.findtext(f"{tcd}Position/{tcd}LongitudeDegrees") == "-0.11"
+        assert second.findtext(f"{tcd}AltitudeMeters") == "101.0"
+        assert second.findtext(f"{tcd}HeartRateBpm/{tcd}Value") == "155"
+        assert second.findtext(f"{tcd}Cadence") == "82"
+        assert second.findtext(f".//{ae}Watts") == "210"
+
+    async def test_tcx_tolerates_a_shorter_track(
+        self, logged_in: StravaConnector, mock_client: MagicMock
+    ) -> None:
+        mock_client.get_activity_streams.return_value = {
+            "time": _make_stream([0, 60]),
+            "latlng": _make_stream([[51.5, -0.1]]),  # only 1 sample instead of 2
+            "watts": _make_stream([200, 210]),
+        }
+        with patch(
+            "app.connectors.strava.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=_call_sync,
+        ):
+            result = await logged_in.download_activity(_make_meta())
+
+        root = ET.fromstring(result.content)  # noqa: S314
+        tcd = "{http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2}"
+        assert len(root.findall(f".//{tcd}Trackpoint")) == 2
+        assert len(root.findall(f".//{tcd}Position")) == 1
 
     async def test_streams_api_called_with_int_activity_id(
         self, logged_in: StravaConnector, mock_client: MagicMock

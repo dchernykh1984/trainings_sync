@@ -267,6 +267,10 @@ request:
 When a limit is reached, the sync automatically pauses and resumes after the window resets. Your app's
 current limits are shown at [strava.com/settings/api](https://www.strava.com/settings/api).
 
+**What a Strava activity becomes:** Strava does not hand out the file an activity was recorded in,
+so trainings-sync rebuilds one from Strava's data streams: a GPX for a track without power, a TCX
+when the activity has power (a GPX has no place for it) or no track.
+
 ### intervals.icu
 
 intervals.icu works as a source (activities are downloaded as their original
@@ -507,7 +511,7 @@ never deleted on a guess:
   service must hand back both files - the extra one and the kept one - byte for
   byte as they were uploaded.
 - On a service that is also a source, so that its own activities are cached
-  (Garmin Connect, usually), the extra activity must be a GPX that
+  (Garmin Connect, usually), the extra activity must be a GPX or a TCX that
   trainings-sync built and uploaded there from another source (from Strava)
   while the service already had the workout, and the service must still list
   both. A workout you uploaded twice yourself, or recorded with two devices, is

@@ -24,8 +24,10 @@ _LONGER = 1.1
 _DAY = timedelta(days=1)
 # A service may read the start of a file a little differently.
 _SLACK = timedelta(minutes=5)
-# The root of a GPX trainings-sync builds (see app/connectors/strava.py).
-_OWN_GPX = re.compile(rb'<gpx\b[^>]*\bcreator="trainings-sync"')
+# The start of a GPX or a TCX trainings-sync builds (see app/connectors/strava.py).
+_OWN_FILE = re.compile(
+    rb'<gpx\b[^>]*\bcreator="trainings-sync"|<!-- created by trainings-sync -->'
+)
 
 
 @dataclass(frozen=True)
@@ -191,7 +193,7 @@ def _origin(
     uploaded_to also marks an activity that was only matched to one there.
     """
     content = cache.read_content(entry)
-    if _OWN_GPX.search(content, 0, 1024) is None:
+    if _OWN_FILE.search(content, 0, 1024) is None:
         return None
     return next(
         (

@@ -154,7 +154,11 @@ def _make_gps_streams() -> dict:
 
 
 def _make_gps_power_streams() -> dict:
-    return {**_make_gps_streams(), "watts": _make_stream([200, 210])}
+    return {
+        **_make_gps_streams(),
+        "watts": _make_stream([200, 210]),
+        "distance": _make_stream([0.0, 120.5]),
+    }
 
 
 def _make_indoor_streams() -> dict:
@@ -561,6 +565,7 @@ class TestDownloadActivity:
             "Time",
             "Position",
             "AltitudeMeters",
+            "DistanceMeters",
             "HeartRateBpm",
             "Cadence",
             "Extensions",
@@ -568,6 +573,8 @@ class TestDownloadActivity:
         assert second.findtext(f"{tcd}Position/{tcd}LatitudeDegrees") == "51.51"
         assert second.findtext(f"{tcd}Position/{tcd}LongitudeDegrees") == "-0.11"
         assert second.findtext(f"{tcd}AltitudeMeters") == "101.0"
+        assert second.findtext(f"{tcd}DistanceMeters") == "120.5"
+        assert root.findtext(f".//{tcd}Lap/{tcd}DistanceMeters") == "120.5"
         assert second.findtext(f"{tcd}HeartRateBpm/{tcd}Value") == "155"
         assert second.findtext(f"{tcd}Cadence") == "82"
         assert second.findtext(f".//{ae}Watts") == "210"
@@ -604,7 +611,16 @@ class TestDownloadActivity:
             await logged_in.download_activity(_make_meta(external_id="99999"))
 
         mock_client.get_activity_streams.assert_called_once_with(
-            99999, types=["time", "latlng", "altitude", "heartrate", "cadence", "watts"]
+            99999,
+            types=[
+                "time",
+                "latlng",
+                "altitude",
+                "heartrate",
+                "cadence",
+                "watts",
+                "distance",
+            ],
         )
 
     async def test_get_activity_failure_raises_and_cleans_up(

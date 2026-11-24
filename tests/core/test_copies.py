@@ -316,9 +316,9 @@ async def test_a_file_trainings_sync_uploaded_into_a_source_is_found(
     garmin.download_activity.assert_not_awaited()
 
 
-@pytest.mark.parametrize("build", [_build_gpx, _build_tcx])
+@pytest.mark.parametrize(("build", "fmt"), [(_build_gpx, "gpx"), (_build_tcx, "tcx")])
 async def test_a_file_the_strava_connector_builds_is_known_as_its_own(
-    cache: ActivityCache, build: Callable[[ActivityMeta, Any], bytes]
+    cache: ActivityCache, build: Callable[[ActivityMeta, Any], bytes], fmt: str
 ) -> None:
     meta = ActivityMeta(external_id="s1", name="", sport_type="Ride", start_time=_T0)
     track = {
@@ -326,7 +326,6 @@ async def test_a_file_the_strava_connector_builds_is_known_as_its_own(
         "latlng": SimpleNamespace(data=[[51.5, -0.1], [51.51, -0.11]]),
     }
     built = build(meta, track)
-    fmt = "gpx" if build is _build_gpx else "tcx"
     _cached(cache, "10", b"fit", uploaded_to=())
     _cached(cache, "20", built, fmt=fmt, uploaded_to=())
     strava = _cached(

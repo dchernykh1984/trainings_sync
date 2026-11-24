@@ -407,7 +407,7 @@ class TestListActivities:
 
 
 class TestDownloadActivity:
-    async def test_returns_gpx_for_outdoor_activity(
+    async def test_returns_gpx_for_a_track_without_power(
         self, logged_in: StravaConnector, mock_client: MagicMock
     ) -> None:
         mock_client.get_activity_streams.return_value = _make_gps_streams()
@@ -492,7 +492,7 @@ class TestDownloadActivity:
         assert len(ele_els) == 2
         assert ele_els[0].text == "100.0"
 
-    async def test_returns_tcx_for_indoor_activity(
+    async def test_returns_tcx_for_an_activity_without_a_track(
         self, logged_in: StravaConnector, mock_client: MagicMock
     ) -> None:
         mock_client.get_activity_streams.return_value = _make_indoor_streams()

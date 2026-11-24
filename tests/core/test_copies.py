@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from app.connectors.base import Activity, ActivityMeta, ActivityUnavailableError
+from app.connectors.strava import _build_gpx, _build_tcx
 from app.core.cache import ActivityCache, CacheEntry
 from app.core.copies import FoundCopy, find_copies, plan_removals, remove_copies
 
@@ -310,6 +314,28 @@ async def test_a_file_trainings_sync_uploaded_into_a_source_is_found(
     assert kept is not None
     assert found == [FoundCopy("garmin", "20", strava, kept, "10")]
     garmin.download_activity.assert_not_awaited()
+
+
+@pytest.mark.parametrize("build", [_build_gpx, _build_tcx])
+async def test_a_file_the_strava_connector_builds_is_known_as_its_own(
+    cache: ActivityCache, build: Callable[[ActivityMeta, Any], bytes]
+) -> None:
+    meta = ActivityMeta(external_id="s1", name="", sport_type="Ride", start_time=_T0)
+    track = {
+        "time": SimpleNamespace(data=[0, 60]),
+        "latlng": SimpleNamespace(data=[[51.5, -0.1], [51.51, -0.11]]),
+    }
+    built = build(meta, track)
+    fmt = "gpx" if build is _build_gpx else "tcx"
+    _cached(cache, "10", b"fit", uploaded_to=())
+    _cached(cache, "20", built, fmt=fmt, uploaded_to=())
+    strava = _cached(
+        cache, "s1", built, fmt=fmt, uploaded_to=("garmin",), source_id="strava"
+    )
+    found = await plan_removals(cache, {"garmin": _service({"10": b"", "20": b""})})
+    kept = cache.get_entry("10", "garmin")
+    assert kept is not None
+    assert found == [FoundCopy("garmin", "20", strava, kept, "10")]
 
 
 @pytest.mark.parametrize(

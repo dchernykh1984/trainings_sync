@@ -12,5 +12,9 @@ description: How trainings_sync moves activities between Garmin Connect, a local
 - Strava rate limits are a real, recurring failure mode (the README warns about it).
   Handle 429 / rate-limit responses gracefully and log them; do not silently stall. Cover
   the rate-limit and backoff/retry paths with tests.
+- Strava gives no original file: a download is rebuilt from its streams - a GPX for a
+  track without power, a TCX when there is power (GPX has no field for it) or no track.
+  Every file built is marked (the GPX `creator`, the TCX's first comment), which is how
+  `--delete-copies` tells its own uploads from a device's.
 - Keep parsing and matching of activity files (FIT/GPX/TCX) as pure functions covered by
   fixture files, separate from the CLI and GUI shells, so they stay unit-testable.

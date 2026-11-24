@@ -44,6 +44,10 @@ _GPX_NS = "http://www.topografix.com/GPX/1/1"
 _TPX_NS = "http://www.garmin.com/xmlschemas/TrackPointExtension/v1"
 _TCD_NS = "http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2"
 _AE_NS = "http://www.garmin.com/xmlschemas/ActivityExtension/v2"
+# How a TCX trainings-sync builds starts; app/core/copies.py knows its own files by it.
+_TCX_HEAD = (
+    b"<?xml version='1.0' encoding='utf-8'?>\n<!-- created by trainings-sync -->\n"
+)
 
 _PHOTO_DOWNLOAD_TIMEOUT_S: int = 30
 _REQUEST_TIMEOUT_S: float = 30.0
@@ -465,6 +469,8 @@ def _build_tcx(meta: ActivityMeta, streams: Any) -> bytes:
     ET.SubElement(lap, f"{{{c}}}TriggerMethod").text = "Manual"
 
     time_data = _stream_data(streams, "time") or []
+    latlng_data = _stream_data(streams, "latlng")
+    alt_data = _stream_data(streams, "altitude")
     hr_data = _stream_data(streams, "heartrate")
     cad_data = _stream_data(streams, "cadence")
     watts_data = _stream_data(streams, "watts")
@@ -476,6 +482,13 @@ def _build_tcx(meta: ActivityMeta, streams: Any) -> bytes:
             ET.SubElement(tp, f"{{{c}}}Time").text = _fmt_time(
                 meta.start_time + timedelta(seconds=t_s)
             )
+            if latlng_data is not None and i < len(latlng_data):
+                pos = ET.SubElement(tp, f"{{{c}}}Position")
+                lat, lon = latlng_data[i]
+                ET.SubElement(pos, f"{{{c}}}LatitudeDegrees").text = str(lat)
+                ET.SubElement(pos, f"{{{c}}}LongitudeDegrees").text = str(lon)
+            if alt_data is not None and i < len(alt_data):
+                ET.SubElement(tp, f"{{{c}}}AltitudeMeters").text = str(alt_data[i])
             if hr_data is not None and i < len(hr_data):
                 hr_el = ET.SubElement(tp, f"{{{c}}}HeartRateBpm")
                 ET.SubElement(hr_el, f"{{{c}}}Value").text = str(hr_data[i])
@@ -486,7 +499,7 @@ def _build_tcx(meta: ActivityMeta, streams: Any) -> bytes:
                 tpx = ET.SubElement(ext, f"{{{a}}}TPX")
                 ET.SubElement(tpx, f"{{{a}}}Watts").text = str(watts_data[i])
 
-    return ET.tostring(tcd, encoding="utf-8", xml_declaration=True)
+    return _TCX_HEAD + ET.tostring(tcd, encoding="utf-8")
 
 
 class StravaConnector(ServiceConnector):
@@ -866,7 +879,8 @@ class StravaConnector(ServiceConnector):
                 description=description,
                 media=tuple(media),
             )
-        if bool(_stream_data(streams, "latlng")):
+        # A GPX has no field for power, so a track that has it goes as a TCX
+        if _stream_data(streams, "latlng") and not _stream_data(streams, "watts"):
             content = _build_gpx(meta, streams)
             fmt = "gpx"
         else:

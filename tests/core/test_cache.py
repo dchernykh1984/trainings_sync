@@ -341,6 +341,24 @@ class TestPut:
         assert not old_path.exists()
         assert (tmp_path / e2.filename).exists()
 
+    def test_put_again_keeps_where_the_activity_was_uploaded(
+        self, cache: ActivityCache, tmp_path: Path
+    ) -> None:
+        first = cache.put(_make_entry(format="gpx"), b"<gpx/>")
+        cache.mark_uploaded(first, "strava-main")
+        cache.mark_uploaded(first, "folder", local_path="/backup/ride.gpx")
+
+        cache.put(_make_entry(format="tcx"), b"<tcx/>")  # downloaded again
+
+        reloaded = ActivityCache(tmp_path)
+        reloaded.load()
+        for c in (cache, reloaded):
+            entry = c.get_entry("123", "garmin-main")
+            assert entry is not None
+            assert entry.format == "tcx"
+            assert entry.uploaded_to == ("strava-main", "folder")
+            assert dict(entry.local_paths) == {"folder": "/backup/ride.gpx"}
+
 
 class TestHas:
     def test_true_when_file_exists_and_not_needs_refresh(

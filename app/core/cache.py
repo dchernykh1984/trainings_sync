@@ -204,6 +204,17 @@ class ActivityCache:
         ]
         self._entries = [e for e in self._entries if e not in old_entries]
         for old in old_entries:
+            # A new copy of the file does not undo its uploads: forgetting them
+            # would send the activity out again, once more wherever it is gone.
+            entry = dataclasses.replace(
+                entry,
+                uploaded_to=tuple(
+                    dict.fromkeys((*old.uploaded_to, *entry.uploaded_to))
+                ),
+                local_paths=tuple(
+                    {**dict(old.local_paths), **dict(entry.local_paths)}.items()
+                ),
+            )
             if old.filename:
                 if old.filename != filename:
                     self._safe_path(old.filename).unlink(missing_ok=True)

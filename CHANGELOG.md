@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.2](https://github.com/dchernykh1984/trainings_sync/compare/v0.5.1...v0.5.2) (2026-11-25)
+
+
+### Bug Fixes
+
+* **cache:** keep where an activity was uploaded when it is downloaded again ([7fa4d20](https://github.com/dchernykh1984/trainings_sync/commit/7fa4d20cc353409b13f89f44600b0ca58836c307))
+* **cache:** send a new version of a downloaded activity where it is gone ([340958d](https://github.com/dchernykh1984/trainings_sync/commit/340958d27e53920846e0475e27be6be2dc265ee5))
+
 ## [0.5.1](https://github.com/dchernykh1984/trainings_sync/compare/v0.5.0...v0.5.1) (2026-11-24)
 
 

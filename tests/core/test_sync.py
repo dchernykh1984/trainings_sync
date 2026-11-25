@@ -327,6 +327,23 @@ class TestSyncExecutorDownload:
         await executor.run(_START, _END, force=True)
         conn.download_activity.assert_called_once()
 
+    async def test_a_forced_download_does_not_upload_again(
+        self, cache: ActivityCache
+    ) -> None:
+        # Uploaded once and since deleted there: the destination lists nothing
+        # to match, so only the upload record keeps it from going out again.
+        cache.mark_uploaded(cache.put(_entry(), b"content"), "strava")
+        conn = _source_conn(metas=[_meta()], activity=_activity())
+        dest = _dest_conn()
+        executor = SyncExecutor(
+            sources=[(_spec("garmin"), conn)],
+            destinations=[("strava", dest)],
+            cache=cache,
+        )
+        await executor.run(_START, _END, force=True)
+        conn.download_activity.assert_called_once()
+        dest.upload_activity.assert_not_called()
+
     async def test_redownloads_needs_refresh_entry_and_clears_flag(
         self, cache: ActivityCache
     ) -> None:

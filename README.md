@@ -250,7 +250,7 @@ uv run trainings-sync \
 | `--creds-keepass PATH` | KeePass database (.kdbx) instead of a JSON file. Master password is read from `KEEPASS_PASSWORD` env var, or prompted from stdin. Not supported with Strava sources or destinations. |
 | `--start DATE`         | Start date (YYYY-MM-DD). Overrides the value in config. Defaults to `2000-01-01` if not set anywhere.                                                                     |
 | `--end DATE`           | End date (YYYY-MM-DD). Overrides the value in config. Defaults to today.                                                                                                  |
-| `--force`              | Re-download activities even if already cached; what was uploaded is not uploaded again. Also re-downloads all wellness data.                                               |
+| `--force`              | Re-download activities even if already cached. An activity that was uploaded goes up again only as a new version (its file changed) and only where it is gone. Also re-downloads all wellness data. |
 | `--skip-wellness`      | Skip wellness data sync (only sync training activities).                                                                                                                  |
 
 If a sync run is interrupted, simply run the same command again. Already downloaded activities are stored in the cache (`cache_dir` in config) and will not be re-downloaded.
@@ -618,8 +618,9 @@ Build the sync configuration visually:
   connector whose service only gives or only takes activities is offered only in
   that role.
 - **Options** - optional custom start/end dates, *Force re-download* (ignore the
-  cache; what was uploaded is not uploaded again), and *Skip wellness sync*.
-  Click **Save configuration** to persist.
+  cache; an activity that was uploaded goes up again only as a new version, and
+  only where it is gone), and *Skip wellness sync*. Click **Save configuration**
+  to persist.
 
 When a sync run uses any KeePass-backed account, the GUI asks for each `.kdbx`
 file's master password once, at **Run Sync** - the passwords are never stored.

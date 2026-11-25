@@ -341,23 +341,41 @@ class TestPut:
         assert not old_path.exists()
         assert (tmp_path / e2.filename).exists()
 
-    def test_put_again_keeps_where_the_activity_was_uploaded(
+    @staticmethod
+    def _uploaded(cache: ActivityCache, content: bytes) -> CacheEntry:
+        first = cache.put(_make_entry(), content)
+        cache.mark_uploaded(first, "strava-main")
+        return cache.mark_uploaded(first, "folder", local_path="/backup/ride.fit")
+
+    def test_put_of_the_same_file_again_keeps_its_uploads(
         self, cache: ActivityCache, tmp_path: Path
     ) -> None:
-        first = cache.put(_make_entry(format="gpx"), b"<gpx/>")
-        cache.mark_uploaded(first, "strava-main")
-        cache.mark_uploaded(first, "folder", local_path="/backup/ride.gpx")
-
-        cache.put(_make_entry(format="tcx"), b"<tcx/>")  # downloaded again
+        self._uploaded(cache, b"ride")
+        cache.put(_make_entry(), b"ride")  # downloaded again, unchanged
 
         reloaded = ActivityCache(tmp_path)
         reloaded.load()
         for c in (cache, reloaded):
             entry = c.get_entry("123", "garmin-main")
             assert entry is not None
-            assert entry.format == "tcx"
             assert entry.uploaded_to == ("strava-main", "folder")
-            assert dict(entry.local_paths) == {"folder": "/backup/ride.gpx"}
+            assert dict(entry.local_paths) == {"folder": "/backup/ride.fit"}
+
+    def test_put_of_a_new_version_forgets_its_uploads(
+        self, cache: ActivityCache
+    ) -> None:
+        self._uploaded(cache, b"ride")
+        entry = cache.put(_make_entry(format="tcx"), b"ride, now with power")
+        assert entry.uploaded_to == ()
+        assert entry.local_paths == ()
+
+    def test_put_when_the_cached_file_is_gone_keeps_its_uploads(
+        self, cache: ActivityCache, tmp_path: Path
+    ) -> None:
+        first = self._uploaded(cache, b"ride")
+        (tmp_path / first.filename).unlink()
+        entry = cache.put(_make_entry(), b"ride, read again")
+        assert entry.uploaded_to == ("strava-main", "folder")
 
 
 class TestHas:

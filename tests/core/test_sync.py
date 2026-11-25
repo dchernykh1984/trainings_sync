@@ -327,13 +327,20 @@ class TestSyncExecutorDownload:
         await executor.run(_START, _END, force=True)
         conn.download_activity.assert_called_once()
 
-    async def test_a_forced_download_does_not_upload_again(
-        self, cache: ActivityCache
+    @pytest.mark.parametrize(
+        ("downloaded", "uploads"),
+        [
+            (b"fit-content", 0),  # the same file: deleted there, it stays so
+            (b"fit-content, rebuilt with power", 1),  # a new version goes up
+        ],
+    )
+    async def test_a_forced_download_uploads_only_a_new_version_again(
+        self, cache: ActivityCache, downloaded: bytes, uploads: int
     ) -> None:
         # Uploaded once and since deleted there: the destination lists nothing
-        # to match, so only the upload record keeps it from going out again.
-        cache.mark_uploaded(cache.put(_entry(), b"content"), "strava")
-        conn = _source_conn(metas=[_meta()], activity=_activity())
+        # to match, so only the upload record can keep it from going out again.
+        cache.mark_uploaded(cache.put(_entry(), b"fit-content"), "strava")
+        conn = _source_conn(metas=[_meta()], activity=_activity(content=downloaded))
         dest = _dest_conn()
         executor = SyncExecutor(
             sources=[(_spec("garmin"), conn)],
@@ -342,7 +349,7 @@ class TestSyncExecutorDownload:
         )
         await executor.run(_START, _END, force=True)
         conn.download_activity.assert_called_once()
-        dest.upload_activity.assert_not_called()
+        assert dest.upload_activity.call_count == uploads
 
     async def test_redownloads_needs_refresh_entry_and_clears_flag(
         self, cache: ActivityCache

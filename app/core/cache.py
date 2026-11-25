@@ -190,6 +190,28 @@ class ActivityCache:
         filename = f"{safe_source}/{ts}_{safe_id}_{uid}.{entry.format}"
         entry = dataclasses.replace(entry, filename=filename)
 
+        old_entries = [
+            e
+            for e in self._entries
+            if e.external_id == entry.external_id and e.source_id == entry.source_id
+        ]
+        for old in old_entries:
+            # The same file again keeps its uploads, or a run would send it out
+            # once more wherever it was deleted. A new version (one rebuilt
+            # with power, say) forgets them, so that it goes where it is gone.
+            # A file no longer cached counts as the same: nothing tells.
+            old_path = self._safe_path(old.filename)
+            if not old_path.is_file() or old_path.read_bytes() == content:
+                entry = dataclasses.replace(
+                    entry,
+                    uploaded_to=tuple(
+                        dict.fromkeys((*old.uploaded_to, *entry.uploaded_to))
+                    ),
+                    local_paths=tuple(
+                        {**dict(old.local_paths), **dict(entry.local_paths)}.items()
+                    ),
+                )
+
         file_path = self._dir / filename
         file_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = Path(str(file_path) + ".tmp")
@@ -197,24 +219,8 @@ class ActivityCache:
         tmp.replace(file_path)
         _file_exists.cache_clear()
 
-        old_entries = [
-            e
-            for e in self._entries
-            if e.external_id == entry.external_id and e.source_id == entry.source_id
-        ]
         self._entries = [e for e in self._entries if e not in old_entries]
         for old in old_entries:
-            # A new copy of the file does not undo its uploads: forgetting them
-            # would send the activity out again, once more wherever it is gone.
-            entry = dataclasses.replace(
-                entry,
-                uploaded_to=tuple(
-                    dict.fromkeys((*old.uploaded_to, *entry.uploaded_to))
-                ),
-                local_paths=tuple(
-                    {**dict(old.local_paths), **dict(entry.local_paths)}.items()
-                ),
-            )
             if old.filename:
                 if old.filename != filename:
                     self._safe_path(old.filename).unlink(missing_ok=True)
